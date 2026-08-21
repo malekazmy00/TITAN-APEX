@@ -3,6 +3,15 @@
 # See README.md for what each service is, how to verify it's actually
 # active, and how to add a new challenge layer.
 #
+# This file also runs its own dedicated `byparr` instance (see that
+# service below) -- distinct from the root docker-compose.yml's, which
+# stays a GitHub Actions `services:` container for every other live test.
+# The two Byparr instances never conflict: this one only ever gets asked
+# to fetch this stack's own URLs, on its own port
+# (${MOCK_TARGET_BYPARR_PORT:-8193}), by tests/integration/test_mock_target_live.py
+# specifically. See that service's comment for why it needs to be a
+# separate instance at all, not just the existing one.
+#
 # Isolation (docs/REQUIREMENTS.md section 4/8): two networks, not one.
 # `test-environment` is `internal: true` -- Docker gives it no default
 # route out to the public internet at all, and (confirmed by hand: a
@@ -77,11 +86,31 @@ services:
       # real reverse proxy in front of it to set that header; there isn't
       # one here, so it must read the actual TCP peer address instead.
       USE_REMOTE_ADDRESS: "true"
+      # docs/REQUIREMENTS.md section 9 entry 2's real fix, verified
+      # against Anubis's own source (cmd/anubis/main.go): `cookie-secure`
+      # (env COOKIE_SECURE) is a first-class, documented flag -- Secure
+      # defaults to true, which no real browser will persist over this
+      # stack's plain http://, so the challenge-passed cookie was never
+      # kept. This is the officially supported way to run Anubis without
+      # TLS, not a workaround: setting it also auto-downgrades
+      # `cookie-same-site` from its default None to Lax (Anubis's own
+      # documented behavior for a non-secure deployment), which a real
+      # browser would otherwise reject entirely for a non-Secure cookie.
+      # Deliberately not real TLS: Anubis has no built-in HTTPS server at
+      # all (confirmed against its own source -- it's designed to sit
+      # behind a TLS-terminating proxy, which would be a whole additional
+      # container plus getting Byparr's Chromium to trust a self-signed
+      # CA, an unverified extra failure surface for no real benefit here).
+      COOKIE_SECURE: "false"
     depends_on:
       mock-target:
         condition: service_healthy
     ports:
       - "${ANUBIS_PORT:-8080}:8080"
+      # Published here, not on the byparr service below, because byparr
+      # shares this container's network namespace (network_mode:
+      # service:anubis) -- see byparr's own comment for why.
+      - "${MOCK_TARGET_BYPARR_PORT:-8193}:8191"
     volumes:
       - "./anubis/botPolicy.yaml:/data/cfg/botPolicy.yaml:ro"
     networks:
@@ -98,3 +127,29 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+
+  # docs/REQUIREMENTS.md section 9 entry 1's real fix. The root
+  # docker-compose.yml's byparr runs as a GitHub Actions `services:`
+  # container, on a *different* Docker network than this compose
+  # project's -- confirmed for real in CI (run 32479883962): from inside
+  # that container, `localhost` means the container itself, not this
+  # stack, so it could never reach Anubis at all
+  # (NS_ERROR_CONNECTION_REFUSED). `network_mode: "service:anubis"`
+  # makes this instance share Anubis's network namespace outright --
+  # its own `localhost:8080` *is* Anubis's own listener, no DNS or
+  # extra_hosts trick needed, and the exact same URL
+  # (http://localhost:8080/) already in mock_target.yaml keeps working
+  # unchanged for the plain-Scrapy-fallback case too. `ports:` can't be
+  # declared here since this service doesn't own its network namespace
+  # -- see Anubis's own `ports:` above instead.
+  byparr:
+    image: ghcr.io/thephaseless/byparr:latest
+    network_mode: "service:anubis"
+    depends_on:
+      anubis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G

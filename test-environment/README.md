@@ -95,35 +95,44 @@ confirmed directly against this stack:
 - A browser-like User-Agent (matching `Mozilla|Opera` — real browsers,
   Playwright, and Byparr's Chromium all qualify) gets weight `+10` →
   the `moderate-suspicion` threshold → a real **PoW challenge page**.
-- **Known gap (docs/REQUIREMENTS.md section 9):** as currently deployed
-  (HTTP-only), no real browser — including Byparr's — can actually
-  *complete* that challenge: Anubis's challenge-verification cookies
-  are `Secure`, and no spec-compliant browser persists a `Secure`
-  cookie over plain `http://`. Confirmed directly in Anubis's own logs:
-  `"msg":"user has cookies disabled, this is not an anubis bug"`.
-
-**A second, separate gap (docs/REQUIREMENTS.md section 9) means Byparr
-doesn't even get that far in real CI today.** Byparr runs as a GitHub
-Actions `services:` container — its own, separate Docker network from
-this compose stack — so from inside Byparr's own container, `localhost`
-never reaches Anubis's published port at all
-(`NS_ERROR_CONNECTION_REFUSED`, confirmed in Byparr's own container log
-for a real run). `ByparrMiddleware` falls back to a plain Scrapy
-request in that case, which *does* reach Anubis (Scrapy itself runs
-directly on the runner) — and gets the explicit `bot/ai-catchall` deny
-above, never the browser-UA challenge path at all. See
-`tests/integration/test_mock_target_live.py`'s module docstring for the
-full, CI-confirmed mechanism.
+- **Fixed (round 2, docs/REQUIREMENTS.md section 9):** the browser-UA
+  challenge path above is now genuinely reachable and completable up to
+  a point. Two real, separate gaps blocked it before:
+  - Byparr ran as a GitHub Actions `services:` container on a different
+    Docker network than this compose stack, so it could never even
+    reach `localhost:8080` at all (`NS_ERROR_CONNECTION_REFUSED`).
+    **Fixed:** `docker-compose.test.yml` now runs its own dedicated
+    `byparr` service with `network_mode: "service:anubis"` — it shares
+    Anubis's network namespace directly, so `localhost:8080` inside
+    Byparr's own container genuinely is Anubis.
+  - Anubis's challenge-verification cookies default to `Secure` (and
+    CHIPS-`Partitioned`), which no real browser persists over plain
+    `http://`. **Fixed:** `COOKIE_SECURE=false` and
+    `COOKIE_PARTITIONED=false` — both real, documented Anubis flags
+    (verified against `cmd/anubis/main.go`), the officially supported
+    way to run it without TLS (Anubis has no built-in HTTPS server at
+    all), not a workaround.
+  - **A third gap surfaced only once both of the above were real,
+    still open:** Byparr's browser now genuinely reaches Anubis and
+    gets issued a real challenge every time, but its `/v1` call returns
+    (tearing the browser context down) as soon as the page's `load`
+    event fires — before Anubis's async, post-load PoW-solving JS ever
+    gets to run. Confirmed by hand: watching Anubis's own request log
+    for 20+ seconds after a completed `solve()` call shows nothing
+    further happens at all. See
+    `tests/integration/test_mock_target_live.py`'s module docstring for
+    the full writeup.
 
 **Policy:** `anubis/botPolicy.yaml` is Anubis's own real, official
 *default* `botPolicies.yaml` (MIT-licensed, copied verbatim — see the
 provenance comment at the top of the file), not a hand-rolled rule set.
 
-**Required env var:** `USE_REMOTE_ADDRESS=true` (already set in
-`docker-compose.test.yml`). Without it, Anubis 500s on *every* request
+**Required env vars (all already set in `docker-compose.test.yml`):**
+`USE_REMOTE_ADDRESS=true` — without it, Anubis 500s on *every* request
 (`"[misconfiguration] X-Real-Ip header is not set"`) — confirmed by
 hand — because its default expects a real reverse proxy in front of it
-to set that header, and there isn't one here.
+to set that header, and there isn't one here. `COOKIE_SECURE=false` and
+`COOKIE_PARTITIONED=false` — see the fixed-gaps bullet above.
 
 **How to verify it's actually active (not just present in the compose
 file):** compare the three real outcomes above for the same URL —

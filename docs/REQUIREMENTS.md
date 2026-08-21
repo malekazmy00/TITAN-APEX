@@ -581,7 +581,7 @@ origin). مفيش بيانات حقيقية تتسحب حتى لو حلّينا 
 المفروض ينجح من أول مرة بالكامل" — التفاصيل الكاملة (مش ملخّص) موجودة
 في docstring الاختبار نفسه؛ هنا الفهرس/التصنيف الرسمي.
 
-### 1. Byparr's CI `services:` container can't reach the compose stack at all (the real, CI-confirmed primary cause)
+### 1. Byparr's CI `services:` container can't reach the compose stack at all — ✅ اتحل (round 2, 2026-08-21)
 
 **الفجوة (دي اللي فعليًا بتحصل في CI الحقيقي، run
 [32479883962](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32479883962)
@@ -621,15 +621,20 @@ User-Agent الافتراضي بتاع Scrapy (`Scrapy/2.18.0 (+https://scrapy.o
 حتى بيوصل لصفحة تحدي. `test_mock_target_yields_zero_items_stuck_behind_anubis_challenge`
 بيوثّق ده كنتيجة حقيقية متوقعة ومؤكدة في CI، مش aspiration.
 
-**لو قررنا نصلحها بعدين:** محتاجة إعادة تصميم — إما ربط Byparr بنفس
-شبكة `docker-compose.test.yml` (مش ممكن كـ `services:` entry عادي —
-هيحتاج يبقى جزء من نفس compose step زي `test-environment` نفسه)، أو
-إديه عنوان الـ runner الحقيقي بدل `localhost`.
+**✅ تحديث (round 2, 2026-08-21) — اتحل فعليًا:** بدل ما نديله عنوان
+الـ runner، `docker-compose.test.yml` دلوقتي بيشغّل `byparr` instance
+خاص بيه (منفصل تمامًا عن `services: byparr` الأصلي بتاع
+`docker-compose.yml`، اللي فاضل زي ما هو لكل الاختبارات التانية) بـ
+`network_mode: "service:anubis"` — يشارك نفس network namespace بتاع
+Anubis container حرفيًا، فـ `localhost:8080` جوه container Byparr
+نفسه بقى فعلاً هو Anubis. اتأكّد منه يدويًا: نفس الـ URL بالظبط
+(`http://localhost:8080/`) اللي كان بيرجّع `NS_ERROR_CONNECTION_REFUSED`
+بقى بيوصل فعليًا لـ Anubis ويستلم تحدي proof-of-work حقيقي (لوج
+Anubis: `"msg":"new challenge issued"`, weight=10). الفجوة دي اتقفلت
+رسميًا — التفاصيل والنتيجة الكاملة (وصل التحدي، بس لسه مقدرش يعديه لسبب
+تالت جديد) في بند 4 تحت.
 
-**القرار (نفس تصنيف دورة التصعيد):** نأجل ونسجل — إعادة تصميم إزاي
-Byparr بيتحط في CI خطوة تصعيد/بنية حقيقية بحد ذاتها، مش تعديل سريع.
-
-### 2. Even with the network gap fixed, Anubis's challenge cookie requires HTTPS (found in local testing, not CI)
+### 2. Anubis's challenge cookie required Secure/Partitioned attributes not usable over plain HTTP — ✅ اتحل (round 2, 2026-08-21)
 
 **فجوة تانية مستقلة، اتأكّد منها محليًا (Byparr وAnubis على نفس شبكة
 Docker، بعنونة container name — مش السيناريو الحقيقي في CI أعلاه، بس
@@ -650,13 +655,32 @@ is not an anubis bug"`.
 يعدّي Anubis فعليًا.
 
 **ده مش باج في GenericSpider ولا ByparrMiddleware ولا Byparr نفسه** —
-ده فجوة نشر حقيقية: `test-environment/`'s stack شغّال HTTP بس، ومحتاج
-TLS (أو Anubis يدعم إعداد يلغي `Secure` لنشر بدون TLS، لو موجود).
+كان فجوة نشر حقيقية: `test-environment/`'s stack شغّال HTTP بس.
 
-**القرار:** نأجل ونسجل — إضافة TLS لـ `test-environment/`'s stack خطوة
-تصعيد حقيقية بحد ذاتها (تحتاج شهادة/CA داخل الشبكة المعزولة).
+**✅ تحديث (round 2, 2026-08-21) — اتحل فعليًا، بدون TLS:** بدل ما
+نضيف TLS (اللي كان هيحتاج container/شهادة إضافية، وبعدين المتصفح اللي
+Byparr بيشغّله لازم يثق فيها كمان — سطح فشل جديد غير متحقق منه لفايدة
+مش واضحة)، اتفحص الكود المصدري الحقيقي بتاع Anubis
+(`cmd/anubis/main.go`) لقاء دليل حقيقي: `cookie-secure` (env
+`COOKIE_SECURE`, default `true`) و`cookie-partitioned` (env
+`COOKIE_PARTITIONED`, default `true`) flags رسميين وموثّقين — مش
+workaround. ده الطريقة الرسمية المدعومة لتشغيل Anubis من غير TLS
+أصلاً (Anubis نفسه مفهوش HTTPS server مدمج خالص، اتأكّد منه من نفس
+الكود المصدري). ضبط الاتنين `false` في `docker-compose.test.yml`،
+واتّحقّق منه يدويًا فعليًا عبر `curl`'s `Set-Cookie` headers: `Secure`
+اختفى، و`SameSite` رجع أوتوماتيك من `None` لـ `Lax` بالظبط زي ما
+الـ flag help text بتاع Anubis بيقول هيحصل.
 
-### 3. Real code fix that came out of this round: `TITAN_BYPARR_URL` env-var fallback
+**بس ده وحده مكانش كافي** — `COOKIE_SECURE=false` لوحده فضل النتيجة
+زي ما هي ("cookies disabled")؛ لازم `COOKIE_PARTITIONED=false` كمان
+— على الأرجح لأن CHIPS (Partitioned cookies) مش كل سياق automation
+بيتعامل معاه زي browser profile عادي. الاتنين مع بعض هما اللي
+اتّحقّق منهم فعليًا.
+
+**النتيجة:** الفجوة دي (Secure cookie فوق HTTP) اتقفلت رسميًا. بس
+اكتشفنا فجوة تالتة جديدة بعد ما دي اتحلت — بند 4 تحت.
+
+### 3. Real code fix that came out of round 1: `TITAN_BYPARR_URL` env-var fallback
 
 **اكتشاف حقيقي أثناء التكامل:** ولا config قبل كده كان مستخدم
 `antibot_needed: true` — أول مرة اتحقق فعليًا إن
@@ -675,3 +699,45 @@ env-driven pattern. unit tests جديدة (`test_from_crawler_falls_back_to_the_
 وتعديل الاختبارين القديمين عشان يبقوا deterministic (`monkeypatch.delenv`)
 بغض النظر عن الـ environment الفعلي اللي الاختبارات شغالة فيه — مُتحقّق
 منه فعليًا محليًا (7/7 tests PASSED) قبل الدفع.
+
+### 4. Byparr tears its browser down before Anubis's async challenge JS runs — فجوة جديدة حقيقية، لسه مفتوحة (round 2, 2026-08-21)
+
+**اكتشفت بس بعد ما بند 1 و2 اتحلوا فعليًا** — مش قبل كده، لأن قبل
+كده Byparr مكانش بيوصل لـ Anubis أصلاً. دلوقتي بيوصل فعليًا ويستلم
+تحدي proof-of-work حقيقي في كل محاولة (لوج Anubis:
+`"msg":"new challenge issued"`، weight=10)، بس **لسه مقدرش يكمّله**
+— لسبب مختلف تمامًا عن الكوكيز.
+
+**السبب الجذري (اتأكّد منه يدويًا، مش افتراض):** راقبت لوج Anubis
+لأكتر من 20 ثانية بعد ما `ByparrProvider.solve()` خلص ورجع نتيجة —
+**مفيش أي حدث تاني بيحصل خالص**: مفيش `pass-challenge` call، مفيش
+تحذير "cookies disabled"، مفيش proxy request — سكوت تام. تحدي Anubis
+الحقيقي بيتحسب **async في المتصفح بعد ما حدث `load` يحصل** (JS بيبعت
+النتيجة لـ endpoint تاني، وده بياخد وقت حقيقي حتى لو صغير). Byparr's
+`/v1` API بيرجع النتيجة فور ما `load` يحصل (لوجه نفسه بيقول
+`waiting until "load"`) — وبيقفل الـ browser context فورًا، قبل ما
+الروتين الـ async ده ياخد فرصة يشتغل خالص.
+
+**ده نفس شكل فجوة `render_wait_ms` اللي اتحلت قبل كده لـ
+`PlaywrightMiddleware`** (موقع بيعمل شغل حقيقي بعد `load` event،
+محتاج انتظار إضافي صريح) — بس هنا لازم تتحل في `ByparrProvider`/Byparr
+نفسه مش `PlaywrightMiddleware` (لأن `antibot_needed: true` بيوجّه
+الطلب لـ Byparr مش Playwright). Byparr's بروتوكول (README بتاعه،
+اتفحص فعليًا) **مفيهوش** أي parameter زي "استنى X ملي ثانية كمان بعد
+الـ load" أضيفه.
+
+**لو قررنا نصلحها بعدين:** كود جديد حقيقي، احتمالين:
+- إضافة polling/retry منطق في `ByparrProvider` (لو Byparr بيدعم
+  session-based requests بدل stateless — محتاج فحص إضافي لـ Byparr's
+  API الفعلي، `/docs` بتاعه، مش موثّق في الـ README)
+- أو التواصل مع مشروع Byparr نفسه (upstream) لإضافة parameter زي
+  `postLoadWaitMs` لبروتوكول `/v1`
+
+**القرار (نفس تصنيف دورة التصعيد):** نأجل ونسجل — الفجوة دي محتاجة
+بحث/كود جديد حقيقي في provider مش تحت سيطرتنا بالكامل (Byparr نفسه
+third-party)، مش تعديل سريع.
+
+**النتيجة العملية:** الكراول لسه بيخلّص بصفر items (مفيش crash)، بس
+دلوقتي لسبب مختلف تمامًا وأعمق من الجولة الأولى — بيوصل فعليًا لتحدي
+Anubis الحقيقي كل مرة، بس مقدرش يكمّله. تقدّم حقيقي بمقياس دورة
+التصعيد (قسم 8)، مش دليل إن الفجوة اتقفلت.

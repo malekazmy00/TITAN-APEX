@@ -12,3 +12,7 @@ data/
 build/
 dist/
 .env
+
+# test-environment/docker-compose.test.yml mounts this as mock-target's
+# security/*.log volume -- a runtime artifact, never committed.
+test-environment/logs/
