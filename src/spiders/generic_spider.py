@@ -11,7 +11,7 @@ No target-specific Python code is needed: point ``config_path`` at a new
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import scrapy
@@ -51,11 +51,51 @@ class GenericSpider(scrapy.Spider):
         spider = super().from_crawler(crawler, *args, **kwargs)
         crawler.settings.set("DOWNLOAD_DELAY", spider.config.rate_limit, priority="spider")
         crawler.settings.set(
+            "CONCURRENT_REQUESTS_PER_DOMAIN", spider.config.max_concurrency, priority="spider"
+        )
+        crawler.settings.set(
             "ITEM_PIPELINES",
             {"src.spiders.pipelines.StorageBackendPipeline": 300},
             priority="spider",
         )
+        crawler.settings.set(
+            "DOWNLOADER_MIDDLEWARES",
+            {
+                # Lower number = closer to the Engine = checked/seen first
+                # for process_request; higher = closer to the Downloader =
+                # seen first for process_response/process_exception. See
+                # each middleware's module docstring for why this order
+                # matters (docs/REQUIREMENTS.md, section 2).
+                "src.middlewares.playwright_middleware.PlaywrightMiddleware": 543,
+                "src.middlewares.retry_backoff.RetryBackoffMiddleware": 550,
+                "src.middlewares.circuit_breaker.CircuitBreakerMiddleware": 900,
+            },
+            priority="spider",
+        )
         return spider
+
+    def _build_start_requests(self) -> Iterator[scrapy.Request]:
+        for url in self.start_urls:
+            yield scrapy.Request(
+                url, callback=self.parse, meta={"playwright": self.config.render_js}
+            )
+
+    async def start(self) -> AsyncIterator[scrapy.Request]:
+        # Scrapy >= 2.13 calls this instead of start_requests() — see
+        # https://docs.scrapy.org/en/latest/topics/request-response.html#start-requests.
+        # A request built via the (still-supported) synchronous
+        # start_requests() override below does NOT reach here on its own:
+        # the base Spider.start() implementation Scrapy actually calls
+        # ignores any override of start_requests() and yields plain
+        # Request(url, dont_filter=True) instead, silently dropping our
+        # per-target `meta`. Both methods are defined so this spider works
+        # correctly on Scrapy versions before and after 2.13.
+        for request in self._build_start_requests():
+            yield request
+
+    def start_requests(self) -> Iterator[scrapy.Request]:
+        # Kept for Scrapy < 2.13, which calls this instead of start().
+        yield from self._build_start_requests()
 
     def parse(self, response: Response, **kwargs: Any) -> Iterator[dict[str, Any] | scrapy.Request]:
         selectors = self.config.selectors
@@ -82,4 +122,6 @@ class GenericSpider(scrapy.Spider):
         if self.config.next_page:
             next_href = response.css(self.config.next_page).get()
             if next_href:
-                yield response.follow(next_href, callback=self.parse)
+                yield response.follow(
+                    next_href, callback=self.parse, meta={"playwright": self.config.render_js}
+                )

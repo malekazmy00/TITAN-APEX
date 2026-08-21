@@ -1,0 +1,21 @@
+# Phase 2 target: paginated WooCommerce catalog on the official
+# scrapingcourse.com training site. Static HTML only (no JS needed to see
+# the product grid), so render_js stays false — a useful contrast with
+# the infinite-scrolling target next to it.
+name: scrapingcourse_ecommerce
+start_urls:
+  - "https://www.scrapingcourse.com/ecommerce/"
+allowed_domains:
+  - "www.scrapingcourse.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "li.product"
+  fields:
+    name: "h2.product-name::text"
+    # Note the leading space before ::text: the price text sits inside a
+    # nested <bdi><span> (currency symbol + amount), so we need every
+    # descendant text node, not just span.product-price's direct children.
+    price: "span.product-price ::text"
+next_page: "a.next.page-numbers::attr(href)"

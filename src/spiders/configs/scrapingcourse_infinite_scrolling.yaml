@@ -1,0 +1,18 @@
+# Phase 2 dynamic-content target: infinite-scroll product grid on the
+# official scrapingcourse.com training site. The first batch of products
+# is present in the static HTML; further batches are loaded by JS as the
+# page is scrolled, which is why render_js is set — a real deployment
+# renders this with the Playwright middleware to capture them.
+name: scrapingcourse_infinite_scrolling
+start_urls:
+  - "https://www.scrapingcourse.com/infinite-scrolling"
+allowed_domains:
+  - "www.scrapingcourse.com"
+rate_limit: 1.0
+render_js: true
+max_concurrency: 2
+selectors:
+  item: "div.product-item"
+  fields:
+    name: "span.product-name::text"
+    price: "span.product-price::text"

@@ -32,6 +32,10 @@ class SpiderConfig(BaseModel):
     rate_limit: float = Field(gt=0)
     selectors: SelectorsConfig
     next_page: str | None = None
+    # Phase 2: dynamic content + self-throttling, both driven by config —
+    # never by target-specific code (docs/REQUIREMENTS.md, section 2).
+    render_js: bool = False
+    max_concurrency: int = Field(default=2, gt=0)
 
 
 def load_spider_config(path: str) -> SpiderConfig:

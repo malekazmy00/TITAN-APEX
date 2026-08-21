@@ -77,10 +77,10 @@ titan-apex/
 - [x] Structured logging (JSON)
 - [x] Storage backend أول (SQLite)
 
-### المرحلة 2 — المحتوى الديناميكي
-- [ ] Playwright/Camoufox كـ downloader middleware
-- [ ] Circuit Breaker
-- [ ] Rate limiting ذاتي عبر config كل target
+### المرحلة 2 — المحتوى الديناميكي (منفذة)
+- [x] Playwright كـ downloader middleware (`render_js: true` في config الـ target)
+- [x] Circuit Breaker (قابل للتهيئة، افتراضي 5 فشل متتالي / 60 ثانية cooldown)
+- [x] Rate limiting ذاتي عبر config كل target (`rate_limit`, `max_concurrency`)
 
 ### المرحلة 3 — الحماية المتوسطة
 - [ ] `byparr_provider.py` implementation من `antibot_provider`

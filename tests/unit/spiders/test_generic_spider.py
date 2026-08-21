@@ -7,6 +7,7 @@ callback directly, no network and no Scrapy engine involved).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -65,19 +66,90 @@ def test_spider_extracts_items_from_fixture_page(config_path: str) -> None:
 
 
 def test_from_crawler_wires_download_delay_and_storage_pipeline(config_path: str) -> None:
-    """from_crawler must apply the per-target DOWNLOAD_DELAY and enable the storage
-    pipeline on crawler.settings — a plain instance-level custom_settings assignment
-    does *not* achieve this, since Scrapy reads custom_settings off the class before
-    the instance (and its YAML config) exists."""
+    """from_crawler must apply the per-target DOWNLOAD_DELAY, concurrency, the storage
+    pipeline, and the Phase 1+2 downloader middlewares on crawler.settings — a plain
+    instance-level custom_settings assignment does *not* achieve this, since Scrapy
+    reads custom_settings off the class before the instance (and its YAML config)
+    exists."""
     crawler = Crawler(GenericSpider, settings={})
 
     spider = GenericSpider.from_crawler(crawler, config_path=config_path)
 
     assert spider.config.rate_limit == 1.0
     assert crawler.settings.getfloat("DOWNLOAD_DELAY") == 1.0
+    assert crawler.settings.getint("CONCURRENT_REQUESTS_PER_DOMAIN") == 2
     assert crawler.settings.getdict("ITEM_PIPELINES") == {
         "src.spiders.pipelines.StorageBackendPipeline": 300
     }
+    assert crawler.settings.getdict("DOWNLOADER_MIDDLEWARES") == {
+        "src.middlewares.playwright_middleware.PlaywrightMiddleware": 543,
+        "src.middlewares.retry_backoff.RetryBackoffMiddleware": 550,
+        "src.middlewares.circuit_breaker.CircuitBreakerMiddleware": 900,
+    }
+
+
+def test_start_requests_sets_playwright_meta_from_config(config_path: str) -> None:
+    """render_js in the config must land on every start request's meta.
+    (Legacy sync entry point, kept for Scrapy < 2.13.)"""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = list(spider.start_requests())
+
+    assert len(requests) == 1
+    assert requests[0].meta["playwright"] is False  # default render_js is False
+
+
+def test_start_requests_sets_playwright_meta_true_when_render_js_enabled(tmp_path: Path) -> None:
+    config_file = tmp_path / "js_target.yaml"
+    config_file.write_text(CONFIG_YAML + "\nrender_js: true\n", encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = list(spider.start_requests())
+
+    assert requests[0].meta["playwright"] is True
+
+
+def _run_async_start(spider: GenericSpider) -> list[Request]:
+    async def collect() -> list[Request]:
+        return [request async for request in spider.start()]
+
+    return asyncio.run(collect())
+
+
+def test_start_sets_playwright_meta_from_config(config_path: str) -> None:
+    """Regression test: Scrapy >= 2.13 calls start() (async), not start_requests().
+    The base Spider.start() default silently ignores any start_requests() override
+    and yields plain Request(url, dont_filter=True) with no custom meta at all —
+    this must independently carry the same per-target playwright meta."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert len(requests) == 1
+    assert requests[0].meta["playwright"] is False
+
+
+def test_start_sets_playwright_meta_true_when_render_js_enabled(tmp_path: Path) -> None:
+    config_file = tmp_path / "js_target.yaml"
+    config_file.write_text(CONFIG_YAML + "\nrender_js: true\n", encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["playwright"] is True
+
+
+def test_parse_pagination_follow_carries_playwright_meta(tmp_path: Path) -> None:
+    config_file = tmp_path / "js_target.yaml"
+    config_file.write_text(CONFIG_YAML + "\nrender_js: true\n", encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+    response = _fixture_response()
+
+    results = list(spider.parse(response))
+    follow_requests = [r for r in results if isinstance(r, Request)]
+
+    assert len(follow_requests) == 1
+    assert follow_requests[0].meta["playwright"] is True
 
 
 def test_missing_config_path_raises_config_error() -> None:

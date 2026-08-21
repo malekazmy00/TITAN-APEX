@@ -37,6 +37,27 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert config.selectors.item == "div.quote"
     assert config.selectors.fields["author"] == "small.author::text"
     assert config.next_page == "li.next a::attr(href)"
+    assert config.render_js is False
+    assert config.max_concurrency == 2
+
+
+def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nrender_js: true\nmax_concurrency: 4\n", encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.render_js is True
+    assert config.max_concurrency == 4
+
+
+def test_non_positive_max_concurrency_raises_config_error(tmp_path: Path) -> None:
+    """Failure case 5: max_concurrency must be a positive integer."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nmax_concurrency: 0\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="failed schema validation"):
+        load_spider_config(str(config_file))
 
 
 def test_missing_file_raises_config_error(tmp_path: Path) -> None:

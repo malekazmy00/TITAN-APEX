@@ -32,3 +32,7 @@ class AntibotError(TitanApexError):
 
 class AIAnalyzerError(TitanApexError):
     """Raised by an :class:`AIAnalyzer` implementation on failure."""
+
+
+class RenderError(TitanApexError):
+    """Raised when a headless-browser render (e.g. Playwright) fails."""
