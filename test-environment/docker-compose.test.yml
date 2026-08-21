@@ -46,6 +46,11 @@ services:
       ENABLE_HONEYPOTS: ${ENABLE_HONEYPOTS:-true}
       ENABLE_DECOY_DATA: ${ENABLE_DECOY_DATA:-true}
       ENABLE_MARKUP_RANDOMIZER: ${ENABLE_MARKUP_RANDOMIZER:-true}
+      # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's cookie-consent-wall
+      # round: real content genuinely absent until a consent cookie is
+      # present (structural/cookie_wall.py) -- on by default like every
+      # other layer here.
+      ENABLE_COOKIE_WALL: ${ENABLE_COOKIE_WALL:-true}
       MARKUP_RANDOMIZER_INTERVAL_MINUTES: ${MARKUP_RANDOMIZER_INTERVAL_MINUTES:-15}
       FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
       FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}

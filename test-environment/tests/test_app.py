@@ -24,6 +24,12 @@ def config(tmp_path: Path) -> MockTargetConfig:
     cfg.feed_rate_limit_threshold = 3
     cfg.feed_rate_limit_window_seconds = 60
     cfg.feed_page_size = 4
+    # Every existing test below predates the cookie wall and exercises
+    # other layers (posts/decoy/honeypots/feed) independently -- disabled
+    # here so they stay exactly as they were; test_cookie_wall_* below
+    # builds its own client with it explicitly enabled instead (same "one
+    # layer at a time, each verifiable alone" idea config.py documents).
+    cfg.enable_cookie_wall = False
     return cfg
 
 
@@ -143,6 +149,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_markup_randomizer = False
+    cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
 
     app = create_app(cfg)
     app.testing = True
@@ -161,6 +168,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg.enable_honeypots = False
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
+    cfg.enable_cookie_wall = False  # otherwise every assertion below passes vacuously
 
     app = create_app(cfg)
     app.testing = True
@@ -169,3 +177,56 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     assert "honeypot-trap" not in body
     assert 'style="display:none"' not in body
     assert "botd.esm.js" not in body
+
+
+def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = True
+    app = create_app(cfg)
+    app.testing = True
+    return app.test_client()
+
+
+def test_cookie_wall_blocks_real_content_without_consent(tmp_path: Path) -> None:
+    """Happy path (from the wall's own perspective): no consent cookie at
+    all means no real posts anywhere in the response -- a genuine
+    server-side gate, not a CSS-hidden overlay (structural/cookie_wall.py's
+    docstring)."""
+    client = _cookie_wall_client(tmp_path)
+
+    response = client.get("/")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-role="cookie-consent-wall"' in body
+    assert 'data-role="post"' not in body
+    assert "honeypot-trap" not in body
+
+
+def test_accept_cookies_sets_the_consent_cookie_and_redirects(tmp_path: Path) -> None:
+    """Failure-adjacent case 1: following the real Accept link/route must
+    both set the consent cookie and redirect back to the real page."""
+    client = _cookie_wall_client(tmp_path)
+
+    response = client.get("/accept-cookies")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/"
+    assert "cookie_consent=accepted" in response.headers.get("Set-Cookie", "")
+
+
+def test_index_shows_real_content_once_consent_cookie_is_present(tmp_path: Path) -> None:
+    """Failure-adjacent case 2: a request that already carries the consent
+    cookie (i.e. the wall was already passed) sees real content -- the
+    wall is a one-time gate, not a permanent block."""
+    client = _cookie_wall_client(tmp_path)
+    client.set_cookie("cookie_consent", "accepted")
+
+    response = client.get("/")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-role="cookie-consent-wall"' not in body
+    assert 'data-role="post"' in body

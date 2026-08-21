@@ -58,7 +58,24 @@ class ByparrProvider(AntibotProvider):
         self._http_post = http_post or _default_http_post
         self.logger = logger or get_logger(__name__)
 
-    def solve(self, url: str) -> Solution:
+    def solve(self, url: str, click_selector: str | None = None) -> Solution:
+        if click_selector:
+            # Real, evidenced gap (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md,
+            # cookie-consent-wall round): Byparr's `/v1` protocol
+            # (its own README, checked) is a stateless "fetch and return"
+            # call -- `cmd: request.get` has no click/interact parameter
+            # at all, the same structural shape as the post-load-wait gap
+            # (docs/REQUIREMENTS.md section 9 entry 4). Logged clearly and
+            # skipped, not silently dropped or crashed on, so this gap
+            # shows up in evidence instead of being hidden.
+            self.logger.warning(
+                "byparr_provider.click_selector_unsupported",
+                extra={
+                    "url": url,
+                    "click_selector": click_selector,
+                    "reason": "byparr's /v1 API has no click/interact parameter",
+                },
+            )
         payload = {"cmd": "request.get", "url": url, "maxTimeout": self._timeout_ms}
 
         try:

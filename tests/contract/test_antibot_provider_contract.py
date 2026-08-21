@@ -54,7 +54,9 @@ def _build_byparr_failing() -> AntibotProvider:
     return ByparrProvider(base_url="http://localhost:8191", http_post=_byparr_failing_transport)
 
 
-def _camoufox_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _CamoufoxRawSolve:
+def _camoufox_ok_solve(
+    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+) -> _CamoufoxRawSolve:
     return _CamoufoxRawSolve(
         url="https://example.com/protected",
         html="<html>past the challenge</html>",
@@ -64,7 +66,7 @@ def _camoufox_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _Ca
 
 
 def _camoufox_failing_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int
+    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
 ) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
@@ -77,7 +79,9 @@ def _build_camoufox_failing() -> AntibotProvider:
     return CamoufoxProvider(solve_fn=_camoufox_failing_solve)
 
 
-def _patchright_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _PatchrightRawSolve:
+def _patchright_ok_solve(
+    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+) -> _PatchrightRawSolve:
     return _PatchrightRawSolve(
         url="https://example.com/protected",
         html="<html>past the challenge</html>",
@@ -87,7 +91,7 @@ def _patchright_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _
 
 
 def _patchright_failing_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int
+    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
 ) -> _PatchrightRawSolve:
     raise AntibotError(f"patchright failed to solve {url}: unsolvable")
 
@@ -138,3 +142,17 @@ def test_solve_raises_antibot_error_on_failure(provider_factories: Any) -> None:
 
     with pytest.raises(AntibotError):
         failing_provider.solve("https://example.com/protected")
+
+
+def test_solve_accepts_an_optional_click_selector_without_crashing(
+    provider: AntibotProvider,
+) -> None:
+    """click_selector (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md,
+    cookie-consent-wall round) is best-effort, not part of the required
+    contract (AntibotProvider.solve's own docstring) -- every provider
+    must still accept the keyword and return a Solution without crashing,
+    even one (ByparrProvider) that cannot actually act on it and only logs
+    a warning instead."""
+    solution = provider.solve("https://example.com/protected", click_selector="#accept-cookies")
+
+    assert isinstance(solution, Solution)

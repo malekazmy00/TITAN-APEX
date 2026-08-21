@@ -302,6 +302,35 @@ still fully live and independently testable (`curl`, or a future
 dedicated JSON-aware code path) — see `docs/REQUIREMENTS.md` for
 whether/when this becomes a tracked "Known Spider Limitation".
 
+### 2.5 Cookie-consent wall
+
+`structural/cookie_wall.py` + `templates/cookie_wall.html`: `/` returns
+**only** a consent-gate page (an "Accept" link, no post content anywhere
+in the response body at all) whenever the request has no
+`cookie_consent=accepted` cookie yet. Following the real link
+(`GET /accept-cookies`) sets the cookie and redirects back to `/`, which
+now renders the real feed as normal.
+
+Deliberately a server-side gate, not a CSS-hidden overlay: a banner
+sitting on top of content that's already present in the DOM would be
+trivially defeated by any selector-based scraper that never checks
+visibility at all — the same gap 2.2 Honeypots already documents — and
+would teach nothing new
+(`docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md`'s own point: real
+consent walls often gate content this way, not cosmetically).
+
+`GenericSpider`/the antibot providers gained real click support for this
+round: `click_selector` (already an existing config field) now reaches
+`AntibotProvider.solve()` too, not just `PlaywrightMiddleware` — see
+`docs/REQUIREMENTS.md`'s write-up on which provider(s) actually needed it
+to get past this wall for real.
+
+**Verify it's active:** `curl -s http://mock-target:8000/` (bypassing
+Anubis from inside the network, no cookie jar) and confirm the response
+contains `data-role="cookie-consent-wall"` and **no**
+`data-role="post"` at all; `curl -s -c - http://mock-target:8000/accept-cookies`
+followed by a request replaying that cookie shows real posts instead.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently
@@ -315,6 +344,7 @@ isolated and tested alone — not just all-on together:
 | `ENABLE_HONEYPOTS` | `true` | 2.2 Honeypots |
 | `ENABLE_DECOY_DATA` | `true` | 2.3 Decoy data |
 | `ENABLE_MARKUP_RANDOMIZER` | `true` | 2.1 Markup randomizer |
+| `ENABLE_COOKIE_WALL` | `true` | 2.5 Cookie-consent wall |
 | `MARKUP_RANDOMIZER_INTERVAL_MINUTES` | `15` | 2.1 rotation interval |
 | `FEED_RATE_LIMIT_THRESHOLD` | `20` | 2.4 requests/window before 429 |
 | `FEED_RATE_LIMIT_WINDOW_SECONDS` | `60` | 2.4 sliding window size |

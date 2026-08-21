@@ -35,6 +35,10 @@ class MockTargetConfig:
         self.enable_honeypots: bool = _env_bool("ENABLE_HONEYPOTS", True)
         self.enable_decoy_data: bool = _env_bool("ENABLE_DECOY_DATA", True)
         self.enable_markup_randomizer: bool = _env_bool("ENABLE_MARKUP_RANDOMIZER", True)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's cookie-consent-wall
+        # round: gates real content server-side (not a CSS overlay) until
+        # a consent cookie is present -- see structural/cookie_wall.py.
+        self.enable_cookie_wall: bool = _env_bool("ENABLE_COOKIE_WALL", True)
         self.markup_randomizer_interval_minutes: int = _env_int(
             "MARKUP_RANDOMIZER_INTERVAL_MINUTES", 15
         )

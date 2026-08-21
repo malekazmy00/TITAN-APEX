@@ -18,7 +18,9 @@ from src.providers.antibot.patchright_provider import (
 def test_solve_returns_a_populated_solution() -> None:
     """Happy path: a successful browser-driving call yields a full Solution."""
 
-    def fake_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+    def fake_solve(
+        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    ) -> _RawSolve:
         assert url == "https://example.com/"
         assert timeout_ms == 30_000
         assert post_load_wait_ms == 5_000
@@ -45,7 +47,9 @@ def test_post_load_wait_ms_reaches_the_solve_function() -> None:
     load actually reaches the browser-driving call."""
     seen: dict[str, int] = {}
 
-    def fake_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+    def fake_solve(
+        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    ) -> _RawSolve:
         seen["post_load_wait_ms"] = post_load_wait_ms
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -75,7 +79,9 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
     PatchrightProvider.solve() doesn't swallow or mistranslate whatever
     AntibotError it's given."""
 
-    def failing_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+    def failing_solve(
+        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    ) -> _RawSolve:
         raise AntibotError(f"patchright failed to solve {url}: browser launch failed")
 
     provider = PatchrightProvider(solve_fn=failing_solve)
@@ -84,11 +90,31 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
         provider.solve("https://example.com/")
 
 
+def test_click_selector_reaches_the_solve_function() -> None:
+    """The cookie-consent-wall round's whole point for this provider:
+    click_selector actually reaches the browser-driving call (unlike
+    ByparrProvider, which can only log that it's unsupported)."""
+    seen: dict[str, str | None] = {}
+
+    def fake_solve(
+        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    ) -> _RawSolve:
+        seen["click_selector"] = click_selector
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = PatchrightProvider(solve_fn=fake_solve)
+    provider.solve("https://example.com/", click_selector="#accept-cookies")
+
+    assert seen["click_selector"] == "#accept-cookies"
+
+
 def test_zero_post_load_wait_ms_is_allowed() -> None:
     """post_load_wait_ms=0 is a legitimate (if pointless) configuration --
     not an error, unlike a negative value."""
 
-    def fake_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+    def fake_solve(
+        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
     provider = PatchrightProvider(post_load_wait_ms=0, solve_fn=fake_solve)

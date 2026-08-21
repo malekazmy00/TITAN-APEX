@@ -17,6 +17,7 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
         "FEED_RATE_LIMIT_THRESHOLD",
         "FEED_RATE_LIMIT_WINDOW_SECONDS",
         "FEED_PAGE_SIZE",
+        "ENABLE_COOKIE_WALL",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -30,6 +31,7 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.feed_rate_limit_threshold == 20
     assert cfg.feed_rate_limit_window_seconds == 60
     assert cfg.feed_page_size == 10
+    assert cfg.enable_cookie_wall is True
 
 
 def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,6 +41,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("ENABLE_HONEYPOTS", "0")
     monkeypatch.setenv("ENABLE_DECOY_DATA", "no")
     monkeypatch.setenv("ENABLE_MARKUP_RANDOMIZER", "true")
+    monkeypatch.setenv("ENABLE_COOKIE_WALL", "false")
 
     cfg = get_config()
 
@@ -46,6 +49,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     assert cfg.enable_honeypots is False
     assert cfg.enable_decoy_data is False
     assert cfg.enable_markup_randomizer is True
+    assert cfg.enable_cookie_wall is False
 
 
 def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:

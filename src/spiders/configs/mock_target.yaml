@@ -23,6 +23,17 @@
 # attempt to work around that gap; the live integration test documents
 # whether the decoy's stale data actually comes back instead of (or
 # alongside) the real post, per test-environment/README.md section 2.3.
+#
+# click_selector (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+# cookie-consent-wall round): test-environment/README.md section 2.5's
+# real content is gated behind a consent cookie now -- this is the
+# "Accept" link/element ByparrProvider *would* need to click, except its
+# own module documents it structurally cannot (Byparr's /v1 API has no
+# click/interact capability). Byparr already fails earlier, at Anubis's
+# own challenge (docs/REQUIREMENTS.md section 9 entry 4) -- so this
+# config's result stays indistinguishable from that pre-existing gap;
+# see docs/REQUIREMENTS.md for why that is documented explicitly, not
+# silently assumed away.
 name: mock_target
 start_urls:
   - "http://localhost:8080/"
@@ -31,6 +42,7 @@ allowed_domains:
 rate_limit: 1.0
 antibot_needed: true
 max_concurrency: 1
+click_selector: "#accept-cookies"
 selectors:
   item: 'article[data-role="post"]'
   fields:

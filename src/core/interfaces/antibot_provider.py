@@ -31,8 +31,21 @@ class AntibotProvider(ABC):
     """
 
     @abstractmethod
-    def solve(self, url: str) -> Solution:
+    def solve(self, url: str, click_selector: str | None = None) -> Solution:
         """Solve whatever anti-bot challenge protects ``url``.
+
+        ``click_selector`` (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md,
+        cookie-consent-wall round): an optional CSS selector for an
+        element to click after the page loads -- e.g. a cookie-consent
+        "Accept" button/link that gates real content -- before reading the
+        page and returning a :class:`Solution`. This is **best-effort, not
+        part of the required contract**: a provider that drives a real
+        browser (in-process) can click; a provider that only delegates to
+        an external HTTP-only solving service structurally may not be able
+        to. A provider that cannot support it must not crash or silently
+        drop it -- it must log a clear warning identifying exactly what
+        was skipped and why, then proceed to solve without clicking, so
+        the gap is visible in evidence rather than hidden.
 
         Implementations must raise
         :class:`src.core.exceptions.AntibotError` (never a bare

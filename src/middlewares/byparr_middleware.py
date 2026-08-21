@@ -38,6 +38,14 @@ Fallback is explicit and logged, never a crash: if the selected provider
 isn't configured, or it fails, the request is handed back to the normal
 downloader (the resolved response is ``None``) instead of dropping the
 request or raising.
+
+``request.meta["click_selector"]`` (already populated by ``GenericSpider``
+for every request, docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+cookie-consent-wall round) is passed straight through to whichever
+provider is selected -- best-effort per
+:meth:`~src.core.interfaces.antibot_provider.AntibotProvider.solve`'s own
+contract: a real-browser-driving provider (Camoufox, Patchright) can
+click; ByparrProvider cannot and only logs why.
 """
 
 from __future__ import annotations
@@ -146,8 +154,9 @@ class ByparrMiddleware:
             )
             return None
 
+        click_selector = request.meta.get("click_selector")
         try:
-            solution = provider.solve(request.url)
+            solution = provider.solve(request.url, click_selector=click_selector)
         except AntibotError as exc:
             self.logger.error(
                 "byparr_middleware.solve_failed_fallback",

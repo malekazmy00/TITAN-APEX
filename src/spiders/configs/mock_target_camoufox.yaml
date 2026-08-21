@@ -13,6 +13,13 @@
 # already uses it: that is genuinely where the CI job's own network
 # namespace (where Scrapy, and now Camoufox, both actually run) sees
 # Anubis's published port.
+# click_selector (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+# cookie-consent-wall round): test-environment/README.md section 2.5's
+# real content is now gated behind a consent cookie, past Anubis's own
+# challenge. CamoufoxProvider drives a real browser directly, so it CAN
+# click a real element -- this is the first real test of whether that's
+# actually enough to get past a second, independent gate stacked behind
+# the first one it already solves.
 name: mock_target_camoufox
 start_urls:
   - "http://localhost:8080/"
@@ -22,6 +29,7 @@ rate_limit: 1.0
 antibot_needed: true
 antibot_provider: camoufox
 max_concurrency: 1
+click_selector: "#accept-cookies"
 selectors:
   item: 'article[data-role="post"]'
   fields:

@@ -10,10 +10,16 @@ from typing import Any
 
 from config import MockTargetConfig, get_config
 from content_generator import generate_feed_page
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request
 from security.botd_integration import VENDORED_SCRIPT_PATH, log_botd_report
 from security.file_logger import get_file_logger
 from security.honeypot_logger import log_honeypot_trigger
+from structural.cookie_wall import (
+    ACCEPT_PATH,
+    CONSENT_COOKIE_NAME,
+    CONSENT_COOKIE_VALUE,
+    has_consent,
+)
 from structural.decoy_data import generate_decoy_twin
 from structural.feed import FeedRateLimiter, build_feed_page
 from structural.honeypots import generate_honeypot_links
@@ -73,6 +79,12 @@ def create_app(config: MockTargetConfig | None = None) -> Flask:
 
     @app.get("/")
     def index() -> Response:
+        if cfg.enable_cookie_wall and not has_consent(request.cookies.get(CONSENT_COOKIE_NAME)):
+            # Real content is genuinely absent here -- see
+            # structural/cookie_wall.py's docstring for why this is a
+            # server-side gate, not a CSS overlay.
+            return Response(render_template("cookie_wall.html", accept_path=ACCEPT_PATH))
+
         seed = _session_seed()
         posts = generate_feed_page(seed, page=0, page_size=INDEX_PAGE_SIZE)
 
@@ -94,6 +106,12 @@ def create_app(config: MockTargetConfig | None = None) -> Flask:
             )
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)
+        return response
+
+    @app.get(ACCEPT_PATH)
+    def accept_cookies() -> Response:
+        response = redirect("/")
+        response.set_cookie(CONSENT_COOKIE_NAME, CONSENT_COOKIE_VALUE)
         return response
 
     @app.get("/feed")

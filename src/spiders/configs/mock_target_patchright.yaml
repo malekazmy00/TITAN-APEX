@@ -13,6 +13,15 @@
 # structurally cannot happen here either. `start_urls` stays
 # `http://localhost:8080/` unchanged for the same reason the other two
 # mock_target configs already use it.
+#
+# click_selector (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+# cookie-consent-wall round): PatchrightProvider can click too (same
+# real-browser capability as Camoufox). But Patchright already fails
+# earlier, at Anubis's own `bot/headless-chrome` explicit-deny rule
+# (docs/REQUIREMENTS.md's "Antibot Provider Comparison") -- so, like
+# Byparr's config above, this result is expected to stay indistinguishable
+# from that pre-existing gap. Documented, not assumed -- see
+# docs/REQUIREMENTS.md for the real, CI-confirmed outcome.
 name: mock_target_patchright
 start_urls:
   - "http://localhost:8080/"
@@ -22,6 +31,7 @@ rate_limit: 1.0
 antibot_needed: true
 antibot_provider: patchright
 max_concurrency: 1
+click_selector: "#accept-cookies"
 selectors:
   item: 'article[data-role="post"]'
   fields:

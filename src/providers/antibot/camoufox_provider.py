@@ -69,17 +69,30 @@ class _RawSolve(NamedTuple):
     cookies: dict[str, str]
 
 
-# (url, timeout_ms, post_load_wait_ms) -> raw browser result
-CamoufoxSolveFn = Callable[[str, int, int], _RawSolve]
+# (url, timeout_ms, post_load_wait_ms, click_selector) -> raw browser result
+CamoufoxSolveFn = Callable[[str, int, int, "str | None"], _RawSolve]
 
 
-def _default_camoufox_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
-    """Drive a real Camoufox browser: navigate, wait past ``load``, read, close.
+def _default_camoufox_solve(
+    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+) -> _RawSolve:
+    """Drive a real Camoufox browser: navigate, (optionally) click, wait
+    past ``load``, read, close.
+
+    ``click_selector`` (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md,
+    cookie-consent-wall round): since this provider drives a real
+    Playwright-compatible ``Page`` directly, it can genuinely click an
+    element -- unlike :class:`~src.providers.antibot.byparr_provider.ByparrProvider`,
+    which structurally cannot (its own module's comment on this). No
+    separate "wait after click" parameter is added: ``post_load_wait_ms``
+    (already configurable) is reused for that -- it runs *after* the
+    click below, so it doubles as "wait for the consent overlay to
+    actually disappear" without inventing a second, overlapping knob.
 
     Raises:
-        AntibotError: if the browser fails to launch, navigate, or read
-            the page -- wraps Camoufox's own pre-launch exceptions and
-            Playwright's own navigation/page errors (Camoufox's
+        AntibotError: if the browser fails to launch, navigate, click, or
+            read the page -- wraps Camoufox's own pre-launch exceptions
+            and Playwright's own navigation/page errors (Camoufox's
             ``new_page()``/``goto()``/``content()`` are genuine Playwright
             calls under the hood).
     """
@@ -98,10 +111,15 @@ def _default_camoufox_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -
                 page = browser.new_page()
                 try:
                     response = page.goto(url, timeout=timeout_ms)
+                    if click_selector:
+                        page.click(click_selector, timeout=timeout_ms)
                     # The one thing ByparrProvider structurally cannot
                     # do: hold the browser open past `load` so async,
                     # post-load challenge JS (e.g. Anubis's real PoW
-                    # flow) gets a real chance to finish.
+                    # flow) gets a real chance to finish -- or, if a
+                    # click just happened above, give whatever it
+                    # triggered (e.g. a consent-wall reload) time to
+                    # settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
                     html = page.content()
                     status = response.status if response is not None else 200
@@ -124,6 +142,7 @@ def _default_camoufox_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -
                             "title": page.title(),
                             "html_length": len(html),
                             "cookie_names": sorted(cookies),
+                            "click_selector": click_selector,
                         },
                     )
                     return _RawSolve(url=page.url, html=html, status=status, cookies=cookies)
@@ -159,9 +178,11 @@ class CamoufoxProvider(AntibotProvider):
         self._solve_fn = solve_fn or _default_camoufox_solve
         self.logger = logger or get_logger(__name__)
 
-    def solve(self, url: str) -> Solution:
+    def solve(self, url: str, click_selector: str | None = None) -> Solution:
         try:
-            raw = self._solve_fn(url, self._timeout_ms, self._post_load_wait_ms)
+            raw = self._solve_fn(
+                url, self._timeout_ms, self._post_load_wait_ms, click_selector
+            )
         except AntibotError:
             self.logger.error("camoufox_provider.solve_failed", extra={"url": url})
             raise

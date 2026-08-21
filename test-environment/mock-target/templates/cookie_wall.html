@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target</title>
+</head>
+<body>
+  <main class="page-main">
+    {# Real, full-page consent gate -- no post content anywhere in this
+       response at all (see structural/cookie_wall.py's docstring for why
+       a CSS-hidden overlay would have been a weaker, easier test). A real
+       navigation (not a JS-only in-page reveal), same as many real sites'
+       consent walls -- so a crawler must actually follow the "Accept"
+       link/click and re-fetch, not just wait on the same page. #}
+    <div id="cookie-consent-wall" data-role="cookie-consent-wall">
+      <p>We use cookies to run this totally real mock target.</p>
+      <a href="{{ accept_path }}" id="accept-cookies" data-role="accept-cookies">Accept</a>
+    </div>
+  </main>
+</body>
+</html>

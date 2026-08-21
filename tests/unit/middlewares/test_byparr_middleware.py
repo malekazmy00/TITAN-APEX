@@ -28,8 +28,10 @@ class _FakeProvider(AntibotProvider):
     def __init__(self, solution: Solution | None = None, error: AntibotError | None = None) -> None:
         self._solution = solution
         self._error = error
+        self.last_click_selector: str | None = None
 
-    def solve(self, url: str) -> Solution:
+    def solve(self, url: str, click_selector: str | None = None) -> Solution:
+        self.last_click_selector = click_selector
         if self._error is not None:
             raise self._error
         assert self._solution is not None
@@ -118,6 +120,29 @@ def test_process_request_falls_back_and_logs_when_provider_fails() -> None:
     message, extra = logged[0]
     assert message == "byparr_middleware.solve_failed_fallback"
     assert "challenge unsolvable" in str(extra["reason"])
+
+
+def test_process_request_passes_click_selector_from_meta_to_the_provider() -> None:
+    """docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's cookie-consent-wall
+    round: request.meta["click_selector"] (already set by GenericSpider
+    for every request) must reach whichever provider is selected."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    request = Request(
+        "https://example.com/",
+        meta={"antibot_needed": True, "click_selector": "#accept-cookies"},
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_click_selector == "#accept-cookies"
 
 
 def test_process_request_routes_to_camoufox_when_selected() -> None:
