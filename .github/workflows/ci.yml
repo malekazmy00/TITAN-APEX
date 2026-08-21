@@ -29,6 +29,11 @@ jobs:
           python-version: "3.12"
       - run: pip install -e ".[dev,testenv]"
       - run: playwright install --with-deps chromium
+      - name: Fetch Camoufox browser binary
+        # CamoufoxProvider (docs/REQUIREMENTS.md section 9 entry 4 / round 3)
+        # drives its own real browser -- needs the actual binary, same
+        # reason as playwright install above.
+        run: python -m camoufox fetch
       - name: Unit tests (coverage gate >= 85%)
         run: pytest tests/unit -v --cov=src --cov-fail-under=85
       - name: Contract tests
@@ -52,15 +57,17 @@ jobs:
         # so this step itself is the "is it actually up" proof, not an
         # assumption.
         run: docker compose -f test-environment/docker-compose.test.yml up -d --build --wait
-      - name: Integration tests (live network -- Playwright render, Byparr solve, Test Targets, mock-target)
+      - name: Integration tests (live network -- Playwright render, Byparr solve, Camoufox solve, Test Targets, mock-target)
         # Bumped from 6 -> 12 when the Test Targets configs/tests were added
         # (docs/TEST_TARGETS.md): more live sites, several of them
         # render_js (a fresh headless-browser launch per page), plus
         # test_hackernews_live.py's deliberate 45s gap between its two
         # live runs. Bumped again for test_mock_target_live.py (docs/REQUIREMENTS.md
         # section 8's Escalation Cycle, section 9's "Known Gaps from Test
-        # Environment").
-        timeout-minutes: 14
+        # Environment"), and again for test_mock_target_camoufox_live.py
+        # (section 9 entry 4 / round 3 -- a second real browser launch,
+        # plus CamoufoxProvider's own post_load_wait_ms).
+        timeout-minutes: 16
         run: |
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             pytest tests/integration -v

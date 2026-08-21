@@ -79,6 +79,7 @@ class GenericSpider(scrapy.Spider):
         return {
             "playwright": self.config.render_js,
             "antibot_needed": self.config.antibot_needed,
+            "antibot_provider": self.config.antibot_provider,
             "render_wait_ms": self.config.render_wait_ms,
             "click_selector": self.config.click_selector,
         }

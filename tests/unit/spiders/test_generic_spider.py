@@ -188,6 +188,26 @@ def test_start_sets_render_wait_ms_and_click_selector_meta_from_config(
     assert requests[0].meta["click_selector"] == "button.load-more"
 
 
+def test_start_sets_antibot_provider_meta_to_byparr_by_default(config_path: str) -> None:
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["antibot_provider"] == "byparr"
+
+
+def test_start_sets_antibot_provider_meta_from_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "camoufox_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n", encoding="utf-8"
+    )
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["antibot_provider"] == "camoufox"
+
+
 def test_parse_pagination_follow_carries_playwright_meta(tmp_path: Path) -> None:
     config_file = tmp_path / "js_target.yaml"
     config_file.write_text(CONFIG_YAML + "\nrender_js: true\n", encoding="utf-8")

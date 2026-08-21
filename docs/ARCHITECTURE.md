@@ -5,7 +5,14 @@ so that concrete providers can be swapped without touching the code that
 depends on them:
 
 - **`AntibotProvider`** — `solve(url) -> Solution`. Implemented by
-  `src/providers/antibot/byparr_provider.py` (Phase 3).
+  `src/providers/antibot/byparr_provider.py` (Phase 3, delegates to an
+  external Byparr service over HTTP) and
+  `src/providers/antibot/camoufox_provider.py` (round 3,
+  docs/REQUIREMENTS.md section 9 entry 4, drives its own real browser
+  in-process). Selected per-target via `SpiderConfig.antibot_provider`
+  (default `"byparr"`) — see docs/REQUIREMENTS.md's "Antibot provider
+  comparison" for which one is actually stronger against which real
+  challenge shape.
 - **`StorageBackend`** — `save(item)`, `query(filters)`, `close()`.
   Implemented by `src/providers/storage/sqlite_backend.py` (Phase 1).
 - **`AIAnalyzer`** — `analyze(text) -> AnalysisResult`. Implemented by

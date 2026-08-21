@@ -1,0 +1,31 @@
+# Round 3 (docs/REQUIREMENTS.md section 9 entry 4): the same real target
+# and challenge as mock_target.yaml (test-environment/'s mock-target
+# behind Anubis's real proof-of-work reverse proxy), this time via
+# `antibot_provider: camoufox` instead of the default "byparr" -- the
+# first real test of SpiderConfig's provider-selection field.
+#
+# Unlike ByparrMiddleware's Byparr path, CamoufoxProvider drives its own
+# browser in-process, in the same process as Scrapy itself -- there is no
+# separate container/service in the loop, so the network-namespace
+# mismatch that blocked Byparr in CI (docs/REQUIREMENTS.md section 9
+# entry 1) structurally cannot happen here. `start_urls` stays
+# `http://localhost:8080/` unchanged for the same reason mock_target.yaml
+# already uses it: that is genuinely where the CI job's own network
+# namespace (where Scrapy, and now Camoufox, both actually run) sees
+# Anubis's published port.
+name: mock_target_camoufox
+start_urls:
+  - "http://localhost:8080/"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+selectors:
+  item: 'article[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

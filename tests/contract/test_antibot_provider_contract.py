@@ -2,9 +2,11 @@
 
 Every provider implementing the ``AntibotProvider`` interface must pass
 this suite before it is accepted into the project (docs/REQUIREMENTS.md,
-sections 1 & 4). Currently exercised against ``ByparrProvider`` with an
-injected HTTP transport (no real network) — a future provider must pass
-the same suite.
+sections 1 & 4). Parametrized across every implementation this project
+has (docs/REQUIREMENTS.md section 9 entry 4 / round 3 added
+``CamoufoxProvider`` alongside the original ``ByparrProvider``) — a
+future provider must pass the same suite too, by adding one more entry to
+``_PROVIDERS`` below.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import pytest
 from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider, Solution
 from src.providers.antibot.byparr_provider import ByparrProvider
+from src.providers.antibot.camoufox_provider import CamoufoxProvider, _RawSolve
 
 _SOLVED_RESPONSE = json.dumps(
     {
@@ -31,17 +34,59 @@ _SOLVED_RESPONSE = json.dumps(
 )
 
 
-def _ok_transport(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+def _byparr_ok_transport(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
     return _SOLVED_RESPONSE
 
 
-def _failing_transport(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+def _byparr_failing_transport(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
     return json.dumps({"status": "error", "message": "unsolvable"})
 
 
+def _build_byparr_ok() -> AntibotProvider:
+    return ByparrProvider(base_url="http://localhost:8191", http_post=_byparr_ok_transport)
+
+
+def _build_byparr_failing() -> AntibotProvider:
+    return ByparrProvider(base_url="http://localhost:8191", http_post=_byparr_failing_transport)
+
+
+def _camoufox_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+    return _RawSolve(
+        url="https://example.com/protected",
+        html="<html>past the challenge</html>",
+        status=200,
+        cookies={"cf_clearance": "token"},
+    )
+
+
+def _camoufox_failing_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+    raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
+
+
+def _build_camoufox_ok() -> AntibotProvider:
+    return CamoufoxProvider(solve_fn=_camoufox_ok_solve)
+
+
+def _build_camoufox_failing() -> AntibotProvider:
+    return CamoufoxProvider(solve_fn=_camoufox_failing_solve)
+
+
+_PROVIDERS = [
+    (_build_byparr_ok, _build_byparr_failing),
+    (_build_camoufox_ok, _build_camoufox_failing),
+]
+_PROVIDER_IDS = ["byparr", "camoufox"]
+
+
+@pytest.fixture(params=_PROVIDERS, ids=_PROVIDER_IDS)
+def provider_factories(request: pytest.FixtureRequest) -> Any:
+    return request.param
+
+
 @pytest.fixture
-def provider() -> AntibotProvider:
-    return ByparrProvider(base_url="http://localhost:8191", http_post=_ok_transport)
+def provider(provider_factories: Any) -> AntibotProvider:
+    ok_factory, _failing_factory = provider_factories
+    return ok_factory()  # type: ignore[no-any-return]
 
 
 def test_is_an_antibot_provider(provider: AntibotProvider) -> None:
@@ -57,10 +102,9 @@ def test_solve_returns_a_solution(provider: AntibotProvider) -> None:
     assert solution.cookies
 
 
-def test_solve_raises_antibot_error_on_failure() -> None:
-    failing_provider = ByparrProvider(
-        base_url="http://localhost:8191", http_post=_failing_transport
-    )
+def test_solve_raises_antibot_error_on_failure(provider_factories: Any) -> None:
+    _ok_factory, failing_factory = provider_factories
+    failing_provider: AntibotProvider = failing_factory()
 
     with pytest.raises(AntibotError):
         failing_provider.solve("https://example.com/protected")

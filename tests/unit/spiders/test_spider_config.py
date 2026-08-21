@@ -42,6 +42,7 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert config.antibot_needed is False
     assert config.render_wait_ms is None
     assert config.click_selector is None
+    assert config.antibot_provider == "byparr"
 
 
 def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> None:
@@ -92,6 +93,28 @@ def test_non_positive_render_wait_ms_raises_config_error(tmp_path: Path) -> None
     nothing to wait for) and must be rejected, not silently treated as 'no wait'."""
     config_file = tmp_path / "target.yaml"
     config_file.write_text(VALID_YAML + "\nrender_wait_ms: 0\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="failed schema validation"):
+        load_spider_config(str(config_file))
+
+
+def test_antibot_provider_is_read_from_yaml(tmp_path: Path) -> None:
+    """antibot_provider (docs/REQUIREMENTS.md section 9 entry 4 / round 3)
+    is a config-only knob -- a target picks camoufox with no spider code
+    changes."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nantibot_provider: camoufox\n", encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.antibot_provider == "camoufox"
+
+
+def test_unknown_antibot_provider_raises_config_error(tmp_path: Path) -> None:
+    """Failure case 7: a typo'd/unsupported provider name must be rejected
+    at config-load time, not silently accepted and fall back at request time."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nantibot_provider: playwright\n", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="failed schema validation"):
         load_spider_config(str(config_file))

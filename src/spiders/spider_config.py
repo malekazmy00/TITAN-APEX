@@ -8,7 +8,7 @@ writing new spider code (docs/REQUIREMENTS.md, section 1 — "مبدأ التو�
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, ValidationError
@@ -38,6 +38,14 @@ class SpiderConfig(BaseModel):
     max_concurrency: int = Field(default=2, gt=0)
     # Phase 3: anti-bot solving via Byparr, also config-driven.
     antibot_needed: bool = False
+    # Round 3 (docs/REQUIREMENTS.md section 9 entry 4): more than one
+    # AntibotProvider implementation exists now (ByparrProvider,
+    # CamoufoxProvider), each genuinely stronger against different
+    # challenge shapes (documented with real evidence in
+    # docs/REQUIREMENTS.md's "Antibot provider comparison" -- never
+    # assumed). Per-target selection, no code change needed to switch —
+    # default "byparr" keeps every existing config's behavior unchanged.
+    antibot_provider: Literal["byparr", "camoufox"] = "byparr"
     # Real, evidenced gaps found expanding Test Targets coverage
     # (docs/REQUIREMENTS.md, section 7, entries 3-4): some render_js
     # targets need a fixed extra dwell after navigation (a site-added

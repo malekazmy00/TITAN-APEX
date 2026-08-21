@@ -18,6 +18,11 @@ dependencies = [
     "pyyaml>=6.0,<7.0",
     "redis>=5.0,<6.0",
     "rq>=1.16,<2.0",
+    # Second AntibotProvider implementation (docs/REQUIREMENTS.md section 9
+    # entry 4 / round 3), selected per-target via SpiderConfig's
+    # antibot_provider field -- a real product dependency, not test infra,
+    # the same way playwright already is for render_js.
+    "camoufox>=0.4,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -69,7 +74,15 @@ ignore = []
 known-first-party = ["src"]
 
 [tool.mypy]
-python_version = "3.11"
+# Matches the actual CI runner (.github/workflows/ci.yml,
+# actions/setup-python@v5, python-version: "3.12") -- not just cosmetic:
+# numpy (a transitive dependency of camoufox, docs/REQUIREMENTS.md
+# section 9 entry 4 / round 3) ships stub files using 3.12-only syntax
+# (PEP 695 `type` statements), which mypy can't even parse under a 3.11
+# target. requires-python still allows >=3.11 for runtime compatibility;
+# this only changes which language version mypy's own type-checking
+# assumes.
+python_version = "3.12"
 strict = true
 warn_unused_configs = true
 namespace_packages = true
