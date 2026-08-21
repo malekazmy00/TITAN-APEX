@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target - Feed</title>
+</head>
+<body>
+  <main>
+    <h1 class="page-title">Live Feed</h1>
+    <div data-role="feed"></div>
+    <div id="loading" style="display:none">Loading...</div>
+  </main>
+
+  <script>
+    // Real lazy loading: nothing beyond the first batch exists in the DOM
+    // until the page is actually scrolled near the bottom -- same shape
+    // as quotes.toscrape.com/scroll, which PlaywrightMiddleware's
+    // scroll-to-bottom loop already proved it can drive.
+    (function () {
+      let cursor = null;
+      let hasNext = true;
+      let loading = false;
+      const container = document.querySelector('[data-role="feed"]');
+      const loadingEl = document.getElementById("loading");
+
+      function renderComments(comments, parent) {
+        comments.forEach(function (comment) {
+          const el = document.createElement("div");
+          el.setAttribute("data-role", "comment");
+          el.setAttribute("data-comment-id", comment.id);
+          const author = document.createElement("span");
+          author.setAttribute("data-role", "comment-author");
+          author.textContent = comment.author;
+          const text = document.createElement("span");
+          text.setAttribute("data-role", "comment-text");
+          text.textContent = comment.text;
+          el.appendChild(author);
+          el.appendChild(text);
+          parent.appendChild(el);
+          if (comment.replies && comment.replies.length) {
+            renderComments(comment.replies, parent);
+          }
+        });
+      }
+
+      function appendEdges(edges) {
+        edges.forEach(function (edge) {
+          const post = edge.post;
+          const article = document.createElement("article");
+          article.setAttribute("data-role", "post");
+          article.setAttribute("data-post-id", post.id);
+
+          const author = document.createElement("span");
+          author.setAttribute("data-role", "post-author");
+          author.textContent = post.author;
+
+          const text = document.createElement("p");
+          text.setAttribute("data-role", "post-text");
+          text.textContent = post.text;
+
+          const likes = document.createElement("span");
+          likes.setAttribute("data-role", "post-likes");
+          likes.textContent = post.likes;
+
+          const commentsDiv = document.createElement("div");
+          commentsDiv.setAttribute("data-role", "comments");
+          renderComments(edge.comments, commentsDiv);
+
+          article.appendChild(author);
+          article.appendChild(text);
+          article.appendChild(likes);
+          article.appendChild(commentsDiv);
+          container.appendChild(article);
+        });
+      }
+
+      function loadMore() {
+        if (loading || !hasNext) {
+          return;
+        }
+        loading = true;
+        loadingEl.style.display = "block";
+        const url = cursor ? "/api/feed?after=" + encodeURIComponent(cursor) : "/api/feed";
+        fetch(url)
+          .then(function (response) {
+            return response.json();
+          })
+          .then(function (data) {
+            appendEdges(data.edges || []);
+            const pageInfo = data.page_info || {};
+            cursor = pageInfo.end_cursor;
+            hasNext = Boolean(pageInfo.has_next_page);
+            loading = false;
+            loadingEl.style.display = "none";
+          })
+          .catch(function () {
+            loading = false;
+            loadingEl.style.display = "none";
+          });
+      }
+
+      window.addEventListener("scroll", function () {
+        if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) {
+          loadMore();
+        }
+      });
+
+      loadMore();
+    })();
+  </script>
+</body>
+</html>

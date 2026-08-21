@@ -32,3 +32,5 @@
 ## السجل
 
 <!-- كل جولة تصعيد جديدة تتضاف كسطر جديد فوق هنا، الأحدث أولاً. -->
+
+[2026-08-21] من مستوى 0 لمستوى 1 - أضفنا mock-target خلف Anubis (PoW الحقيقي، policy افتراضية أصلية) + BotD (log-only) + 4 تحديات هيكلية (markup randomizer، honeypots، decoy data، /feed) + `src/spiders/configs/mock_target.yaml` وتشغيله فعليًا ضد الـ stack الكامل - نتيجة الكود: فشل جزئي (0 items - Byparr وصل لتحدي Anubis الحقيقي بس مقدرش يكمّله فوق HTTP عادي؛ الكراول خلص من غير crash، مفيش honeypot اتلمس) - القرار: نأجل ونسجل (تفاصيل كاملة + فجوة TLS + إصلاح جانبي حقيقي لـ `TITAN_BYPARR_URL` في `docs/REQUIREMENTS.md` قسم 9)

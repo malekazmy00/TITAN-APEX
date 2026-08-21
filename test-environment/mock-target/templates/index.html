@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target</title>
+</head>
+<body>
+  <main class="page-main">
+    <h1 class="page-title">Mock Target Feed</h1>
+
+    {% if decoy %}
+    {# Decoy twin: identical class to the real posts, rendered first, but
+       hidden -- a scraper whose selector picks "the first match" instead
+       of checking visibility grabs this stale text instead of the real
+       post below it. See structural/decoy_data.py. #}
+    <article class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ decoy.post_id }}"
+              style="display:none" aria-hidden="true">
+      <span class="{{ classes['post-author'] }}" data-role="post-author">{{ decoy.author }}</span>
+      <p class="{{ classes['post-text'] }}" data-role="post-text">{{ decoy.text }}</p>
+      <span class="{{ classes['post-likes'] }}" data-role="post-likes">{{ decoy.likes }}</span>
+    </article>
+    {% endif %}
+
+    {% for post in posts %}
+    <article class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ post.post_id }}">
+      <span class="{{ classes['post-author'] }}" data-role="post-author">{{ post.author }}</span>
+      <p class="{{ classes['post-text'] }}" data-role="post-text">{{ post.text }}</p>
+      <span class="{{ classes['post-likes'] }}" data-role="post-likes">{{ post.likes }}</span>
+      <div class="post-comments" data-role="comments">
+        {% for comment in post.comments %}
+        <div class="{{ classes['comment-item'] }}" data-role="comment" data-comment-id="{{ comment.comment_id }}">
+          <span class="{{ classes['comment-author'] }}" data-role="comment-author">{{ comment.author }}</span>
+          <span class="{{ classes['comment-text'] }}" data-role="comment-text">{{ comment.text }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </article>
+    {% endfor %}
+
+    {% if honeypots %}
+    {# Hidden trap links -- never visible/interactable by a real human.
+       A hit on any of these is logged CRITICAL. See structural/honeypots.py. #}
+    <div class="honeypot-zone" aria-hidden="true">
+      {% for hp in honeypots %}
+        {% if hp.hide_method == 'display-none' %}
+      <a href="{{ hp.url }}" style="display:none">{{ hp.label }}</a>
+        {% elif hp.hide_method == 'visibility-hidden' %}
+      <a href="{{ hp.url }}" style="visibility:hidden">{{ hp.label }}</a>
+        {% elif hp.hide_method == 'opacity-offscreen' %}
+      <a href="{{ hp.url }}" style="opacity:0;position:absolute;left:-9999px;top:-9999px">{{ hp.label }}</a>
+        {% else %}
+      <a href="{{ hp.url }}" aria-hidden="true">{{ hp.label }}</a>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </main>
+
+  {% if botd_enabled %}
+  <script type="module">
+    import Botd from "/static/{{ botd_script_path }}";
+    Botd.load().then((botd) => botd.detect()).then((result) => {
+      fetch("/botd-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(result),
+      });
+    }).catch(() => {
+      // BotD itself failing to run is not this app's concern; never let
+      // a detection error break the page.
+    });
+  </script>
+  {% endif %}
+</body>
+</html>

@@ -569,3 +569,80 @@ origin). مفيش بيانات حقيقية تتسحب حتى لو حلّينا 
 عشان السجل يفضل قابل للمسح بسرعة عبر الزمن. تفاصيل أي فجوة مكتشفة
 (السبب، الحل المحتمل) تتوثّق بالتفصيل في القسم 6/7 هنا زي المعتاد —
 الـ CHANGELOG نفسه سطر واحد لكل جولة بس، مش تكرار للتفاصيل.
+
+---
+
+## 9. Known Gaps from Test Environment
+
+نتائج فعلية من أول تشغيل حقيقي لـ `generic_spider.py` ضد
+`test-environment/`'s الكامل (mock-target خلف Anubis) —
+`src/spiders/configs/mock_target.yaml`، `tests/integration/test_mock_target_live.py`.
+مطابق لتوقّع القسم 5 الصريح في تعليمات بناء بيئة الاختبار: "مش
+المفروض ينجح من أول مرة بالكامل" — التفاصيل الكاملة (مش ملخّص) موجودة
+في docstring الاختبار نفسه؛ هنا الفهرس/التصنيف الرسمي.
+
+### 1. Anubis's challenge cookie requires HTTPS — mock-target stack is HTTP-only
+
+**الفجوة:** `ByparrMiddleware`/`ByparrProvider` نجحوا في الوصول لصفحة
+تحدي Anubis الحقيقية (weight=10 بسبب الـ User-Agent البراوزري بتاع
+Byparr، threshold "moderate-suspicion")، لكن **مقدروش يعدّوا التحدي
+خالص** — نتيجة متكررة وثابتة (3 محاولات متطابقة محليًا قبل كتابة
+الاختبار، مش flaky). السبب الجذري اتأكّد منه مباشرة بقراءة
+`Set-Cookie` headers بتاع Anubis نفسه: الكوكيز اللي بتثبت اجتياز
+التحدي (`techaro.lol-anubis-cookie-verification-*`) معمولة
+`Secure; SameSite=None` — يعني أي براوزر حقيقي (بما فيه Chromium اللي
+Byparr بيشغّله) هيرفض يحتفظ بيها فوق `http://` عادي، ومفيش طريقة
+التحدي يكتمل من غيرها. Anubis's لوج بتاعه بيأكد نفس الحاجة حرفيًا:
+`"msg":"user has cookies disabled, this is not an anubis bug"`.
+
+**ده مش باج في GenericSpider ولا ByparrMiddleware ولا Byparr نفسه** —
+ده فجوة نشر حقيقية: `test-environment/`'s stack شغّال HTTP بس، ومحتاج
+TLS (أو Anubis يدعم إعداد يلغي `Secure` لنشر بدون TLS، لو موجود) عشان
+أي براوزر حقيقي يقدر يكمّل التحدي أصلاً.
+
+**النتيجة العملية:** الكراول بيخلّص بنجاح (مفيش crash)، لكن بصفر
+items — `test_mock_target_yields_zero_items_stuck_behind_anubis_challenge`
+بيوثّق ده كنتيجة حقيقية متوقعة دلوقتي، مش aspiration.
+
+**القرار (نفس تصنيف دورة التصعيد):** نأجل ونسجل — إضافة TLS لـ
+`test-environment/`'s stack خطوة تصعيد حقيقية بحد ذاتها (تحتاج شهادة/CA
+داخل الشبكة المعزولة)، مش تعديل سريع. متسجّلة هنا كـ Known Gap رسمي
+لحد ما تُقرَّر كخطوة تصعيد قادمة (`docs/REQUIREMENTS.md` قسم 8، خطوة 4).
+
+### 2. Anubis's real default policy explicitly denies Scrapy's own User-Agent
+
+**ملحوظة مستقلة (اتأكّد منها بـ `curl` عادي، مفيهاش Scrapy خالص):**
+Anubis's الـ policy الافتراضية الحقيقية (`anubis/botPolicy.yaml`، نسخة
+حرفية من الأصل، مش معدّلة) بترفض User-Agent الافتراضي بتاع Scrapy
+(`Scrapy/2.18.0 (+https://scrapy.org)`) صراحة عبر قاعدة `bot/ai-catchall`
+(`"msg":"explicit deny", "check_result":{"name":"bot/ai-catchall","rule":"DENY"}`)
+— أي bot بيعرّف نفسه بصراحة في الـ User-Agent (زي Scrapy المهذّب) هو
+بالظبط اللي القايمة دي مصمّمة تلاحقه. بالمقابل، `curl` بـ User-Agent
+مجهول (`curl/8.5.0`) بيعدي من غير أي تحدي خالص (`weight <= 0` →
+"minimal-suspicion" → ALLOW، لأن مفيش قاعدة "generic-bot-catchall"
+مفعّلة افتراضيًا في نسخة Anubis الأصلية).
+
+**يعني عمليًا:** التارجت ده متحصّن مرتين لـ GenericSpider دلوقتي —
+طلب مباشر (من غير antibot_needed) بيترفض صراحة، وطلب عبر Byparr عالق
+في تحدي مقدرش يكمل فوق HTTP. مفيش كود جديد مطلوب لسه — نفس فجوة
+TLS فوق هي اللي هتحل الاتنين مع بعض لو Byparr قدر يكمّل التحدي.
+
+### 3. Real code fix that came out of this round: `TITAN_BYPARR_URL` env-var fallback
+
+**اكتشاف حقيقي أثناء التكامل:** ولا config قبل كده كان مستخدم
+`antibot_needed: true` — أول مرة اتحقق فعليًا إن
+`ByparrMiddleware.from_crawler()` بيقرا `TITAN_BYPARR_URL` بس من
+`crawler.settings` (اللي بيتملى تلقائيًا من متغيرات بيئة بادئتها
+`SCRAPY_` بس، مش `TITAN_*`) — يعني تشغيل `scrapy runspider` حقيقي
+ومعاه `TITAN_BYPARR_URL` كـ environment variable عادي (بالظبط زي
+`.github/workflows/ci.yml`'s الـ job-level env) **مكانش هيوصّل الـ
+URL لـ ByparrMiddleware خالص**، وكان هيرجع لـ fallback صامت
+(`byparr_middleware.not_configured_fallback`) من غير أي خطأ ظاهر.
+
+**اتصلح فورًا (نصلح دلوقتي، مش نأجل)** — `src/middlewares/byparr_middleware.py`
+دلوقتي بيرجع لـ `os.environ.get("TITAN_BYPARR_URL")` لو
+`crawler.settings` مرجّعش حاجة، بنفس نمط `src/settings.py`'s
+env-driven pattern. unit tests جديدة (`test_from_crawler_falls_back_to_the_os_environment_variable`)
+وتعديل الاختبارين القديمين عشان يبقوا deterministic (`monkeypatch.delenv`)
+بغض النظر عن الـ environment الفعلي اللي الاختبارات شغالة فيه — مُتحقّق
+منه فعليًا محليًا (7/7 tests PASSED) قبل الدفع.

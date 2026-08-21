@@ -1,0 +1,40 @@
+# Section 5 integration target: test-environment/'s self-hosted mock
+# target, through its full active security-layer chain (Anubis's
+# proof-of-work reverse proxy in front of mock-target -- SafeLine is
+# documented-excluded this round, see test-environment/README.md
+# section 1.1).
+#
+# `antibot_needed: true` routes every request through ByparrMiddleware
+# first (priority 520, checked before PlaywrightMiddleware's 543) --
+# Byparr's real headless-browser solve is what has to get past Anubis's
+# JS proof-of-work challenge; a plain GET here would only ever see the
+# challenge page, never mock-target's real HTML.
+#
+# Selectors deliberately use the stable `data-role`/`data-post-id`
+# attributes every templated element carries (see
+# test-environment/README.md section 2.1) rather than the CSS classes
+# test-environment/mock-target's MarkupRandomizer rotates every
+# MARKUP_RANDOMIZER_INTERVAL_MINUTES -- this is the actual test of
+# "are our selectors built smartly".
+#
+# `item` intentionally matches the hidden decoy post too
+# (`article[data-role="post"]`, no visibility check) -- GenericSpider's
+# parse() has no concept of visibility at all, so this config does not
+# attempt to work around that gap; the live integration test documents
+# whether the decoy's stale data actually comes back instead of (or
+# alongside) the real post, per test-environment/README.md section 2.3.
+name: mock_target
+start_urls:
+  - "http://localhost:8080/"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+max_concurrency: 1
+selectors:
+  item: 'article[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

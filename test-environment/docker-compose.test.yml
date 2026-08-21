@@ -1,0 +1,100 @@
+# Separate from the root docker-compose.yml (byparr/redis, the product's
+# own runtime deps) -- this is the adversarial test environment itself.
+# See README.md for what each service is, how to verify it's actually
+# active, and how to add a new challenge layer.
+#
+# Isolation (docs/REQUIREMENTS.md section 4/8): two networks, not one.
+# `test-environment` is `internal: true` -- Docker gives it no default
+# route out to the public internet at all, and (confirmed by hand: a
+# plain `internal: true` network with a published port is unreachable
+# from the host too, not just outbound-blocked -- Docker never wires up
+# the NAT rule for it) it is *not* reachable from the host either.
+# `mock-target` -- the thing actually serving fake data, honeypots, and
+# decoy data -- has *only* this network: no route out, no route in
+# except through anubis. `edge` is a normal (non-internal) bridge network
+# that exists solely so anubis's port can be published to the host --
+# the same shape a real reverse proxy has (one leg on the protected
+# backend network, one leg facing the world). This does give anubis
+# itself normal outbound access, same as any real edge proxy; mock-target
+# never gets that. (Image *building* still needs normal internet access
+# to pull the Python base image and pip packages -- that happens once, at
+# `docker compose build` time, before either runtime network exists, the
+# same way the root docker-compose.yml's own images are pulled.)
+
+networks:
+  test-environment:
+    driver: bridge
+    internal: true
+  edge:
+    driver: bridge
+
+services:
+  mock-target:
+    build:
+      context: ./mock-target
+    environment:
+      ENABLE_BOTD: ${ENABLE_BOTD:-true}
+      ENABLE_HONEYPOTS: ${ENABLE_HONEYPOTS:-true}
+      ENABLE_DECOY_DATA: ${ENABLE_DECOY_DATA:-true}
+      ENABLE_MARKUP_RANDOMIZER: ${ENABLE_MARKUP_RANDOMIZER:-true}
+      MARKUP_RANDOMIZER_INTERVAL_MINUTES: ${MARKUP_RANDOMIZER_INTERVAL_MINUTES:-15}
+      FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
+      FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}
+      FEED_PAGE_SIZE: ${FEED_PAGE_SIZE:-10}
+      HONEYPOT_LOG_PATH: /logs/honeypot_triggers.log
+      BOTD_LOG_PATH: /logs/botd_flags.log
+    volumes:
+      - ./logs:/logs
+    networks:
+      - test-environment
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # Proof-of-work challenge + default bot-detection policy in front of
+  # mock-target -- see README.md section 1.2. Disable entirely by not
+  # publishing its port and pointing a spider straight at mock-target
+  # instead (there is no ENABLE_ANUBIS toggle: Anubis is a separate
+  # container you either include or don't, unlike the in-app layers).
+  anubis:
+    image: ghcr.io/techarohq/anubis:latest
+    environment:
+      BIND: ":8080"
+      DIFFICULTY: "4"
+      TARGET: "http://mock-target:8000"
+      POLICY_FNAME: "/data/cfg/botPolicy.yaml"
+      SERVE_ROBOTS_TXT: "false"
+      # Without this, Anubis 500s on every request ("[misconfiguration]
+      # X-Real-Ip header is not set") -- confirmed by hand. It expects a
+      # real reverse proxy in front of it to set that header; there isn't
+      # one here, so it must read the actual TCP peer address instead.
+      USE_REMOTE_ADDRESS: "true"
+    depends_on:
+      mock-target:
+        condition: service_healthy
+    ports:
+      - "${ANUBIS_PORT:-8080}:8080"
+    volumes:
+      - "./anubis/botPolicy.yaml:/data/cfg/botPolicy.yaml:ro"
+    networks:
+      - test-environment
+      - edge
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "anubis", "--healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s

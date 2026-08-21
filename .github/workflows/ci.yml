@@ -27,22 +27,46 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,testenv]"
       - run: playwright install --with-deps chromium
       - name: Unit tests (coverage gate >= 85%)
         run: pytest tests/unit -v --cov=src --cov-fail-under=85
       - name: Contract tests
         run: pytest tests/contract -v
-      - name: Integration tests (live network -- Playwright render, Byparr solve, Test Targets)
+      - name: test-environment unit tests (coverage gate >= 85%)
+        # test-environment/mock-target's own Flask app + challenge layers --
+        # separate from src/'s own coverage gate above (it's test
+        # infrastructure, not part of the product). See
+        # test-environment/README.md.
+        run: |
+          cd test-environment
+          pytest tests/ -v --cov=mock-target --cov-fail-under=85
+      - name: test-environment stack (build + up)
+        # docker-compose.test.yml's mock-target image is built locally
+        # (docker-compose.test.yml comment) -- GitHub Actions `services:`
+        # can only pull pre-built registry images, it cannot `build:` from
+        # a local Dockerfile, so this stack runs as a plain compose step
+        # instead, the same way Byparr/Redis above run as real `services:`
+        # (they're both pre-built registry images). `--wait` blocks until
+        # every service's own healthcheck (docker-compose.test.yml) passes,
+        # so this step itself is the "is it actually up" proof, not an
+        # assumption.
+        run: docker compose -f test-environment/docker-compose.test.yml up -d --build --wait
+      - name: Integration tests (live network -- Playwright render, Byparr solve, Test Targets, mock-target)
         # Bumped from 6 -> 12 when the Test Targets configs/tests were added
         # (docs/TEST_TARGETS.md): more live sites, several of them
         # render_js (a fresh headless-browser launch per page), plus
         # test_hackernews_live.py's deliberate 45s gap between its two
-        # live runs.
-        timeout-minutes: 12
+        # live runs. Bumped again for test_mock_target_live.py (docs/REQUIREMENTS.md
+        # section 8's Escalation Cycle, section 9's "Known Gaps from Test
+        # Environment").
+        timeout-minutes: 14
         run: |
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             pytest tests/integration -v
           else
             echo "No integration tests yet (added from Phase 2 onward)."
           fi
+      - name: test-environment stack teardown
+        if: always()
+        run: docker compose -f test-environment/docker-compose.test.yml down -v

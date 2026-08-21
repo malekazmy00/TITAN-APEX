@@ -19,6 +19,7 @@ dropping the request or raising.
 
 from __future__ import annotations
 
+import os
 from logging import Logger
 from typing import Any
 
@@ -42,7 +43,19 @@ class ByparrMiddleware:
 
     @classmethod
     def from_crawler(cls, crawler: Any) -> ByparrMiddleware:
-        base_url = crawler.settings.get("TITAN_BYPARR_URL")
+        # crawler.settings only auto-picks up OS environment variables
+        # prefixed SCRAPY_ (Scrapy's own init_env()) -- TITAN_BYPARR_URL
+        # never was one, so every previous check here (only ever exercised
+        # via an explicit `-s TITAN_BYPARR_URL=...` in a test, since no
+        # antibot_needed config existed until test-environment/'s
+        # mock_target.yaml) was silently untested for the "just set the
+        # env var, like every other TITAN_* setting" case. Falling back to
+        # os.environ directly matches how every other TITAN_* setting
+        # already works (src/settings.py) and is what actually running
+        # `scrapy runspider` with only TITAN_BYPARR_URL set in the shell
+        # (e.g. this project's own CI job-level env, or a real deploy)
+        # requires to work at all.
+        base_url = crawler.settings.get("TITAN_BYPARR_URL") or os.environ.get("TITAN_BYPARR_URL")
         provider = ByparrProvider(base_url=base_url) if base_url else None
         return cls(provider=provider)
 

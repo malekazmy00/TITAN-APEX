@@ -28,6 +28,14 @@ dev = [
     "mypy>=1.10,<2.0",
     "types-PyYAML>=6.0,<7.0",
 ]
+# Only for developing/testing test-environment/mock-target -- kept out of
+# the main `dependencies` list so the product itself never depends on
+# Flask/Faker (docs/REQUIREMENTS.md section 8: test infrastructure, not
+# a dependency of what it tests).
+testenv = [
+    "flask>=3.0,<4.0",
+    "faker>=25.0,<26.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

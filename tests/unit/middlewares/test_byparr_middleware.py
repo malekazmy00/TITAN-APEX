@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
 from scrapy.http import HtmlResponse, Request
 
 from src.core.exceptions import AntibotError
@@ -100,7 +101,11 @@ def test_process_request_falls_back_and_logs_when_provider_fails() -> None:
     assert "challenge unsolvable" in str(extra["reason"])
 
 
-def test_from_crawler_without_url_builds_middleware_with_no_provider() -> None:
+def test_from_crawler_without_url_builds_middleware_with_no_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TITAN_BYPARR_URL", raising=False)
+
     class _FakeSettings:
         def get(self, name: str, default: object = None) -> object:
             return default
@@ -113,10 +118,33 @@ def test_from_crawler_without_url_builds_middleware_with_no_provider() -> None:
     assert middleware.provider is None
 
 
-def test_from_crawler_with_url_builds_a_real_provider() -> None:
+def test_from_crawler_with_url_builds_a_real_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TITAN_BYPARR_URL", raising=False)
+
     class _FakeSettings:
         def get(self, name: str, default: object = None) -> object:
             return {"TITAN_BYPARR_URL": "http://localhost:8191"}.get(name, default)
+
+    class _FakeCrawler:
+        settings = _FakeSettings()
+
+    middleware = ByparrMiddleware.from_crawler(_FakeCrawler())
+
+    assert middleware.provider is not None
+
+
+def test_from_crawler_falls_back_to_the_os_environment_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """crawler.settings never auto-picks up TITAN_BYPARR_URL (it only reads
+    OS env vars prefixed SCRAPY_) -- a real `scrapy runspider` invocation
+    with only the environment variable set (this project's CI job-level
+    env, or a real deploy) must still configure a provider."""
+    monkeypatch.setenv("TITAN_BYPARR_URL", "http://localhost:8191")
+
+    class _FakeSettings:
+        def get(self, name: str, default: object = None) -> object:
+            return default  # crawler.settings knows nothing about it.
 
     class _FakeCrawler:
         settings = _FakeSettings()
