@@ -23,6 +23,8 @@ from src.core.exceptions import RenderError
 from src.logging_config import get_logger
 
 DEFAULT_TIMEOUT_MS = 30_000
+DEFAULT_MAX_SCROLL_ATTEMPTS = 8
+DEFAULT_SCROLL_PAUSE_MS = 700
 
 
 class RenderedPage(NamedTuple):
@@ -37,9 +39,23 @@ ThreadRunner = Callable[[Callable[[Request], Response], Request], Any]
 
 
 def render_with_playwright(
-    url: str, timeout_ms: int = DEFAULT_TIMEOUT_MS, executable_path: str | None = None
+    url: str,
+    timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    executable_path: str | None = None,
+    max_scroll_attempts: int = DEFAULT_MAX_SCROLL_ATTEMPTS,
+    scroll_pause_ms: int = DEFAULT_SCROLL_PAUSE_MS,
 ) -> RenderedPage:
     """Default renderer: launches a real headless Chromium via Playwright.
+
+    After the initial navigation, this scrolls to the bottom of the page
+    repeatedly (up to ``max_scroll_attempts`` times, pausing
+    ``scroll_pause_ms`` between attempts for lazy-loaded content to
+    arrive) and stops early once the page stops growing. This is what
+    makes infinite-scroll targets (e.g. render_js: true on a target whose
+    content loads in batches as you scroll) actually pull in more than the
+    first batch — a plain ``page.goto()`` alone never triggers that JS.
+    Harmless (a couple of no-op scrolls) on a page that doesn't use
+    infinite scroll.
 
     Must be called off the Twisted reactor thread (Playwright's sync API
     cannot share a thread with an already-running event loop) — see
@@ -63,6 +79,7 @@ def render_with_playwright(
             page = browser.new_page()
             try:
                 response = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                _scroll_to_load_lazy_content(page, max_scroll_attempts, scroll_pause_ms)
                 html = page.content()
                 status = response.status if response is not None else 200
                 return RenderedPage(html=html, status=status)
@@ -72,6 +89,22 @@ def render_with_playwright(
                 page.close()
         finally:
             browser.close()
+
+
+def _scroll_to_load_lazy_content(page: Any, max_attempts: int, pause_ms: int) -> None:
+    """Scroll to the bottom of ``page`` until its height stops growing.
+
+    ``page`` is a ``playwright.sync_api.Page``, typed as ``Any`` here
+    since Playwright ships without inline type stubs.
+    """
+    previous_height = page.evaluate("document.body.scrollHeight")
+    for _ in range(max_attempts):
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(pause_ms)
+        current_height = page.evaluate("document.body.scrollHeight")
+        if current_height <= previous_height:
+            break
+        previous_height = current_height
 
 
 def _default_thread_runner(

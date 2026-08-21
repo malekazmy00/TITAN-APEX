@@ -13,8 +13,33 @@ from src.core.exceptions import RenderError
 from src.middlewares.playwright_middleware import (
     PlaywrightMiddleware,
     RenderedPage,
+    _scroll_to_load_lazy_content,
     render_with_playwright,
 )
+
+
+class _FakePage:
+    """Stands in for a playwright.sync_api.Page for _scroll_to_load_lazy_content.
+
+    evaluate() is called for two different scripts in the real code
+    (scrollTo, which we ignore, and the scrollHeight read, which consumes
+    the next value from ``heights``) -- distinguished by script content,
+    same as the real DOM APIs being invoked.
+    """
+
+    def __init__(self, heights: list[int]) -> None:
+        self._heights = iter(heights)
+        self.scroll_calls = 0
+        self.wait_calls: list[int] = []
+
+    def evaluate(self, script: str) -> int | None:
+        if script.startswith("window.scrollTo"):
+            return None
+        return next(self._heights)
+
+    def wait_for_timeout(self, ms: int) -> None:
+        self.wait_calls.append(ms)
+        self.scroll_calls += 1
 
 
 def _sync_thread_runner(render_fn, request):  # type: ignore[no-untyped-def]
@@ -129,3 +154,38 @@ def test_from_crawler_binds_a_configured_executable_path() -> None:
     assert middleware.renderer.keywords == {  # type: ignore[attr-defined]
         "executable_path": "/opt/pw-browsers/chromium"
     }
+
+
+def test_scroll_stops_once_page_height_stops_growing() -> None:
+    """Happy path: this is the actual fix for the bug a live CI run caught --
+    render_with_playwright() previously never scrolled at all, so infinite-scroll
+    targets only ever returned their first static batch. Growth for 2 scrolls,
+    then flat -> stop after 3 evaluate() height reads (initial + 2 scrolls),
+    not the full max_attempts."""
+    page = _FakePage(heights=[1000, 1500, 2000, 2000])
+
+    _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=100)
+
+    assert page.scroll_calls == 3
+    assert page.wait_calls == [100, 100, 100]
+
+
+def test_scroll_stops_immediately_on_a_page_with_no_lazy_content() -> None:
+    """Failure-adjacent case 1: a page whose height never changes (no infinite
+    scroll) must not waste extra scroll attempts."""
+    page = _FakePage(heights=[500, 500])
+
+    _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=50)
+
+    assert page.scroll_calls == 1
+
+
+def test_scroll_stops_at_max_attempts_if_the_page_never_stabilizes() -> None:
+    """Failure-adjacent case 2: a page that keeps growing forever must not loop
+    forever -- max_attempts is a hard cap."""
+    ever_growing_heights = [100 * i for i in range(1, 12)]  # far more than max_attempts
+    page = _FakePage(heights=ever_growing_heights)
+
+    _scroll_to_load_lazy_content(page, max_attempts=5, pause_ms=10)
+
+    assert page.scroll_calls == 5
