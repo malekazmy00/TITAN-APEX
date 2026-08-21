@@ -59,6 +59,14 @@ def run_spider_live(
         text=True,
         timeout=timeout,
     )
+    # Printed unconditionally (not just on a non-zero returncode) -- pytest
+    # only surfaces captured stdout on a *failing* test, so this is a no-op
+    # for a passing one, but gives real diagnostic evidence (the spider's
+    # own JSON logs -- e.g. generic_spider.no_items_found, or whatever a
+    # provider logged) for the far more common failure shape here: the
+    # process exits 0 but the *content* wasn't what the caller's own
+    # item-count/field assertions expected.
+    print(f"--- scrapy runspider stderr tail ({config_name}) ---\n{result.stderr[-4000:]}")
     assert result.returncode == 0, f"scrapy runspider failed:\n{result.stderr[-4000:]}"
 
     if not output_path.exists():

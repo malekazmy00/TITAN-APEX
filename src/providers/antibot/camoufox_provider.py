@@ -71,6 +71,7 @@ def _default_camoufox_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -
     from camoufox.sync_api import Camoufox
     from playwright.sync_api import Error as PlaywrightError
 
+    logger = get_logger(__name__)
     try:
         # camoufox ships no py.typed marker / inline stubs, so mypy sees
         # this constructor call itself (not objects it returns -- those
@@ -89,6 +90,26 @@ def _default_camoufox_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -
                     html = page.content()
                     status = response.status if response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
+                    # Always logged (not just on failure): the one piece of
+                    # evidence that actually distinguishes "got real
+                    # content" from "still stuck on a challenge/interstitial
+                    # page" -- status 200 alone means nothing for a
+                    # provider that solves anti-bot challenges (a
+                    # challenge/deny page is routinely served as a normal
+                    # 200), and this is genuinely useful after the fact
+                    # (e.g. in a live-test's captured subprocess output),
+                    # not just while debugging this one provider by hand.
+                    logger.info(
+                        "camoufox_provider.solved",
+                        extra={
+                            "url": url,
+                            "final_url": page.url,
+                            "status": status,
+                            "title": page.title(),
+                            "html_length": len(html),
+                            "cookie_names": sorted(cookies),
+                        },
+                    )
                     return _RawSolve(url=page.url, html=html, status=status, cookies=cookies)
                 finally:
                     page.close()
