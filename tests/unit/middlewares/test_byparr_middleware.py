@@ -152,6 +152,38 @@ def test_process_request_routes_to_camoufox_when_selected() -> None:
     assert b"camoufox" in result.body
 
 
+def test_process_request_routes_to_patchright_when_selected() -> None:
+    """A request with antibot_provider='patchright' must be solved by the
+    patchright provider, not byparr/camoufox -- the third selectable option."""
+    byparr_solution = Solution(
+        url="https://example.com/",
+        html="<html>byparr</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    patchright_solution = Solution(
+        url="https://example.com/",
+        html="<html>patchright</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(solution=byparr_solution),
+        patchright_provider=_FakeProvider(solution=patchright_solution),
+        thread_runner=_sync_thread_runner,
+    )
+    request = Request(
+        "https://example.com/", meta={"antibot_needed": True, "antibot_provider": "patchright"}
+    )
+
+    result = middleware.process_request(request, spider=object())
+
+    assert isinstance(result, HtmlResponse)
+    assert b"patchright" in result.body
+
+
 def test_process_request_defaults_to_byparr_when_provider_not_set_in_meta() -> None:
     byparr_solution = Solution(
         url="https://example.com/",
@@ -251,6 +283,25 @@ def test_from_crawler_always_builds_a_camoufox_provider(
     middleware = ByparrMiddleware.from_crawler(_FakeCrawler())
 
     assert middleware._providers["camoufox"] is not None
+
+
+def test_from_crawler_always_builds_a_patchright_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same reasoning as the Camoufox equivalent above: Patchright needs no
+    external service/URL either, so it's always available."""
+    monkeypatch.delenv("TITAN_BYPARR_URL", raising=False)
+
+    class _FakeSettings:
+        def get(self, name: str, default: object = None) -> object:
+            return default
+
+    class _FakeCrawler:
+        settings = _FakeSettings()
+
+    middleware = ByparrMiddleware.from_crawler(_FakeCrawler())
+
+    assert middleware._providers["patchright"] is not None
 
 
 def test_from_crawler_with_url_builds_a_real_byparr_provider(

@@ -23,6 +23,11 @@ dependencies = [
     # antibot_provider field -- a real product dependency, not test infra,
     # the same way playwright already is for render_js.
     "camoufox>=0.4,<1.0",
+    # Third AntibotProvider implementation (this phase's revision): a
+    # lighter-weight, Chromium-only stealth option on top of the Playwright
+    # this project already depends on -- confirmed against its own real
+    # PyPI metadata (current release 1.62.1) before pinning.
+    "patchright>=1.60,<2.0",
 ]
 
 [project.optional-dependencies]

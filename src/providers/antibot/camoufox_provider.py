@@ -6,19 +6,35 @@ Firefox-based stealth browser with a Playwright-compatible Python API
 ``PlaywrightContextManager`` -- ``browser.new_page()``/``page.goto()``
 return genuine Playwright objects).
 
-Unlike :class:`~src.providers.antibot.byparr_provider.ByparrProvider`
-(which delegates to Byparr's own HTTP API and has no control over when
-Byparr's browser closes), this provider drives the browser itself,
-in-process -- giving it direct control over the browser's lifecycle. That
-is the whole point of it existing: docs/REQUIREMENTS.md section 9 entry 4
-found, by direct observation, that Byparr's ``/v1`` API tears its browser
-down as soon as the page's ``load`` event fires, before a challenge that
-does real work *asynchronously after* ``load`` (like Anubis's real
-proof-of-work flow) ever gets a chance to finish. This provider adds an
+**This is not "the same engine Byparr uses, minus its API layer" --
+that was checked directly against Byparr's own real ``pyproject.toml``
+before writing this, and it is a different, unrelated stealth-Firefox
+project.** Byparr depends on plain ``playwright`` plus
+``invisible-playwright`` (a separate patched-Firefox stealth project
+that explicitly lists Camoufox as a *comparison*, not a shared
+dependency, in its own docs) and ``playwright-captcha`` -- no
+``camoufox`` package anywhere in it. So swapping to this provider is a
+genuine engine change, not just bypassing a layer Byparr happens to
+wrap around the same browser.
+
+What *is* true, and is the actual reason this provider exists: unlike
+:class:`~src.providers.antibot.byparr_provider.ByparrProvider` (which
+delegates to Byparr's own external HTTP API and has no control over when
+Byparr's browser closes), this provider drives its browser itself,
+in-process -- giving it direct control over the browser's lifecycle.
+docs/REQUIREMENTS.md section 9 entry 4 found, by direct observation,
+that Byparr's ``/v1`` API tears its browser down as soon as the page's
+``load`` event fires, before a challenge that does real work
+*asynchronously after* ``load`` (like Anubis's real proof-of-work flow)
+ever gets a chance to finish -- a constraint of Byparr's own API
+contract, not of any particular browser engine. This provider adds an
 explicit, configurable wait *after* ``load`` before reading the page and
 closing the browser -- the same ``render_wait_ms`` idea already proven
 for :func:`~src.middlewares.playwright_middleware.render_with_playwright`,
-applied here to the antibot-solving path instead of the render path.
+applied here to the antibot-solving path instead of the render path. See
+:mod:`src.providers.antibot.patchright_provider` for a second,
+lighter-weight provider built on the *same* idea (hold the browser open
+past ``load``) using a Chromium engine instead of Camoufox's Firefox.
 
 The actual browser-driving call is injectable (``solve_fn``) so unit
 tests never launch a real browser or touch the network.

@@ -7,8 +7,8 @@ are routed this way (set by ``GenericSpider`` when a target's config sets
 untouched.
 
 Which provider handles the request is itself config-driven: SpiderConfig's
-``antibot_provider`` field (default ``"byparr"``, or ``"camoufox"``)
-reaches here as ``request.meta["antibot_provider"]``. Still named
+``antibot_provider`` field (default ``"byparr"``, or ``"camoufox"`` /
+``"patchright"``) reaches here as ``request.meta["antibot_provider"]``. Still named
 ``ByparrMiddleware`` — Byparr was the original and, until
 docs/REQUIREMENTS.md section 9 entry 4 (round 3), only provider this
 project had — but it now dispatches across whichever ``AntibotProvider``
@@ -57,6 +57,7 @@ from src.core.interfaces.antibot_provider import AntibotProvider
 from src.logging_config import get_logger
 from src.providers.antibot.byparr_provider import ByparrProvider
 from src.providers.antibot.camoufox_provider import CamoufoxProvider
+from src.providers.antibot.patchright_provider import PatchrightProvider
 
 DEFAULT_PROVIDER_NAME = "byparr"
 
@@ -77,12 +78,14 @@ class ByparrMiddleware:
         self,
         byparr_provider: AntibotProvider | None = None,
         camoufox_provider: AntibotProvider | None = None,
+        patchright_provider: AntibotProvider | None = None,
         logger: Logger | None = None,
         thread_runner: ThreadRunner | None = None,
     ) -> None:
         self._providers: dict[str, AntibotProvider | None] = {
             "byparr": byparr_provider,
             "camoufox": camoufox_provider,
+            "patchright": patchright_provider,
         }
         self.logger = logger or get_logger(__name__)
         self._thread_runner = thread_runner or _default_thread_runner
@@ -108,13 +111,19 @@ class ByparrMiddleware:
         # requires to work at all.
         base_url = crawler.settings.get("TITAN_BYPARR_URL") or os.environ.get("TITAN_BYPARR_URL")
         byparr_provider = ByparrProvider(base_url=base_url) if base_url else None
-        # CamoufoxProvider needs no external service/base_url -- it drives
-        # its own browser in-process -- so it's always available, unlike
-        # Byparr which needs TITAN_BYPARR_URL pointed at a running
-        # instance. Construction itself is cheap (no browser launched
-        # until .solve() actually runs).
+        # Neither CamoufoxProvider nor PatchrightProvider needs an external
+        # service/base_url -- both drive their own browser in-process -- so
+        # both are always available, unlike Byparr which needs
+        # TITAN_BYPARR_URL pointed at a running instance. Construction
+        # itself is cheap for both (no browser launched until .solve()
+        # actually runs).
         camoufox_provider: AntibotProvider = CamoufoxProvider()
-        return cls(byparr_provider=byparr_provider, camoufox_provider=camoufox_provider)
+        patchright_provider: AntibotProvider = PatchrightProvider()
+        return cls(
+            byparr_provider=byparr_provider,
+            camoufox_provider=camoufox_provider,
+            patchright_provider=patchright_provider,
+        )
 
     def process_request(self, request: Request, spider: Any) -> Any:
         if not request.meta.get("antibot_needed"):

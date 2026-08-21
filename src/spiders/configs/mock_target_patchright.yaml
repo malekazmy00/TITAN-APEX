@@ -1,0 +1,31 @@
+# This phase's revision: the same real target and challenge as
+# mock_target.yaml / mock_target_camoufox.yaml (test-environment/'s
+# mock-target behind Anubis's real proof-of-work reverse proxy), this time
+# via `antibot_provider: patchright` -- the first real test of
+# PatchrightProvider, the "lighter than Camoufox" option (Chromium +
+# stealth layer, reusing the Playwright automation this project already
+# depends on, instead of a whole separate Firefox-based stealth browser).
+#
+# Like CamoufoxProvider, PatchrightProvider drives its own browser
+# in-process, in the same process as Scrapy itself -- there is no separate
+# container/service in the loop, so the network-namespace mismatch that
+# blocked Byparr in CI (docs/REQUIREMENTS.md section 9 entry 1)
+# structurally cannot happen here either. `start_urls` stays
+# `http://localhost:8080/` unchanged for the same reason the other two
+# mock_target configs already use it.
+name: mock_target_patchright
+start_urls:
+  - "http://localhost:8080/"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: patchright
+max_concurrency: 1
+selectors:
+  item: 'article[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

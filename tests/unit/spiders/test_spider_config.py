@@ -110,6 +110,17 @@ def test_antibot_provider_is_read_from_yaml(tmp_path: Path) -> None:
     assert config.antibot_provider == "camoufox"
 
 
+def test_patchright_antibot_provider_is_read_from_yaml(tmp_path: Path) -> None:
+    """Same as the camoufox case above, for the third selectable provider
+    (this phase's revision) -- lighter than Camoufox, still config-only."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nantibot_provider: patchright\n", encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.antibot_provider == "patchright"
+
+
 def test_unknown_antibot_provider_raises_config_error(tmp_path: Path) -> None:
     """Failure case 7: a typo'd/unsupported provider name must be rejected
     at config-load time, not silently accepted and fall back at request time."""

@@ -821,6 +821,70 @@ proof-of-work حقيقي (nonce/response hash/elapsedTime=171ms ظاهرين ف�
 اختبار حقيقي لمرونة `antibot_provider` نجح، وموثّق كـ round 3 في
 `test-environment/CHANGELOG.md`.
 
+### 6. تصحيح فرضية: Camoufox مش "نفس محرك Byparr من غير القيد" — اتفحصت فعليًا ورجعت غلط
+
+**الفرضية اللي جت في طلب تعديل المهمة:** إن `CamoufoxProvider` بيستخدم
+"نفس المحرك اللي Byparr بيستخدمه، من غير القيد اللي في طبقة API بتاعته
+تحديدًا" — يعني الفرق مجرد طبقة API، مش محرك مختلف.
+
+**اتفحصت فعليًا قبل ما تتوثّق أو يتصدّقها حد** (مبدأ "verify, don't
+assume" — مش بس على نتايج الكود، على أي فرضية بتتكتب في التوثيق كمان):
+- `pyproject.toml` الحقيقي بتاع Byparr نفسه
+  (`raw.githubusercontent.com/thephaseless/Byparr/main/pyproject.toml`)
+  بيعتمد على `playwright==1.60.*` + `invisible-playwright>=0.6.1` +
+  `playwright-captcha==0.1.*` — **مفيش `camoufox` package خالص جواه**.
+- `invisible-playwright` نفسه (patched-Firefox project منفصل تمامًا،
+  اتفحص عبر PyPI metadata بتاعه) بيذكر Camoufox صراحة كـ *مشروع
+  للمقارنة* في التوثيق بتاعه، مش كـ dependency مشترك.
+
+**يعني الاتنين (Camoufox و Byparr) بيستخدموا محركين Firefox-stealth
+مختلفين وغير مرتبطين ببعض خالص** — مش "نفس المحرك من غير قيد API"،
+ده تغيير محرك حقيقي، مش مجرد تخطي طبقة Byparr بيلفها حوالين نفس
+المتصفح.
+
+**اللي هو صح فعلاً، وده السبب الحقيقي اللي `CamoufoxProvider` موجود
+عشانه:** `ByparrProvider` بيتفوّض بالكامل لخدمة Byparr's HTTP خارجية
+ومالوش أي سيطرة على توقيت إغلاق متصفحها — ده قيد في **عقد API بتاع
+Byparr نفسه** (بيقفل فور `load` event، بند 4 فوق)، مش خاصية في محرك
+معيّن. `CamoufoxProvider` بيحل المشكلة دي عن طريق إنه يشغّل متصفحه
+بنفسه in-process، مش لأنه "نفس محرك Byparr".
+
+**✅ اتصلح في التوثيق:** module docstring بتاع
+`src/providers/antibot/camoufox_provider.py` اتعدّل عشان يوضّح ده
+صراحة (تصحيح مكتوب بالظبط، مش حذف الفرضية بصمت)، بدل ما يتكتب كود جديد
+بناءً على فرضية غلط. راجعت باقي التوثيق (القسم ده، "Antibot Provider
+Comparison" تحت) للتأكد إنه معندوش نفس الصياغة الغلط — مفيش.
+
+### 7. PatchrightProvider — خيار تالت أخف (Chromium + stealth layer فوق Playwright الموجود)
+
+**إضافة جديدة (تعديل المهمة، هذه الجولة):** `PatchrightProvider`
+(`src/providers/antibot/patchright_provider.py`) — implementation تالت
+لـ `AntibotProvider`، بنفس معمارية `CamoufoxProvider` بالظبط (نفس
+العقد، `solve_fn` قابل للحقن، `post_load_wait_ms` قابل للتهيئة، نفس
+diagnostic logging)، بس بيستخدم `patchright.sync_api.sync_playwright()`
++ `p.chromium.launch()` — Patchright نفسه (`patchright` PyPI package،
+v1.62.1 وقت الكتابة، Apache-2.0) هو "drop-in replacement" حقيقي
+لـ Playwright (اتأكّد منه فعليًا عبر PyPI metadata + README بتاعه قبل
+الكتابة)، فهو فعليًا **إعادة استخدام لـ Playwright الموجود بالفعل في
+المشروع (`playwright_middleware.py`) + طبقة stealth فوقه** — مش محرك
+جديد تمامًا زي Camoufox (Chromium بدل Firefox)، وده أساس كونه "أخف".
+
+Chromium-only، ومحتاج binary منفصل بتاعه (`patchright install
+chromium` — مش نفس binary بتاع `playwright install`، حتى لو نفس
+المتصفح الأساسي). contract tests + unit tests (6 اختبارات، نفس نمط
+Camoufox: happy path + 5 حالات فشل/حواف) + دمجه في `SpiderConfig`'s
+`antibot_provider` Literal + `ByparrMiddleware`'s dispatch dict +
+`from_crawler()` + خطوة CI جديدة (`patchright install chromium`) —
+كله اتّحقّق منه محليًا (ruff/mypy --strict/pytest unit+contract) قبل
+الدفع.
+
+**`mock_target_patchright.yaml` + `test_mock_target_patchright_live.py`**
+اتضافوا لتشغيله فعليًا ضد نفس تحدي Anubis اللي Byparr فشل فيه
+وCamoufox عدّاه — **النتيجة لسه مش معروفة لحد ما CI الحقيقي يشتغل**
+(مش مفروض إن نجاح Camoufox معناه نجاح Patchright تلقائيًا — محرك
+مختلف، طبقة stealth مختلفة). هيتوثّق هنا وفي
+`test-environment/CHANGELOG.md` بمجرد ما النتيجة الحقيقية توصل.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-3 (runs

@@ -4,9 +4,10 @@ Every provider implementing the ``AntibotProvider`` interface must pass
 this suite before it is accepted into the project (docs/REQUIREMENTS.md,
 sections 1 & 4). Parametrized across every implementation this project
 has (docs/REQUIREMENTS.md section 9 entry 4 / round 3 added
-``CamoufoxProvider`` alongside the original ``ByparrProvider``) — a
-future provider must pass the same suite too, by adding one more entry to
-``_PROVIDERS`` below.
+``CamoufoxProvider`` alongside the original ``ByparrProvider``; this
+phase's revision added ``PatchrightProvider`` as a third, lighter-weight
+option) — a future provider must pass the same suite too, by adding one
+more entry to ``_PROVIDERS`` below.
 """
 
 from __future__ import annotations
@@ -19,7 +20,10 @@ import pytest
 from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider, Solution
 from src.providers.antibot.byparr_provider import ByparrProvider
-from src.providers.antibot.camoufox_provider import CamoufoxProvider, _RawSolve
+from src.providers.antibot.camoufox_provider import CamoufoxProvider
+from src.providers.antibot.camoufox_provider import _RawSolve as _CamoufoxRawSolve
+from src.providers.antibot.patchright_provider import PatchrightProvider
+from src.providers.antibot.patchright_provider import _RawSolve as _PatchrightRawSolve
 
 _SOLVED_RESPONSE = json.dumps(
     {
@@ -50,8 +54,8 @@ def _build_byparr_failing() -> AntibotProvider:
     return ByparrProvider(base_url="http://localhost:8191", http_post=_byparr_failing_transport)
 
 
-def _camoufox_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
-    return _RawSolve(
+def _camoufox_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _CamoufoxRawSolve:
+    return _CamoufoxRawSolve(
         url="https://example.com/protected",
         html="<html>past the challenge</html>",
         status=200,
@@ -59,7 +63,9 @@ def _camoufox_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _Ra
     )
 
 
-def _camoufox_failing_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _RawSolve:
+def _camoufox_failing_solve(
+    url: str, timeout_ms: int, post_load_wait_ms: int
+) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
 
@@ -71,11 +77,35 @@ def _build_camoufox_failing() -> AntibotProvider:
     return CamoufoxProvider(solve_fn=_camoufox_failing_solve)
 
 
+def _patchright_ok_solve(url: str, timeout_ms: int, post_load_wait_ms: int) -> _PatchrightRawSolve:
+    return _PatchrightRawSolve(
+        url="https://example.com/protected",
+        html="<html>past the challenge</html>",
+        status=200,
+        cookies={"cf_clearance": "token"},
+    )
+
+
+def _patchright_failing_solve(
+    url: str, timeout_ms: int, post_load_wait_ms: int
+) -> _PatchrightRawSolve:
+    raise AntibotError(f"patchright failed to solve {url}: unsolvable")
+
+
+def _build_patchright_ok() -> AntibotProvider:
+    return PatchrightProvider(solve_fn=_patchright_ok_solve)
+
+
+def _build_patchright_failing() -> AntibotProvider:
+    return PatchrightProvider(solve_fn=_patchright_failing_solve)
+
+
 _PROVIDERS = [
     (_build_byparr_ok, _build_byparr_failing),
     (_build_camoufox_ok, _build_camoufox_failing),
+    (_build_patchright_ok, _build_patchright_failing),
 ]
-_PROVIDER_IDS = ["byparr", "camoufox"]
+_PROVIDER_IDS = ["byparr", "camoufox", "patchright"]
 
 
 @pytest.fixture(params=_PROVIDERS, ids=_PROVIDER_IDS)
