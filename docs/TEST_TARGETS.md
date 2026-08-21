@@ -18,8 +18,8 @@
 
 | الموقع | التحدي |
 |---|---|
-| `scrapethissite.com/pages/frames` | frames وiFrames |
-| `scrapethissite.com/pages/ajax-javascript` | محتوى محمّل بـ AJAX (أفلام أوسكار) |
+| `scrapethissite.com/pages/frames` | frames وiFrames (مُختبر بالفعل ✅) |
+| `scrapethissite.com/pages/ajax-javascript` | محتوى محمّل بـ AJAX (أفلام أوسكار) — **Known Spider Limitation**: فجوة زمنية حقيقية (مش دايمًا بتتغطى)، تفاصيل في `docs/REQUIREMENTS.md` قسم 7 بند 3 |
 | `quotes.toscrape.com/js` | نفس البيانات لكن مُرندرة بالكامل عبر JS |
 | `quotes.toscrape.com/scroll` | infinite scroll |
 | `quotes.toscrape.com/login` | نماذج تسجيل دخول وإدارة جلسات (أي username/password شغال) |
@@ -34,9 +34,9 @@
 | `scrapingcourse.com/javascript-rendering` | محتوى JS خالص (مُختبر بالفعل ✅) |
 | `scrapingcourse.com/pagination` | pagination رقمية (مُختبر بالفعل ✅) |
 | `webscraper.io/test-sites/pagination` | pagination رقمية (مُختبر بالفعل ✅) |
-| `webscraper.io/test-sites/scroll` | infinite scroll (`data-next-page` marker) |
-| `webscraper.io/test-sites/load-more` | زرار "Load More" — click-triggered، مش scroll؛ نتيجة الاختبار الفعلي في تقرير Tier 2 |
-| `webscraper.io/test-sites/website-state-setup-login` | تسجيل دخول — نفس قيد `quotes.toscrape.com/login` (Known Spider Limitation) |
+| `webscraper.io/test-sites/scroll` | infinite scroll (`data-next-page` marker) (مُختبر بالفعل ✅) |
+| `webscraper.io/test-sites/load-more` | زرار "Load More" — **Known Spider Limitation**: مُتأكّد فعليًا إنه click-triggered مش scroll (CI نتيجة ثابتة: 6 عناصر بالظبط)، تفاصيل في `docs/REQUIREMENTS.md` قسم 7 بند 4 |
+| `webscraper.io/test-sites/website-state-setup-login` | تسجيل دخول — نفس قيد `quotes.toscrape.com/login` (**Known Spider Limitation**، قسم 7 بند 1) |
 
 > **ملحوظة (2026-08-21):** عند الفحص الفعلي، الكتالوج الحالي لـ
 > `webscraper.io/test-sites` بقى 4 صفحات بس (مش "أكتر من 10 أنماط" زي
@@ -50,7 +50,7 @@
 |---|---|
 | `scrapingcourse.com/antibot-challenge` | حماية متوسطة (مُختبر بالفعل ✅) |
 | `scrapingcourse.com/cloudflare-challenge` | Cloudflare Turnstile حقيقي، حماية على مستوى WAF (مُختبر بالفعل ✅) |
-| `nowsecure.nl` | Cloudflare Turnstile تاني، مستقل عن `scrapingcourse.com` — نتيجة الاختبار الفعلي في تقرير Tier 2؛ ملحوظة: التحدي هنا cosmetic/client-side بس (مش WAF block زي التاني) |
+| `nowsecure.nl` | Cloudflare Turnstile تاني، مستقل عن `scrapingcourse.com` (مُختبر بالفعل ✅)؛ ملحوظة: التحدي هنا cosmetic/client-side بس (مش WAF block زي التاني) |
 
 ### أدوات تشخيص (مش targets بيانات — خطوة تحقق بعد أي محاولة تجاوز)
 
@@ -79,12 +79,35 @@
 
 ---
 
-## مؤجّل — محتاج قرار قبل ما نبدأ
+## SPA (Single-Page App) — نتيجة البحث الفعلي (2026-08-21)
 
-**SPA (Single-Page App) demo حقيقي** (زي `react-shopping-cart` أو مشروع
-مفتوح المصدر مشابه): تحدي مختلف تمامًا عن "صفحة فيها JS" — كل التنقل
-جوه JS من غير صفحات منفصلة أصلاً. مش هيتضاف هنا لحد ما يتحدد demo بعينه
-(URL محدد) ويعدي فحص `legal_status` زي أي target تاني.
+اتفحص مرشحين حقيقيين:
+
+1. **`react-shopping-cart`** (اللي المستخدم سمّاه بنفسه) —
+   `https://react-shopping-cart-67954.firebaseapp.com/`: **شغّال فعليًا**
+   (200، demo حقيقي MIT-licensed من jeffersonRibeiro). بس عند فحص الكود
+   المصدري (اتـclone فعليًا، مش تخمين): بيستخدم `styled-components`
+   من غير `data-testid` ولا class ثابت — الـ class names بتتولّد
+   hashed وقت الـ build (`sc-xxxxx`)، فمفيش selector CSS مستقر ممكن
+   نعتمد عليه لاستخراج الـ item container. كمان الحقول (اسم، سعر) هي
+   *siblings* لبعض جوه الـ container، مش descendants من عنصر واحد
+   موثوق زي `alt` attribute بتاع الصورة — يعني حتى لو استخرجنا العنوان
+   عبر `div[alt]::attr(alt)`، السعر مش وصول له من نفس الـ item بمعمارية
+   `SelectorsConfig` الحالية. اتسجّل رسميًا كـ Known Spider Limitation
+   (`docs/REQUIREMENTS.md` قسم 7 بند 5).
+2. **RealWorld/Conduit demo** (`react-redux.realworld.io`,
+   `demo.realworld.io`, وغيرهم من نفس العيلة): **كله ميت فعليًا** —
+   الـ frontend hosting رجّع 404 (`NoSuchBucket` على S3)، وحتى
+   الـ frontend اللي لسه شغّال (`react-mobx.realworld.io`) بيتكلم مع
+   backend API ميت (`conduit.productionready.io` بيرجّع Cloudflare 530
+   — DNS error على الـ origin). يعني الايكوسيستم ده اتسحب من الخدمة.
+
+**الخلاصة:** مفيش SPA demo جاهز بمعمارية selector-friendly اتلاقى
+دلوقتي. `react-shopping-cart` هو المرشح الأقرب (شغّال، legal, حقيقي)
+بس اكتشافه نفسه (CSS-in-JS + hashed classes) قيمة أكتر من إضافته كـ
+config شكلي ناقص — مسجّل كـ Known Spider Limitation بدل ما نجبره.
+البحث عن بديل بـ stable selectors (data-testid/semantic classes) لسه
+مفتوح لو احتجناه لاحقًا.
 
 ---
 
@@ -103,5 +126,6 @@
 - مُصممة رسميًا لغرض التدريب (toscrape.com, scrapingcourse.com, scrapethissite.com, webscraper.io, Oxylabs Sandbox) - إذن صريح
 - منصات عامة بسياسة استخدام واضحة تسمح بالوصول الآلي المعتدل (Wikipedia, Hacker News)
 - demo pages تشخيصية مُعدّة عمدًا للاختبار الآلي/أدوات الـ scraping (`nowsecure.nl`, `bot.sannysoft.com`) - نفس مبدأ `scrapingcourse.com`'s anti-bot demos
+- مشاريع مفتوحة المصدر (MIT) بـ demo عام مُستضاف رسميًا من صاحب المشروع (`react-shopping-cart` بواسطة jeffersonRibeiro) - فحص هيكلي بس (مفيش config/كراول فعلي اتعمل ضده، راجع قسم SPA فوق)
 
 لسه المبدأ نفسه ساري: أي target حقيقي (غير الموجودين هنا) لازم يعدي مراجعة `legal_status` مع المكتب القانوني قبل التفعيل، زي ما اتفقنا قبل كده.

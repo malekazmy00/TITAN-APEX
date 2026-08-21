@@ -230,20 +230,35 @@ target جديد = `configs/*.yaml` جديد + integration test حي واحد ف�
 | `scrapethissite_simple.yaml` | 1 | كل الـ 250 دولة في صفحة واحدة، بدون pagination |
 | `scrapethissite_forms.yaml` | 1 | **باج حقيقي في الموقع نفسه** (مش عندنا): رابط "Next" في الصفحة من غير `?page_num` بيرجع لصفحة 1 نفسها بدل ما يتقدّم — الحل بـ config بس: start URL صريح `?page_num=1` |
 | `scrapethissite_frames.yaml` | 2 | صفحة الـ wrapper فاضية (iframe shell بس) — `GenericSpider` مبينفذش JS ولا بيتبع iframe src؛ الحل: start_url يشاور مباشرة على مستند الـ iframe نفسه (`?frame=i`) |
-| `scrapethissite_ajax_javascript.yaml` | 2 | المحتوى بيتحمّل بـ AJAX بس لما `document.location.hash` يبقى متظبط عند التحميل (أو click) — الحل: start URL فيه `#2015`. **احتمال فجوة زمنية حقيقية**: الموقع بيضيف تأخير JS متعمد (~1.5 ثانية) بعد رد الـ AJAX قبل ما يعرض الصفوف، وده أطول من انتظار الـ scroll-loop بعد الـ navigation — النتيجة الحقيقية موثّقة في تقرير Test Targets النهائي (اتفحصت فعليًا في CI، مش mفترضة) |
 | `quotes_toscrape_js.yaml` | 2 | نفس بيانات quotes.toscrape.com لكن مُرندرة كاملة بـ JS من array مضمّن؛ نفس الـ selectors ونفس نمط pagination (`li.next a`) بالظبط، `render_js: true` بس اللي اتغير |
 | `quotes_toscrape_scroll.yaml` | 2 | infinite scroll حقيقي (`div.quotes` فاضية في الـ HTML الثابت)، نفس نمط `scrapingcourse_infinite_scrolling.yaml` |
 | `scrapingcourse_javascript_rendering.yaml` | 3 | الـ HTML الثابت فيه 13 placeholder فاضي (name/price موجودين بس من غير نص) — `render_js: true` إلزامي |
 | `scrapingcourse_pagination.yaml` | 3 | ثابت بالكامل، 13 صفحة، `a.next-page` / `rel="next"` واضح |
 | `webscraper_io_pagination.yaml` | 3 | اخترنا صفحة `pagination` (كتالوج سيارات) كتمثيل ملموس من كتالوج `webscraper.io/test-sites` المذكور بشكل عام في القائمة؛ حقل `details` (سنة/بلد/مسافة) بيرجع list واحد مش 3 حقول منفصلة لأن الثلاثة بياخدوا نفس الـ class بالظبط بدون أي تمييز — قيد في المعمارية الحالية (كل field له selector واحد جوه الـ item)، مش باج |
+| `webscraper_io_scroll.yaml` | Tier 2 | infinite scroll حقيقي (`data-next-page` marker)، نفس نمط `scrapingcourse_infinite_scrolling.yaml` — نجح فعليًا في CI |
+
+> **تصحيح (2026-08-21):** `scrapethissite_ajax_javascript.yaml` كان
+> متسجّل هنا قبل كده كـ "نجح" بناءً على أول تشغيلة حقيقية له في CI (run
+> [32443029436](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32443029436)).
+> تشغيلة تانية حقيقية بعد كده (run
+> [32471707326](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32471707326))
+> فشلت بـ `assert 0 > 0` — نفس الـ config، نفس التارجت، نتيجة مختلفة.
+> يعني الفجوة الزمنية اللي كانت متوقّعة (تأخير الموقع ~1.5 ثانية بعد رد
+> الـ AJAX، أطول من انتظار الـ scroll-loop) حقيقية فعلًا ومش دايمًا
+> بتتغطى بالصدفة — مش باج ثابت نقدر نصلّحه بإعادة المحاولة. الـ
+> config والاختبار اتشالوا نهائيًا (مش هيفضلوا موجودين كـ "شبه شغالين")،
+> واتسجّل رسميًا كـ Known Spider Limitation في القسم 7 تحت.
 
 ### فجوات مُكتشفة — مش هتتغطى بـ "صفر كود جديد"
 
-`quotes.toscrape.com/login` و`quotes.toscrape.com/tableful` اتسجّلوا
-رسميًا كـ **"Known Spider Limitations"** في القسم 7 تحت — مش
-"Pending Real-Network Verification": المشكلة هنا مالهاش علاقة بإثبات
-حي في بيئة بإنترنت حر، هي قيد معماري حقيقي في `GenericSpider` نفسه
-هيفضل موجود لحد ما حد يقرر يضيف كود جديد.
+`quotes.toscrape.com/login`، `quotes.toscrape.com/tableful`،
+`scrapethissite.com/pages/ajax-javascript`، و
+`webscraper.io/test-sites/load-more` اتسجّلوا رسميًا كـ **"Known Spider
+Limitations"** في القسم 7 تحت — مش "Pending Real-Network Verification":
+المشكلة هنا مالهاش علاقة بإثبات حي في بيئة بإنترنت حر (اتّحقّق منها
+فعليًا في GitHub Actions)، هي قيد معماري حقيقي في `GenericSpider`/
+`PlaywrightMiddleware` النهارده هيفضل موجود لحد ما حد يقرر يضيف كود
+جديد.
 
 ### المستوى 4 — `scrapingclub.com`: النتيجة نتيجة موقع، مش كود
 
@@ -267,6 +282,38 @@ config اتعمل لـ scrapingclub.com، ومفيش أي طلب scraping اتب
 مرتين بفاصل زمني حقيقي (45 ثانية) ضد الموقع الحي، ويقارن النتائج —
 النتيجة الفعلية (هل الترتيب/العناوين اتغيّرت ولا لأ) موثّقة في تقرير Test
 Targets النهائي بدل ما تتفترض.
+
+### Tier 2 List A — anti-bot تاني + أدوات تشخيص
+
+كله اتّحقّق منه فعليًا في CI run
+[32471707326](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32471707326):
+
+- **`nowsecure.nl`**: `ByparrProvider.solve()` نجح (status 200، html
+  طويل). ملحوظة مهمة: على عكس `cloudflare-challenge` (block على مستوى
+  WAF)، تحدي `nowsecure.nl` client-side/cosmetic بس — `curl` عادي بيرجع
+  200 بالصفحة كاملة من غير أي حل، والـ Turnstile widget بيستخدم
+  sitekey الاختباري الرسمي من Cloudflare نفسه (`3x00000000000000000000FF`،
+  بينجح دايمًا). يعني النجاح هنا بيثبت إن Byparr's browser بيشغّل
+  الصفحة وJS بتاع Turnstile من غير error، مش إنه بيتخطى قيد وصول حقيقي.
+- **`bot.sannysoft.com`**: مش target بيانات — خطوة تشخيص بعد أي تحسين
+  في `byparr_provider`/stealth args، بالظبط زي ما اتفق عليه. الاختبار
+  (`tests/integration/test_sannysoft_diagnostic_live.py`) بيحل الصفحة
+  عبر Byparr، يقرأ كل خلية `id="*-result"` (class="passed"/"failed" —
+  الموقع نفسه بيحطها بـ JS)، ويطبعها كدليل في لوج الـ CI. الاختبار
+  **مش** بيفشّل بناءً على نتيجة تشخيصية معينة (مهمة Byparr هي حل
+  anti-bot، مش إخفاء كل علامات الأتمتة بالكامل).
+- **`browserleaks.com`**, **`demo.fingerprint.com/web-scraping`**: متسجّلين
+  في `docs/TEST_TARGETS.md` بس لسه مش مُدمجين — نفس فكرة sannysoft،
+  هيتضافوا بعدين لو احتجناهم (مش أولوية دلوقتي).
+
+### webscraper.io/test-sites — الكتالوج الحقيقي أصغر من المتوقع
+
+عند الفحص الفعلي، الكتالوج الحي دلوقتي 4 صفحات بس: `pagination`
+(مُختبر ✅)، `scroll` (مُختبر ✅ — `webscraper_io_scroll.yaml`)،
+`load-more` (فجوة حقيقية، القسم 7 بند 4)، و
+`website-state-setup-login` (نفس قيد login، القسم 7 بند 1). مفيش
+صفحات "dropdown filters"/"nested categories" منفصلة موجودة على الموقع
+دلوقتي.
 
 ---
 
@@ -334,3 +381,101 @@ Targets النهائي بدل ما تتفترض.
   نص واحد لأكتر من قيمة (زي فصل "quote text" عن "Author: X")
 - unit tests جديدة تغطي: تجميع صفوف ناجح، عدد صفوف غير متوقع
   (missing sibling)، فشل الـ regex/split
+
+### 3. `scrapethissite.com/pages/ajax-javascript` — انتظار ثابت مش كافي لتأخير متعمّد من الموقع
+
+**الفجوة:** الموقع بيضيف تأخير JS متعمد (`setTimeout` ~1.5 ثانية) بعد
+ما رد الـ AJAX يوصل وقبل ما يعرض الصفوف فعليًا في الـ DOM (تعليق في
+الكود المصدري للموقع نفسه بيقول "add intentional delay to emphasize
+async UI"). `PlaywrightMiddleware`'s scroll-loop (`_scroll_to_load_lazy_content`)
+بيدّي انتظار إضافي بس كـ **أثر جانبي** لمحاولة اكتشاف نمو الصفحة عبر
+scroll — مش انتظار مضمون بمدة معينة. النتيجة: **فجوة زمنية حقيقية
+موثّقة بدليلين حقيقيين من CI، مش افتراض**:
+- run [32443029436](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32443029436): PASSED
+- run [32471707326](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32471707326): FAILED (`assert 0 > 0`)
+
+نفس الـ config، نفس التارجت، نتيجتين مختلفتين — يعني مش باج نقدر
+نصلّحه بإعادة المحاولة لحد ما ينجح، ده سلوك غير موثوق فعليًا. الـ
+config (`scrapethissite_ajax_javascript.yaml`) والاختبار المرتبط اتشالوا
+من الـ repo نهائيًا (2026-08-21) بدل ما يفضلوا موجودين وهما مش موثوق
+فيهم.
+
+**ليه المعمارية الحالية مش قادرة:** مفيش حقل config زي `render_wait_ms`
+أو أي طريقة تحدد "استنى مدة ثابتة كمان بعد الـ navigation" —
+`_scroll_to_load_lazy_content` بياخد `max_attempts`/`pause_ms` كـ
+باراميترز للدالة نفسها (مش من الـ config)، وبيوقف بدري لو ارتفاع
+الصفحة مبقاش بيكبر (زي هنا: الصفحة مش infinite-scroll أصلاً، فبتوقف
+من أول محاولة تقريبًا).
+
+**لو قررنا نضيفها بعدين:** كود جديد في `PlaywrightMiddleware`/
+`SpiderConfig`:
+- حقل config اختياري زي `render_wait_ms` بيتضاف كانتظار إضافي ثابت
+  بعد الـ navigation (وقبل الـ scroll-loop)، مستقل عن منطق الـ scroll
+- unit test جديد يتأكد إن القيمة دي بتتوصّل فعليًا لـ `render_with_playwright`
+
+### 4. `webscraper.io/test-sites/load-more` — زرار محتاج click، مش scroll
+
+**الفجوة:** المحتوى الإضافي محجوب وراء
+`<button class="load-more-btn ecommerce-items-scroll-more">Load More</button>`
+— اسم الـ class بيوحي إنه ممكن يكون scroll-wired، بس النتيجة الفعلية
+في CI (run [32471707326](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32471707326))
+كانت 6 عناصر بالظبط (نفس الدفعة الأولى الثابتة) — **مش أكتر**، يعني
+الزرار محتاج click حقيقي مش scroll. النتيجة دي حاسمة ومتكررة (مش
+flaky زي البند اللي فوق)، فمش هنعيد المحاولة أو نفترض حاجة تانية.
+الـ config (`webscraper_io_load_more.yaml`) والاختبار المرتبط اتشالوا
+من الـ repo نهائيًا (2026-08-21).
+
+**ليه المعمارية الحالية مش قادرة:** `PlaywrightMiddleware` بيعمل
+`goto()` + scroll-to-bottom loop بس — مفيش أي مفهوم لـ "دوّر على
+عنصر واستخدم click عليه" (زي `page.click(selector)` في Playwright
+نفسها).
+
+**لو قررنا نضيفها بعدين:** كود جديد:
+- حقل config اختياري زي `click_selector` بيخلي
+  `render_with_playwright` يدور على العنصر ده بعد الـ navigation
+  ويعمله click (مع انتظار قبل قراءة الـ content)، يتكرر لو محتاج (زي
+  زرار "Load More" اللي ممكن يظهر أكتر من مرة)
+- unit tests جديدة تغطي: click ناجح بيزود المحتوى، العنصر مش موجود
+  (لا يبوّظ الكراول)، فشل الـ click نفسه
+
+### 5. SPA حقيقي (`react-shopping-cart`) — CSS-in-JS بـ hashed class names
+
+**الفجوة:** بعد بحث فعلي (2026-08-21) عن SPA demo مفتوح المصدر مناسب
+(المستخدم اقترح `react-shopping-cart` بالاسم)، اتفحص فعليًا:
+`https://react-shopping-cart-67954.firebaseapp.com/` — شغّال (200،
+demo حقيقي MIT من jeffersonRibeiro). الكود المصدري اتـ`clone` فعليًا
+(`github.com/jeffersonRibeiro/react-shopping-cart`) للتأكد بدل التخمين:
+كل "item" منطقي (منتج) بيتكوّن من عناصر شقيقة (siblings) —
+`S.Image`/`S.Title`/`S.Price`/`S.BuyButton` — كلهم أبناء مباشرين لنفس
+الـ `S.Container`، مفيهمش أي عنصر واحد "بيلف" حواليهم غير الـ Container
+نفسه. المشكلة: `styled-components` بيولّد class names hashed وقت الـ
+build (`sc-xxxxx`) — مفيش `data-testid` ولا class ثابت على الـ
+Container يوصفه بشكل يمكن الاعتماد عليه CSS-selector-wise، ومفيش
+`:has()` في `cssselect` (اللي Scrapy/parsel بيستخدموه) يسمح بـ "اختار
+الأب اللي جواه عنصر معين".
+
+**استثناء جزئي مثير للاهتمام:** `S.Image` بتتكتب كـ
+`<S.Image alt={title} />` — و`styled-components` بينقل أي attribute
+اسمه معروف كـ HTML attribute حقيقي (زي `alt`) للـ DOM حتى لو مش منطقي
+للعنصر ده (`div`)، فعلى الأرجح `div[alt]::attr(alt)` كان هيرجّع
+العنوان فعليًا. بس العنوان لوحده مش كافي (بدون سعر)، والسعر نفسه
+sibling مش descendant من أي عنصر تاني موثوق.
+
+**ليه المعمارية الحالية مش قادرة:** نفس القيد المعماري بتاع بند 2
+(`tableful`/`hackernews`) — item واحد لازم يبقى عنصر HTML واحد بكل
+حقوله كـ descendants جواه — بس هنا السبب الجذري مختلف: مش جدول قديم،
+هو نمط CSS-in-JS شائع في تطبيقات React حديثة (styled-components،
+emotion، إلخ) بيمنع أي اعتماد على class ثابت للـ container.
+
+**لو قررنا نضيفها بعدين:** كود جديد، احتمالين:
+- دعم `:has()`-style logic يدوي (مش عبر cssselect) لاختيار "أقرب أب
+  لعنصر بعينه" — تعقيد إضافي حقيقي في `GenericSpider.parse()`
+- أو دعم "field جواه sibling معيّن" بدل item واحد بكل حقوله جواه —
+  نفس التوسعة المطلوبة أصلاً لبند 2
+
+**بديل اتفحص وطلع ميت فعليًا:** RealWorld/Conduit demo family
+(`react-redux.realworld.io`, `demo.realworld.io`) — الـ frontend
+hosting بيرجّع 404 (S3 `NoSuchBucket`)، وحتى الـ frontend الشغّال
+(`react-mobx.realworld.io`) بيتكلم مع backend API ميت
+(`conduit.productionready.io` → Cloudflare 530، DNS error على الـ
+origin). مفيش بيانات حقيقية تتسحب حتى لو حلّينا مشكلة الـ selectors.
