@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import scrapy
 from scrapy.http import Response
@@ -20,6 +21,32 @@ from scrapy.http import Response
 from src.core.exceptions import ConfigError
 from src.logging_config import get_logger
 from src.spiders.spider_config import load_spider_config
+
+
+def _resolve_json_path(data: Any, path: str) -> Any:
+    """Drill into nested dicts via a dotted path (e.g. ``"post.author"``).
+
+    Returns ``None`` for any missing key or non-dict intermediate value --
+    the same "field just comes back empty" behavior the CSS path already
+    has (``response.css(...).getall()`` returning nothing), rather than
+    raising on a merely-absent optional field.
+    """
+    current = data
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
+def _build_next_json_url(url: str, cursor: str) -> str:
+    """Same URL with its ``after`` query param set to ``cursor`` --
+    matches test-environment/mock-target's own ``/api/feed?after=<cursor>``
+    paging contract exactly."""
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query))
+    query["after"] = cursor
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 class GenericSpider(scrapy.Spider):
@@ -106,7 +133,16 @@ class GenericSpider(scrapy.Spider):
         yield from self._build_start_requests()
 
     def parse(self, response: Response, **kwargs: Any) -> Iterator[dict[str, Any] | scrapy.Request]:
+        if self.config.response_format == "json":
+            yield from self._parse_json(response)
+            return
+        yield from self._parse_html(response)
+
+    def _parse_html(
+        self, response: Response
+    ) -> Iterator[dict[str, Any] | scrapy.Request]:
         selectors = self.config.selectors
+        assert selectors is not None  # SpiderConfig guarantees this for response_format="html"
         rows = response.css(selectors.item)
 
         if not rows:
@@ -131,3 +167,56 @@ class GenericSpider(scrapy.Spider):
             next_href = response.css(self.config.next_page).get()
             if next_href:
                 yield response.follow(next_href, callback=self.parse, meta=self._request_meta())
+
+    def _parse_json(
+        self, response: Response
+    ) -> Iterator[dict[str, Any] | scrapy.Request]:
+        """Parses a JSON API response per ``self.config.json_selectors`` --
+        docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's JSON/API round,
+        test-environment/mock-target's own ``/api/feed`` being the first
+        real target for it (docs/REQUIREMENTS.md, "Antibot Provider
+        Comparison" section's neighbor writeup has the full history).
+        """
+        json_selectors = self.config.json_selectors
+        assert json_selectors is not None  # SpiderConfig guarantees this for response_format="json"
+
+        try:
+            # .json() lives on scrapy's TextResponse, not the base Response
+            # this method is typed with (matching parse()'s own callback
+            # signature) -- a JSON API response is always actually a
+            # TextResponse at runtime, the same loose-but-correct typing
+            # gap _parse_html's .css() calls already have (Response's own
+            # stub doesn't carry it either, mypy just doesn't flag those).
+            data = response.json()  # type: ignore[attr-defined]
+        except ValueError:
+            self.json_logger.warning(
+                "generic_spider.invalid_json", extra={"url": response.url}
+            )
+            return
+
+        items = _resolve_json_path(data, json_selectors.items_path)
+        if not isinstance(items, list):
+            self.json_logger.warning(
+                "generic_spider.json_items_not_a_list",
+                extra={"url": response.url, "items_path": json_selectors.items_path},
+            )
+            items = []
+
+        if not items:
+            self.json_logger.warning(
+                "generic_spider.no_items_found",
+                extra={"url": response.url, "item_selector": json_selectors.items_path},
+            )
+
+        for raw_item in items:
+            item: dict[str, Any] = {"source_url": response.url}
+            for field_name, path in json_selectors.fields.items():
+                item[field_name] = _resolve_json_path(raw_item, path)
+            yield item
+
+        if json_selectors.next_cursor_path and json_selectors.has_next_page_path:
+            has_next = _resolve_json_path(data, json_selectors.has_next_page_path)
+            cursor = _resolve_json_path(data, json_selectors.next_cursor_path)
+            if has_next and cursor:
+                next_url = _build_next_json_url(response.url, cursor)
+                yield scrapy.Request(next_url, callback=self.parse, meta=self._request_meta())

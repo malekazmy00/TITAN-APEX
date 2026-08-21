@@ -72,10 +72,14 @@ jobs:
         # section 8's Escalation Cycle, section 9's "Known Gaps from Test
         # Environment"), again for test_mock_target_camoufox_live.py
         # (section 9 entry 4 / round 3 -- a second real browser launch,
-        # plus CamoufoxProvider's own post_load_wait_ms), and again for
+        # plus CamoufoxProvider's own post_load_wait_ms), again for
         # test_mock_target_patchright_live.py (this phase's revision -- a
-        # third real browser launch, plus its own post_load_wait_ms).
-        timeout-minutes: 18
+        # third real browser launch, plus its own post_load_wait_ms), and
+        # again for test_mock_target_camoufox_live.py's cookie-wall
+        # click-through + test_mock_target_feed_live.py (JSON/API round,
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md -- a fourth real
+        # browser launch against /api/feed).
+        timeout-minutes: 20
         run: |
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             pytest tests/integration -v

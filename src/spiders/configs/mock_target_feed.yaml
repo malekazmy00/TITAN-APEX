@@ -1,0 +1,40 @@
+# docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's JSON/API round: the first
+# real target for GenericSpider's new response_format: json path --
+# test-environment/mock-target's /api/feed (semi-GraphQL: nested
+# post -> comments JSON, ?after=<cursor> paging), built in an earlier
+# round (test-environment/README.md section 2.4) but never wired up to
+# GenericSpider until now.
+#
+# /api/feed sits behind Anubis exactly like `/` does (Anubis proxies
+# every path to mock-target, not just `/`) -- so this still needs
+# antibot_needed + a provider that actually gets past Anubis's real
+# challenge. `antibot_provider: camoufox` (docs/REQUIREMENTS.md section 9
+# entry 5, round 3) is the one confirmed to do that; Byparr/Patchright's
+# own pre-existing Anubis gaps (entries 4, 7) would apply here identically
+# and are not re-tested by this config.
+#
+# Real, open question this is the first live test of: Camoufox drives a
+# real Firefox engine, and Firefox has its own built-in JSON viewer that
+# can transform a raw `application/json` response's rendered DOM -- does
+# `response.json()` still parse cleanly through that, or does this
+# surface a genuinely new gap? Not assumed either way -- see
+# docs/REQUIREMENTS.md for the real, CI-confirmed result.
+name: mock_target_feed
+start_urls:
+  - "http://localhost:8080/api/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+response_format: json
+json_selectors:
+  items_path: "edges"
+  fields:
+    post_id: "post.id"
+    author: "post.author"
+    text: "post.text"
+    likes: "post.likes"
+  next_cursor_path: "page_info.end_cursor"
+  has_next_page_path: "page_info.has_next_page"

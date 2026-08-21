@@ -294,15 +294,15 @@ from every config-driven target built so far:
   (`retry_after_seconds = window_seconds * violations`), instead of an
   immediate hard block — the same pattern real social platforms use.
 
-`/feed` is intentionally **not** wired into
-`src/spiders/configs/mock_target.yaml` this round — `GenericSpider` has
-no JSON/GraphQL-style parsing path at all today (a much larger
-architectural gap than `render_wait_ms`/`click_selector` closed
-earlier), so pointing it at `/feed` would only reconfirm a gap that's
-already obvious by inspection, not produce new evidence. `/api/feed` is
-still fully live and independently testable (`curl`, or a future
-dedicated JSON-aware code path) — see `docs/REQUIREMENTS.md` for
-whether/when this becomes a tracked "Known Spider Limitation".
+**Update (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's JSON/API round):**
+`GenericSpider` now has a real JSON-parsing path (`response_format: json`
++ `json_selectors` in `SpiderConfig` -- dotted-key paths, e.g.
+`"post.author"`, instead of CSS selectors) --
+`src/spiders/configs/mock_target_feed.yaml` is the first real target for
+it, pointed straight at `/api/feed`. See `docs/REQUIREMENTS.md` for the
+real, CI-confirmed result of running it live. `/feed` itself (the
+scroll-triggered HTML shell) is still not wired to any config -- that
+remains a `render_js` + JSON-parsing combination no config exercises yet.
 
 ### 2.5 Cookie-consent wall
 

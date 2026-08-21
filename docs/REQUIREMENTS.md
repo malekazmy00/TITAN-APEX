@@ -958,6 +958,35 @@ selector-based مش بيتحقق من الـ visibility). الـ 3 configs
 نتيجتهم مع cookie wall فضلت **غير قابلة للتمييز** عن فجوة Anubis
 الأسبق بتاعتهم — موثّق صراحة، مش مخفي.
 
+### 9. JSON/API parsing support في GenericSpider (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
+
+**الإضافة:** `SpiderConfig` كسب `response_format: "html" | "json"` +
+`json_selectors` (dotted-key paths زي `"post.author"` بدل CSS selectors،
++ `next_cursor_path`/`has_next_page_path` للـ pagination) — validated
+بحيث بالظبط واحد من `selectors`/`json_selectors` يكون موجود حسب
+`response_format` (`model_validator`). `GenericSpider.parse()` بيتفرّع
+لـ `_parse_html` (الأصلي) أو `_parse_json` الجديد — بيستخدم
+`response.json()` (Scrapy's `TextResponse`)، بيمشي في dotted paths عبر
+`_resolve_json_path`، وبيبني رابط الصفحة الجاية عبر `_build_next_json_url`
+(`?after=<cursor>`، مطابق تمامًا لبروتوكول `/api/feed`'s الحقيقي).
+9 unit tests جديدة (happy path + pagination + JSON مش صحيح + items_path
+مش list + field غايب بيرجع None) + 5 unit tests لـ `SpiderConfig`'s
+validator الجديد.
+
+`src/spiders/configs/mock_target_feed.yaml` — أول target حقيقي، بيشاور
+على `/api/feed` (اللي اتبنى من الجولة الأولى بس ما كانش متوصّل لـ
+`GenericSpider`). زي `/`، `/api/feed` وراء Anubis برضه، فمحتاج
+`antibot_provider: camoufox` (الوحيد المؤكد إنه بيعدّي Anubis فعليًا).
+
+**سؤال حقيقي مفتوح، لسه مش معروف الجواب:** Camoufox بيشغّل Firefox
+حقيقي، وFirefox عنده JSON viewer مدمج ممكن يحوّل الـ DOM المعروض لصفحة
+JSON response خام — هل `response.json()` (اللي بيعمل
+`json.loads(response.text)` ببساطة) هيفضل يشتغل صح ضد الـ DOM المتحوّل
+ده؟ **مش مفروض، هيتأكّد من نتيجة CI حقيقية.**
+
+**النتيجة الحقيقية:** لسه محتاجة تأكيد CI — هتتحدّث هنا فور ما الـ run
+يخلص (مش قبل كده).
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

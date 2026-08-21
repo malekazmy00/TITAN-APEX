@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from src.core.exceptions import ConfigError
 
@@ -23,6 +23,26 @@ class SelectorsConfig(BaseModel):
     fields: dict[str, str] = Field(min_length=1)
 
 
+class JsonSelectorsConfig(BaseModel):
+    """Dotted-key paths describing how to extract items from a JSON API
+    response (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's JSON/API
+    round -- test-environment/mock-target's ``/api/feed``, built in an
+    earlier round but never wired up to ``GenericSpider`` until now).
+
+    A dotted path like ``"post.author"`` means ``item["post"]["author"]``
+    -- there is no list-indexing or wildcard support, only nested-object
+    traversal, which is all ``/api/feed``'s own shape (``docs``, "Semi-GraphQL
+    ``/api/feed``") needs.
+    """
+
+    items_path: str
+    fields: dict[str, str] = Field(min_length=1)
+    # Both are optional together: a JSON API with no pagination at all
+    # (a single response, no "next" concept) sets neither.
+    next_cursor_path: str | None = None
+    has_next_page_path: str | None = None
+
+
 class SpiderConfig(BaseModel):
     """Validated, fully-typed representation of a target's YAML config."""
 
@@ -30,7 +50,15 @@ class SpiderConfig(BaseModel):
     start_urls: list[str] = Field(min_length=1)
     allowed_domains: list[str] = Field(default_factory=list)
     rate_limit: float = Field(gt=0)
-    selectors: SelectorsConfig
+    # response_format (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+    # JSON/API round) picks which of the two selector styles below is
+    # required: "html" (the original, CSS-based `selectors`) or "json"
+    # (dotted-path-based `json_selectors`, for endpoints like
+    # test-environment/mock-target's `/api/feed`) -- never both, never
+    # neither, enforced by `_exactly_one_selectors_block_for_format` below.
+    response_format: Literal["html", "json"] = "html"
+    selectors: SelectorsConfig | None = None
+    json_selectors: JsonSelectorsConfig | None = None
     next_page: str | None = None
     # Phase 2: dynamic content + self-throttling, both driven by config —
     # never by target-specific code (docs/REQUIREMENTS.md, section 2).
@@ -56,6 +84,20 @@ class SpiderConfig(BaseModel):
     # Both are no-ops unless set.
     render_wait_ms: int | None = Field(default=None, gt=0)
     click_selector: str | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:
+        if self.response_format == "html":
+            if self.selectors is None:
+                raise ValueError("selectors is required when response_format is 'html'")
+            if self.json_selectors is not None:
+                raise ValueError("json_selectors must not be set when response_format is 'html'")
+        else:
+            if self.json_selectors is None:
+                raise ValueError("json_selectors is required when response_format is 'json'")
+            if self.selectors is not None:
+                raise ValueError("selectors must not be set when response_format is 'json'")
+        return self
 
 
 def load_spider_config(path: str) -> SpiderConfig:

@@ -8,11 +8,12 @@ callback directly, no network and no Scrapy engine involved).
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 from scrapy.crawler import Crawler
-from scrapy.http import HtmlResponse, Request
+from scrapy.http import HtmlResponse, Request, TextResponse
 
 from src.core.exceptions import ConfigError
 from src.spiders.generic_spider import GenericSpider
@@ -242,3 +243,135 @@ def test_parse_on_page_with_no_matching_items_logs_and_yields_nothing(
     results = list(spider.parse(response))
 
     assert results == []
+
+
+# --- JSON/API parsing (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+# JSON/API round) -------------------------------------------------------
+
+JSON_CONFIG_YAML = """
+name: mock_target_feed
+start_urls:
+  - "http://localhost:8080/api/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+response_format: json
+json_selectors:
+  items_path: "edges"
+  fields:
+    post_id: "post.id"
+    author: "post.author"
+    text: "post.text"
+    likes: "post.likes"
+  next_cursor_path: "page_info.end_cursor"
+  has_next_page_path: "page_info.has_next_page"
+"""
+
+
+@pytest.fixture
+def json_config_path(tmp_path: Path) -> str:
+    path = tmp_path / "mock_target_feed.yaml"
+    path.write_text(JSON_CONFIG_YAML, encoding="utf-8")
+    return str(path)
+
+
+def _json_response(url: str, payload: object) -> TextResponse:
+    request = Request(url)
+    return TextResponse(
+        url=url, body=json.dumps(payload).encode("utf-8"), request=request
+    )
+
+
+def test_parse_json_extracts_items_and_follows_pagination(json_config_path: str) -> None:
+    """Happy path: dotted-path field extraction from a nested JSON API
+    response, plus following the next page via the after= cursor --
+    test-environment/mock-target's own /api/feed shape exactly."""
+    spider = GenericSpider(config_path=json_config_path)
+    payload = {
+        "edges": [
+            {"post": {"id": "p1", "author": "alice", "text": "hi", "likes": 3}},
+            {"post": {"id": "p2", "author": "bob", "text": "yo", "likes": 5}},
+        ],
+        "page_info": {"end_cursor": "p2", "has_next_page": True},
+    }
+    response = _json_response("http://localhost:8080/api/feed", payload)
+
+    results = list(spider.parse(response))
+    items = [r for r in results if isinstance(r, dict)]
+    follow_requests = [r for r in results if isinstance(r, Request)]
+
+    assert len(items) == 2
+    assert items[0] == {
+        "source_url": "http://localhost:8080/api/feed",
+        "post_id": "p1",
+        "author": "alice",
+        "text": "hi",
+        "likes": 3,
+    }
+    assert len(follow_requests) == 1
+    assert follow_requests[0].url == "http://localhost:8080/api/feed?after=p2"
+
+
+def test_parse_json_stops_pagination_when_has_next_page_is_false(
+    json_config_path: str,
+) -> None:
+    """Failure-adjacent case 1: the last page must not yield a follow-up request."""
+    spider = GenericSpider(config_path=json_config_path)
+    payload = {
+        "edges": [{"post": {"id": "p1", "author": "alice", "text": "hi", "likes": 3}}],
+        "page_info": {"end_cursor": "p1", "has_next_page": False},
+    }
+    response = _json_response("http://localhost:8080/api/feed", payload)
+
+    results = list(spider.parse(response))
+    follow_requests = [r for r in results if isinstance(r, Request)]
+
+    assert follow_requests == []
+
+
+def test_parse_json_invalid_json_logs_and_yields_nothing(json_config_path: str) -> None:
+    """Failure case 3: a malformed JSON body (e.g. an upstream error page)
+    must not crash the spider -- logged and skipped, no items."""
+    spider = GenericSpider(config_path=json_config_path)
+    request = Request("http://localhost:8080/api/feed")
+    response = TextResponse(
+        url="http://localhost:8080/api/feed", body=b"{not valid json", request=request
+    )
+
+    results = list(spider.parse(response))
+
+    assert results == []
+
+
+def test_parse_json_items_path_not_a_list_logs_and_yields_nothing(
+    json_config_path: str,
+) -> None:
+    """Failure case 4: items_path resolving to a non-list (a schema surprise,
+    e.g. an error object instead of the expected edges array) must not
+    crash iterating over it as if it were one."""
+    spider = GenericSpider(config_path=json_config_path)
+    response = _json_response(
+        "http://localhost:8080/api/feed", {"error": "rate_limited", "edges": "oops"}
+    )
+
+    results = list(spider.parse(response))
+
+    assert results == []
+
+
+def test_parse_json_missing_field_path_resolves_to_none(json_config_path: str) -> None:
+    """Failure-adjacent case 5: a field whose dotted path is absent on a
+    given item resolves to None, the same "field comes back empty" shape
+    the CSS path already has -- not a KeyError."""
+    spider = GenericSpider(config_path=json_config_path)
+    payload = {
+        "edges": [{"post": {"id": "p1", "author": "alice"}}],  # no text/likes
+        "page_info": {"end_cursor": "p1", "has_next_page": False},
+    }
+    response = _json_response("http://localhost:8080/api/feed", payload)
+
+    results = list(spider.parse(response))
+    items = [r for r in results if isinstance(r, dict)]
+
+    assert items[0]["text"] is None
+    assert items[0]["likes"] is None
