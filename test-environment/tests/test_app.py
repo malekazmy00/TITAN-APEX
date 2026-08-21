@@ -234,6 +234,60 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     assert '<div class="" data-role="post"' not in body
 
 
+def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
+    tmp_path: Path,
+) -> None:
+    """Happy path: the raw HTML shows the literal placeholder, with the
+    real text tucked away in data-real-text -- exactly what a scraper
+    reading raw HTML (no JS) would capture as the field value."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/").get_data(as_text=True)
+
+    assert ">Loading...</p>" in body
+    assert "data-real-text=" in body
+    assert "setTimeout" in body
+    assert "}, 500);" in body  # the default PLACEHOLDER_DELAY_MS
+
+
+def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path) -> None:
+    """Failure-adjacent case 1: disabling the layer must render the real
+    text immediately, with no placeholder or swap script at all."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    cfg.enable_placeholder_content = False
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/").get_data(as_text=True)
+
+    assert "Loading..." not in body
+    assert "data-real-text=" not in body
+
+
+def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
+    """Failure-adjacent case 2: a non-default delay actually reaches the
+    rendered swap script, not silently ignored in favour of the default."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    cfg.placeholder_delay_ms = 2000
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/").get_data(as_text=True)
+
+    assert "}, 2000);" in body
+
+
 def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")

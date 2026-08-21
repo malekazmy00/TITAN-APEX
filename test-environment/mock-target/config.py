@@ -43,6 +43,12 @@ class MockTargetConfig:
         # the post container tag varies between requests -- see
         # structural/ab_variant.py.
         self.enable_ab_variants: bool = _env_bool("ENABLE_AB_VARIANTS", True)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's placeholder-content
+        # round: post text renders as a literal "Loading..." placeholder,
+        # swapped for the real text by client-side JS after this delay --
+        # see structural/placeholder_content.py.
+        self.enable_placeholder_content: bool = _env_bool("ENABLE_PLACEHOLDER_CONTENT", True)
+        self.placeholder_delay_ms: int = _env_int("PLACEHOLDER_DELAY_MS", 500)
         self.markup_randomizer_interval_minutes: int = _env_int(
             "MARKUP_RANDOMIZER_INTERVAL_MINUTES", 15
         )

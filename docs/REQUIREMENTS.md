@@ -917,6 +917,47 @@ nodriver دلوقتي** بناءً على الشرط اللي اتحدد، مش 
 nodriver مش هيفرق — لو المستخدم عايز redundancy إضافي أو تحدي مستقبلي
 تاني يحتاجه، ده قرار منفصل.
 
+### 8. Cookie-consent wall + click_selector في AntibotProvider — ✅ اتأكّد فعليًا (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 1)
+
+**الإضافة:** `AntibotProvider.solve()` اتوسّع بـ `click_selector`
+اختياري (best-effort، مش جزء من العقد الإلزامي) — `CamoufoxProvider`
+و`PatchrightProvider` بيعرفوا يعملوا click حقيقي (بيشغّلوا متصفح
+حقيقي)، `ByparrProvider` بيسجّل تحذير واضح ومكمّل من غير click (الـ
+`/v1` API بتاعه مفيهوش أي قدرة تفاعل/click خالص — فجوة حقيقية، مش
+تجاهل صامت). `ByparrMiddleware` بيمرّر `request.meta["click_selector"]`
+(اللي `GenericSpider` بيحطه في كل طلب أصلاً) على طول.
+
+على مستوى البيئة: `test-environment/mock-target` عنده دلوقتي cookie
+consent wall حقيقي (`structural/cookie_wall.py`) — المحتوى الحقيقي
+غايب تمامًا من الاستجابة لحد ما consent cookie تتحط عبر رابط "Accept"
+حقيقي، مش overlay بـ CSS (اللي كان هيتهزم بسهولة بأي scraper
+selector-based مش بيتحقق من الـ visibility). الـ 3 configs
+(`mock_target*.yaml`) اتحدّثوا بـ `click_selector: "#accept-cookies"`.
+
+**✅✅ النتيجة الحقيقية (CI run [32528886186](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32528886186)، 23/23 اختبار PASSED):**
+- **Camoufox**: `test_mock_target_camoufox_gets_past_anubis_and_yields_real_posts`
+  نجح فعليًا — يعني Camoufox عدّى الاتنين مع بعض: تحدي Anubis
+  الحقيقي (زي round 3) **وبعده** cookie wall الجديد، عن طريق click
+  حقيقي على `#accept-cookies` وانتظار `post_load_wait_ms` بعد كده —
+  أول تأكيد حقيقي إن `click_selector` بتاع `CamoufoxProvider` شغّال
+  فعليًا ضد gate حقيقي متراكب (stacked)، مش بس نظريًا.
+- **Byparr**: `test_mock_target_yields_zero_items_stuck_behind_anubis_challenge`
+  نجح (لسه بيرجع صفر items) — **زي ما كان متوقّع**: Byparr بيفشل
+  أصلاً في مرحلة Anubis (بند 4) قبل ما يوصل لـ cookie wall خالص،
+  فمفيش معلومة جديدة تتقاس هنا عن click_selector تحديدًا؛ ده مسجّل
+  صراحة، مش مفترض إنه "نجح" أو "فشل" بخصوص الفجوة الجديدة.
+- **Patchright**: `test_mock_target_patchright_yields_zero_items_denied_by_anubis`
+  نجح (لسه بيرجع صفر items) — **زي ما كان متوقّع** لنفس السبب: مرفوض
+  صراحة من Anubis's `bot/headless-chrome` rule (بند 7) قبل حتى
+  `load` يحصل، فـ`click_selector` بتاعه (رغم إنه مبني فعليًا)
+  معندوش فرصة يتنفّذ في البيئة دي تحديدًا.
+
+**الخلاصة:** الطبقة الأساسية (`click_selector` في العقد + التنفيذ
+الحقيقي في Camoufox/Patchright) اتبنت وموثّقة **وشغّالة فعليًا** —
+اتأكّد منها بدليل حقيقي (Camoufox)، مش بس نظريًا. Byparr/Patchright's
+نتيجتهم مع cookie wall فضلت **غير قابلة للتمييز** عن فجوة Anubis
+الأسبق بتاعتهم — موثّق صراحة، مش مخفي.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

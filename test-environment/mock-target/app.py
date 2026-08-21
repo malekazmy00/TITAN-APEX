@@ -26,6 +26,7 @@ from structural.decoy_data import generate_decoy_twin
 from structural.feed import FeedRateLimiter, build_feed_page
 from structural.honeypots import generate_honeypot_links
 from structural.markup_randomizer import MarkupRandomizer
+from structural.placeholder_content import PLACEHOLDER_TEXT, render_swap_script
 
 INDEX_PAGE_SIZE = 10
 SESSION_COOKIE_NAME = "mocktarget_session"
@@ -120,6 +121,13 @@ def create_app(
                 botd_enabled=cfg.enable_botd,
                 botd_script_path=VENDORED_SCRIPT_PATH,
                 container_tag=container_tag,
+                placeholder_enabled=cfg.enable_placeholder_content,
+                placeholder_text=PLACEHOLDER_TEXT,
+                placeholder_swap_script=(
+                    render_swap_script(cfg.placeholder_delay_ms)
+                    if cfg.enable_placeholder_content
+                    else None
+                ),
             )
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)

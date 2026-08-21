@@ -357,6 +357,31 @@ in a row (bypassing Anubis and the cookie wall — see 2.5's own
 verification for a cookie-carrying `curl`) and confirm the container tag
 around `data-role="post"` genuinely varies between calls.
 
+### 2.7 Loading-placeholder leakage
+
+`structural/placeholder_content.py`: every real post's text renders as a
+literal `Loading...` placeholder server-side, with the real text tucked
+away in a `data-real-text` attribute; a small inline script swaps the
+visible text in from that attribute after `PLACEHOLDER_DELAY_MS`
+(default `500`).
+
+A scraper reading the raw, un-rendered HTML (a plain HTTP fetch, or a
+real-browser render that reads the page before that delay elapses)
+captures the placeholder text as if it were real data — a well-formed
+item, just with the wrong `text` field. This is the same "verify the code
+doesn't quietly treat 'Loading...' as real data" gap
+`docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md` calls out. Every antibot
+provider's own `post_load_wait_ms` (default `5000`, `docs/REQUIREMENTS.md`
+section 9) already comfortably outlasts the default 500 ms delay here, so
+this is also a genuine regression check: if a provider's wait ever
+shrinks below this delay, this is the layer that would catch it.
+
+**Verify it's active:** `curl -s http://mock-target:8000/` (bypassing
+Anubis, the cookie wall, and A/B variants — see 2.5/2.6's own `curl`
+recipes) immediately after a request and confirm the response contains
+`>Loading...<` and `data-real-text="..."` with the real sentence inside
+it.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently
@@ -372,6 +397,8 @@ isolated and tested alone — not just all-on together:
 | `ENABLE_MARKUP_RANDOMIZER` | `true` | 2.1 Markup randomizer |
 | `ENABLE_COOKIE_WALL` | `true` | 2.5 Cookie-consent wall |
 | `ENABLE_AB_VARIANTS` | `true` | 2.6 A/B structural variants |
+| `ENABLE_PLACEHOLDER_CONTENT` | `true` | 2.7 Loading-placeholder leakage |
+| `PLACEHOLDER_DELAY_MS` | `500` | 2.7 swap-in delay |
 | `MARKUP_RANDOMIZER_INTERVAL_MINUTES` | `15` | 2.1 rotation interval |
 | `FEED_RATE_LIMIT_THRESHOLD` | `20` | 2.4 requests/window before 429 |
 | `FEED_RATE_LIMIT_WINDOW_SECONDS` | `60` | 2.4 sliding window size |

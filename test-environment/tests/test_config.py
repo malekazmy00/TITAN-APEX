@@ -19,6 +19,8 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
         "FEED_PAGE_SIZE",
         "ENABLE_COOKIE_WALL",
         "ENABLE_AB_VARIANTS",
+        "ENABLE_PLACEHOLDER_CONTENT",
+        "PLACEHOLDER_DELAY_MS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -34,6 +36,8 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.feed_page_size == 10
     assert cfg.enable_cookie_wall is True
     assert cfg.enable_ab_variants is True
+    assert cfg.enable_placeholder_content is True
+    assert cfg.placeholder_delay_ms == 500
 
 
 def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,6 +49,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("ENABLE_MARKUP_RANDOMIZER", "true")
     monkeypatch.setenv("ENABLE_COOKIE_WALL", "false")
     monkeypatch.setenv("ENABLE_AB_VARIANTS", "0")
+    monkeypatch.setenv("ENABLE_PLACEHOLDER_CONTENT", "no")
 
     cfg = get_config()
 
@@ -54,6 +59,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     assert cfg.enable_markup_randomizer is True
     assert cfg.enable_cookie_wall is False
     assert cfg.enable_ab_variants is False
+    assert cfg.enable_placeholder_content is False
 
 
 def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -61,8 +67,10 @@ def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
     silently ignored in favour of the default."""
     monkeypatch.setenv("MARKUP_RANDOMIZER_INTERVAL_MINUTES", "5")
     monkeypatch.setenv("FEED_RATE_LIMIT_THRESHOLD", "50")
+    monkeypatch.setenv("PLACEHOLDER_DELAY_MS", "1200")
 
     cfg = get_config()
 
     assert cfg.markup_randomizer_interval_minutes == 5
     assert cfg.feed_rate_limit_threshold == 50
+    assert cfg.placeholder_delay_ms == 1200

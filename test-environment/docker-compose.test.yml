@@ -55,6 +55,12 @@ services:
       # the post container tag varies between requests
       # (structural/ab_variant.py) -- on by default like every other layer.
       ENABLE_AB_VARIANTS: ${ENABLE_AB_VARIANTS:-true}
+      # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's placeholder-content
+      # round: real post text arrives via a client-side JS swap after this
+      # delay -- comfortably under every antibot provider's own
+      # post_load_wait_ms (default 5000ms, docs/REQUIREMENTS.md section 9).
+      ENABLE_PLACEHOLDER_CONTENT: ${ENABLE_PLACEHOLDER_CONTENT:-true}
+      PLACEHOLDER_DELAY_MS: ${PLACEHOLDER_DELAY_MS:-500}
       MARKUP_RANDOMIZER_INTERVAL_MINUTES: ${MARKUP_RANDOMIZER_INTERVAL_MINUTES:-15}
       FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
       FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}

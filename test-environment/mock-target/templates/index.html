@@ -24,7 +24,16 @@
     {% for post in posts %}
     <{{ container_tag }} class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ post.post_id }}">
       <span class="{{ classes['post-author'] }}" data-role="post-author">{{ post.author }}</span>
+      {% if placeholder_enabled %}
+      {# Loading-placeholder leakage: the real text sits in data-real-text,
+         swapped into view by placeholder_swap_script below after a short
+         delay -- a scraper that reads this raw, un-rendered HTML (or
+         waits less than that delay) captures the placeholder text
+         instead. See structural/placeholder_content.py. #}
+      <p class="{{ classes['post-text'] }}" data-role="post-text" data-real-text="{{ post.text }}">{{ placeholder_text }}</p>
+      {% else %}
       <p class="{{ classes['post-text'] }}" data-role="post-text">{{ post.text }}</p>
+      {% endif %}
       <span class="{{ classes['post-likes'] }}" data-role="post-likes">{{ post.likes }}</span>
       <div class="post-comments" data-role="comments">
         {% for comment in post.comments %}
@@ -55,6 +64,10 @@
     </div>
     {% endif %}
   </main>
+
+  {% if placeholder_swap_script %}
+  <script>{{ placeholder_swap_script | safe }}</script>
+  {% endif %}
 
   {% if botd_enabled %}
   <script type="module">

@@ -41,6 +41,28 @@ past the page's `load` event -- get to matter: that's what gives
 Anubis's real, asynchronous post-load proof-of-work flow (unlike
 Byparr's `/v1` API, which tears the browser down right at `load`,
 entry 4) an actual chance to finish.
+
+**Since then, a second, independent gate was stacked behind Anubis**
+(docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's cookie-consent-wall
+round, docs/REQUIREMENTS.md section 9 entry 8): test-environment's
+mock-target now hides real content behind a real, server-side consent
+wall until an "Accept" link is followed. `mock_target_camoufox.yaml`
+gained `click_selector: "#accept-cookies"` for it, and
+`CamoufoxProvider.solve()` gained real click support for the same
+reason `PlaywrightMiddleware`'s renderer already had it (a real browser
+can click; `ByparrProvider`'s external API structurally cannot).
+
+**Confirmed for real again, not assumed from round 3's own success**
+(CI run
+[32528886186](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32528886186),
+23/23 tests passed): this crawl still yields real posts with the cookie
+wall active -- Camoufox clicks `#accept-cookies` for real, then
+`post_load_wait_ms` gives the resulting redirect time to settle before
+reading content, the same way it already gave Anubis's own async
+challenge JS time to finish. A different browser engine or stealth layer
+(entry 7's Patchright) getting past Anubis is not assumed to mean it
+also gets past this second gate, and vice versa -- each is verified
+independently.
 """
 
 from __future__ import annotations
