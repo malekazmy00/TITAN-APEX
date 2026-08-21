@@ -14,50 +14,67 @@ never sets it).
 
 Real, reproduced result -- documented in full, not summarized, per section
 5's explicit "مش المفروض ينجح من أول مرة بالكامل" (not expected to fully
-succeed on the first try). Confirmed locally (3/3 identical attempts, not
-flaky) before this test was written, by driving the real
-mock-target+Anubis+Byparr container topology by hand:
+succeed on the first try). **The authoritative mechanism is the one
+confirmed in real CI** (run 32479883962), not the one first found in local
+manual testing -- the two environments turned out to differ in a way that
+mattered, and CI is what this project's own rules treat as ground truth:
 
 1. GenericSpider issues one plain GET, meta={"antibot_needed": True}, so
-   ByparrMiddleware (not the raw downloader) handles it.
-2. Byparr's browser reaches Anubis, whose real, unmodified default policy
-   (anubis/botPolicy.yaml) weighs any User-Agent matching `Mozilla|Opera`
-   (Byparr's Chromium reports one) at +10 -- the "moderate-suspicion"
-   threshold -- and issues a real proof-of-work challenge page (confirmed
-   in Anubis's own logs: `"msg":"new challenge issued"`).
-3. Byparr's browser never gets past that challenge. Root cause, confirmed
-   by reading Anubis's own Set-Cookie headers directly: its
-   challenge-verification cookies (`techaro.lol-anubis-cookie-verification-*`)
-   are marked `Secure; SameSite=None`, so no spec-compliant browser
-   (including the real Chromium Byparr drives) will ever persist them over
-   this stack's plain `http://` -- confirmed independently by Anubis's own
-   log line for the attempt: `"msg":"user has cookies disabled, this is
-   not an anubis bug"`. The challenge cannot complete as this stack is
-   currently deployed (HTTP-only), regardless of Byparr itself.
-4. The result: ByparrMiddleware returns a 200 response whose body is
-   Anubis's *challenge* page, not mock-target's real HTML. GenericSpider's
-   selectors find nothing there (correctly -- there is nothing there to
-   find), logs `generic_spider.no_items_found`, and the crawl finishes
-   cleanly with zero items. No honeypot is ever reached (nothing beyond
-   the one blocked GET happens), so security/honeypot_triggers.log stays
-   untouched by this run.
+   ByparrMiddleware (not the raw downloader) handles it, calling Byparr's
+   `/v1` API with `url=http://localhost:8080/` (Anubis's published port).
+2. **In real CI, this fails at the network level, before Anubis is even
+   involved.** Byparr runs as a `services:` container -- its own separate
+   Docker container, on its own separate network, entirely apart from
+   `docker-compose.test.yml`'s `test-environment`/`edge` networks. From
+   *inside Byparr's own container*, `localhost` means Byparr's own
+   container, not the GitHub Actions runner host -- so its browser gets
+   `NS_ERROR_CONNECTION_REFUSED` trying to reach `localhost:8080`,
+   confirmed directly in Byparr's own service-container log for this exact
+   run: `"Page.goto: NS_ERROR_CONNECTION_REFUSED"` for
+   `http://localhost:8080/`, twice (once per test in this file).
+   `ByparrProvider.solve()` raises `AntibotError`, `ByparrMiddleware` logs
+   `byparr_middleware.solve_failed_fallback` and falls back to a plain
+   Scrapy download instead -- which *does* reach Anubis for real, since
+   Scrapy itself runs directly on the runner (not in a container) and the
+   runner's own `localhost:8080` is where `docker compose`'s port
+   publishing actually lands.
+3. That plain, un-rendered Scrapy request is what Anubis's real,
+   unmodified default policy (`anubis/botPolicy.yaml`) actually evaluates
+   -- and it explicitly **denies** Scrapy's own default User-Agent
+   (`Scrapy/2.18.0 (+https://scrapy.org)`) outright via the shipped
+   `bot/ai-catchall` deny rule (independently reproduced with a plain
+   `curl -A "Scrapy/2.18.0 (+https://scrapy.org)"`, no Scrapy involved at
+   all: `"msg":"explicit deny","check_result":{"name":"bot/ai-catchall","rule":"DENY"}`
+   in Anubis's own log) -- a well-behaved, self-identifying crawler is
+   exactly what that deny list targets.
+4. The result: GenericSpider's selectors find nothing on Anubis's deny
+   response (correctly -- there is nothing there to find), logs
+   `generic_spider.no_items_found`, and the crawl finishes cleanly with
+   zero items. No honeypot is ever reached (nothing beyond the one denied
+   GET happens), so security/honeypot_triggers.log stays untouched.
 
-This is a genuine environment/deployment gap -- test-environment's mock
-stack needs TLS for Anubis's own challenge to ever be completable by any
-real browser -- not a bug in GenericSpider, ByparrMiddleware, or Byparr
-itself. See docs/REQUIREMENTS.md's "Known Gaps from Test Environment"
-section for the tracked, dated entry.
+This is a genuine environment/deployment gap in how this test wires Byparr
+(a `services:` container) to a separately-networked `docker compose`
+stack -- not a bug in GenericSpider or ByparrMiddleware. Fixing it for
+real would mean attaching Byparr to the same Docker network as
+`test-environment/docker-compose.test.yml` (not possible for a plain
+`services:` entry -- it would need its own `docker compose` step, same
+shape as `test-environment` itself) or giving it a host-reachable address
+instead of `localhost`.
 
-Separately (and independently confirmed with a plain `curl -A
-"Scrapy/2.18.0 (+https://scrapy.org)"`, no Scrapy involved at all): Anubis's
-real, unmodified default policy also *explicitly denies* Scrapy's own
-default User-Agent outright via its `bot/ai-catchall` deny rule (confirmed
-in Anubis's logs: `"msg":"explicit deny", "check_result":{"name":"bot/ai-catchall","rule":"DENY"}`)
--- self-identifying crawlers that name themselves in their own User-Agent,
-exactly what that deny list is built to catch. So this target is doubly
-gated for GenericSpider today: a direct, un-rendered request is denied
-outright, and Byparr's browser-driven request is stuck on a challenge it
-cannot complete over plain HTTP.
+**A second, independent gap was found in local testing** (Byparr and
+Anubis sharing one Docker network, addressed by container name, so Byparr
+really did reach Anubis and receive an actual proof-of-work challenge --
+weight `+10` for its browser-like User-Agent, Anubis's own log:
+`"msg":"new challenge issued"`): even with that network gap fixed, Byparr's
+browser still could not *complete* the challenge, because Anubis's
+challenge-verification cookies are marked `Secure`, and no spec-compliant
+browser (including Byparr's real Chromium) persists a `Secure` cookie over
+this stack's plain `http://` (confirmed independently by Anubis's own log
+line: `"msg":"user has cookies disabled, this is not an anubis bug"`).
+So closing the network gap alone would not be enough -- the stack would
+also need TLS. Both gaps are tracked in docs/REQUIREMENTS.md's "Known Gaps
+from Test Environment" section.
 """
 
 from __future__ import annotations
@@ -77,15 +94,18 @@ HONEYPOT_LOG = REPO_ROOT / "test-environment" / "logs" / "honeypot_triggers.log"
     not BYPARR_URL, reason="TITAN_BYPARR_URL not set (no Byparr instance running)"
 )
 def test_mock_target_yields_zero_items_stuck_behind_anubis_challenge(tmp_path: Path) -> None:
-    """Documents the real, current outcome (see module docstring for the
+    """Documents the real, current CI outcome (see module docstring for the
     full, evidenced root-cause analysis): the crawl finishes cleanly, but
-    with zero items, because Byparr's browser never gets past Anubis's
-    proof-of-work challenge over plain HTTP. This assertion is a
-    regression sentinel, not an aspiration -- if this stack ever gains
-    TLS (or Anubis relaxes the Secure-cookie requirement for a non-TLS
-    deployment) and the crawl starts finding real posts, this test should
-    be updated to match, the same way ajax-javascript/load-more were
-    updated once render_wait_ms/click_selector genuinely fixed them.
+    with zero items -- in CI, because Byparr's `services:` container can't
+    reach `localhost:8080` at all (a network-namespace mismatch, not
+    Anubis), so the request falls back to a plain Scrapy GET that Anubis's
+    real policy denies outright. This assertion is a regression sentinel,
+    not an aspiration -- if this ever changes (Byparr wired onto the same
+    network as this stack, and the stack gains TLS for Anubis's
+    Secure-cookie challenge to be completable too) and the crawl starts
+    finding real posts, this test should be updated to match, the same way
+    ajax-javascript/load-more were updated once render_wait_ms/click_selector
+    genuinely fixed them.
     """
     assert BYPARR_URL  # guarded by skipif above; narrows type for mypy too
     output_path = tmp_path / "mock_target_live.jsonl"
@@ -95,8 +115,8 @@ def test_mock_target_yields_zero_items_stuck_behind_anubis_challenge(tmp_path: P
     )
 
     assert items == [], (
-        f"expected zero items (Anubis challenge not yet completable over plain "
-        f"HTTP -- see this test's module docstring); got {len(items)}: {items[:1]}"
+        f"expected zero items (see this test's module docstring for the "
+        f"real, evidenced reason); got {len(items)}: {items[:1]}"
     )
 
 

@@ -581,40 +581,34 @@ origin). مفيش بيانات حقيقية تتسحب حتى لو حلّينا 
 المفروض ينجح من أول مرة بالكامل" — التفاصيل الكاملة (مش ملخّص) موجودة
 في docstring الاختبار نفسه؛ هنا الفهرس/التصنيف الرسمي.
 
-### 1. Anubis's challenge cookie requires HTTPS — mock-target stack is HTTP-only
+### 1. Byparr's CI `services:` container can't reach the compose stack at all (the real, CI-confirmed primary cause)
 
-**الفجوة:** `ByparrMiddleware`/`ByparrProvider` نجحوا في الوصول لصفحة
-تحدي Anubis الحقيقية (weight=10 بسبب الـ User-Agent البراوزري بتاع
-Byparr، threshold "moderate-suspicion")، لكن **مقدروش يعدّوا التحدي
-خالص** — نتيجة متكررة وثابتة (3 محاولات متطابقة محليًا قبل كتابة
-الاختبار، مش flaky). السبب الجذري اتأكّد منه مباشرة بقراءة
-`Set-Cookie` headers بتاع Anubis نفسه: الكوكيز اللي بتثبت اجتياز
-التحدي (`techaro.lol-anubis-cookie-verification-*`) معمولة
-`Secure; SameSite=None` — يعني أي براوزر حقيقي (بما فيه Chromium اللي
-Byparr بيشغّله) هيرفض يحتفظ بيها فوق `http://` عادي، ومفيش طريقة
-التحدي يكتمل من غيرها. Anubis's لوج بتاعه بيأكد نفس الحاجة حرفيًا:
-`"msg":"user has cookies disabled, this is not an anubis bug"`.
+**الفجوة (دي اللي فعليًا بتحصل في CI الحقيقي، run
+[32479883962](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32479883962)
+— مش افتراض محلي):** `ByparrMiddleware` بيبعت لـ Byparr
+`url=http://localhost:8080/` (بورت Anubis المنشور). بس Byparr شغّال في
+CI كـ `services:` container منفصل تمامًا — على شبكة Docker خاصة بيه،
+غير شبكتي `test-environment`/`edge` بتوع `docker-compose.test.yml`
+خالص. جوه container بتاع Byparr نفسه، `localhost` معناها container
+Byparr نفسه، مش الـ runner، فمتصفح Byparr بيرجّع
+`NS_ERROR_CONNECTION_REFUSED` — **متأكّد منه مباشرة من لوج Byparr's
+service container نفسه في الـ run الحقيقي ده**، مرتين بالظبط (مرة لكل
+اختبار في `test_mock_target_live.py`):
+```
+ERROR: Could not reach the target: Page.goto: NS_ERROR_CONNECTION_REFUSED
+navigating to "http://localhost:8080/", waiting until "load"
+```
+`ByparrProvider.solve()` بيرمي `AntibotError`، `ByparrMiddleware`
+بيسجّل `byparr_middleware.solve_failed_fallback` ويرجع لـ plain Scrapy
+download — واللي **فعلاً بيوصل لـ Anubis** (لأن Scrapy نفسه شغّال
+مباشرة على الـ runner، مش جوه container، فـ `localhost:8080` بتاعه هو
+فعلاً المنفذ المنشور من `docker compose`).
 
-**ده مش باج في GenericSpider ولا ByparrMiddleware ولا Byparr نفسه** —
-ده فجوة نشر حقيقية: `test-environment/`'s stack شغّال HTTP بس، ومحتاج
-TLS (أو Anubis يدعم إعداد يلغي `Secure` لنشر بدون TLS، لو موجود) عشان
-أي براوزر حقيقي يقدر يكمّل التحدي أصلاً.
-
-**النتيجة العملية:** الكراول بيخلّص بنجاح (مفيش crash)، لكن بصفر
-items — `test_mock_target_yields_zero_items_stuck_behind_anubis_challenge`
-بيوثّق ده كنتيجة حقيقية متوقعة دلوقتي، مش aspiration.
-
-**القرار (نفس تصنيف دورة التصعيد):** نأجل ونسجل — إضافة TLS لـ
-`test-environment/`'s stack خطوة تصعيد حقيقية بحد ذاتها (تحتاج شهادة/CA
-داخل الشبكة المعزولة)، مش تعديل سريع. متسجّلة هنا كـ Known Gap رسمي
-لحد ما تُقرَّر كخطوة تصعيد قادمة (`docs/REQUIREMENTS.md` قسم 8، خطوة 4).
-
-### 2. Anubis's real default policy explicitly denies Scrapy's own User-Agent
-
-**ملحوظة مستقلة (اتأكّد منها بـ `curl` عادي، مفيهاش Scrapy خالص):**
-Anubis's الـ policy الافتراضية الحقيقية (`anubis/botPolicy.yaml`، نسخة
-حرفية من الأصل، مش معدّلة) بترفض User-Agent الافتراضي بتاع Scrapy
-(`Scrapy/2.18.0 (+https://scrapy.org)`) صراحة عبر قاعدة `bot/ai-catchall`
+**وهنا فجوة تانية مستقلة بتظهر (اتأكّد منها بـ `curl` عادي بردو، مفيهوش
+Scrapy خالص):** Anubis's الـ policy الافتراضية الحقيقية
+(`anubis/botPolicy.yaml`، نسخة حرفية من الأصل، مش معدّلة) بترفض
+User-Agent الافتراضي بتاع Scrapy (`Scrapy/2.18.0 (+https://scrapy.org)`)
+صراحة عبر قاعدة `bot/ai-catchall`
 (`"msg":"explicit deny", "check_result":{"name":"bot/ai-catchall","rule":"DENY"}`)
 — أي bot بيعرّف نفسه بصراحة في الـ User-Agent (زي Scrapy المهذّب) هو
 بالظبط اللي القايمة دي مصمّمة تلاحقه. بالمقابل، `curl` بـ User-Agent
@@ -622,10 +616,45 @@ Anubis's الـ policy الافتراضية الحقيقية (`anubis/botPolicy.
 "minimal-suspicion" → ALLOW، لأن مفيش قاعدة "generic-bot-catchall"
 مفعّلة افتراضيًا في نسخة Anubis الأصلية).
 
-**يعني عمليًا:** التارجت ده متحصّن مرتين لـ GenericSpider دلوقتي —
-طلب مباشر (من غير antibot_needed) بيترفض صراحة، وطلب عبر Byparr عالق
-في تحدي مقدرش يكمل فوق HTTP. مفيش كود جديد مطلوب لسه — نفس فجوة
-TLS فوق هي اللي هتحل الاتنين مع بعض لو Byparr قدر يكمّل التحدي.
+**النتيجة العملية في CI:** الكراول بيخلّص بنجاح (مفيش crash)، لكن
+بصفر items — طلب Scrapy المباشر (fallback) بيترفض صراحة من Anubis، مش
+حتى بيوصل لصفحة تحدي. `test_mock_target_yields_zero_items_stuck_behind_anubis_challenge`
+بيوثّق ده كنتيجة حقيقية متوقعة ومؤكدة في CI، مش aspiration.
+
+**لو قررنا نصلحها بعدين:** محتاجة إعادة تصميم — إما ربط Byparr بنفس
+شبكة `docker-compose.test.yml` (مش ممكن كـ `services:` entry عادي —
+هيحتاج يبقى جزء من نفس compose step زي `test-environment` نفسه)، أو
+إديه عنوان الـ runner الحقيقي بدل `localhost`.
+
+**القرار (نفس تصنيف دورة التصعيد):** نأجل ونسجل — إعادة تصميم إزاي
+Byparr بيتحط في CI خطوة تصعيد/بنية حقيقية بحد ذاتها، مش تعديل سريع.
+
+### 2. Even with the network gap fixed, Anubis's challenge cookie requires HTTPS (found in local testing, not CI)
+
+**فجوة تانية مستقلة، اتأكّد منها محليًا (Byparr وAnubis على نفس شبكة
+Docker، بعنونة container name — مش السيناريو الحقيقي في CI أعلاه، بس
+سيناريو محتمل لو بند 1 اتصلح):** لما Byparr فعلاً قدر يوصل لـ Anubis
+(3 محاولات متطابقة محليًا، مش flaky)، ده حصل عليه تحدي proof-of-work
+حقيقي (`weight=10` بسبب الـ User-Agent البراوزري بتاع Byparr،
+threshold "moderate-suspicion"، لوج Anubis: `"msg":"new challenge issued"`)
+— لكن **مقدرش يعدّي التحدي خالص**. السبب الجذري اتأكّد منه مباشرة
+بقراءة `Set-Cookie` headers بتاع Anubis نفسه: الكوكيز اللي بتثبت
+اجتياز التحدي (`techaro.lol-anubis-cookie-verification-*`) معمولة
+`Secure; SameSite=None` — يعني أي براوزر حقيقي (بما فيه Chromium اللي
+Byparr بيشغّله) هيرفض يحتفظ بيها فوق `http://` عادي. Anubis's لوج
+بتاعه بيأكد نفس الحاجة حرفيًا: `"msg":"user has cookies disabled, this
+is not an anubis bug"`.
+
+**يعني عمليًا:** حتى لو بند 1 (فجوة الشبكة في CI) اتصلح، التحدي لسه
+مش هيكتمل من غير TLS — الفجوتين لازم يتصلحوا مع بعض عشان Byparr
+يعدّي Anubis فعليًا.
+
+**ده مش باج في GenericSpider ولا ByparrMiddleware ولا Byparr نفسه** —
+ده فجوة نشر حقيقية: `test-environment/`'s stack شغّال HTTP بس، ومحتاج
+TLS (أو Anubis يدعم إعداد يلغي `Secure` لنشر بدون TLS، لو موجود).
+
+**القرار:** نأجل ونسجل — إضافة TLS لـ `test-environment/`'s stack خطوة
+تصعيد حقيقية بحد ذاتها (تحتاج شهادة/CA داخل الشبكة المعزولة).
 
 ### 3. Real code fix that came out of this round: `TITAN_BYPARR_URL` env-var fallback
 

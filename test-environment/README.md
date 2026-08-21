@@ -102,6 +102,19 @@ confirmed directly against this stack:
   cookie over plain `http://`. Confirmed directly in Anubis's own logs:
   `"msg":"user has cookies disabled, this is not an anubis bug"`.
 
+**A second, separate gap (docs/REQUIREMENTS.md section 9) means Byparr
+doesn't even get that far in real CI today.** Byparr runs as a GitHub
+Actions `services:` container — its own, separate Docker network from
+this compose stack — so from inside Byparr's own container, `localhost`
+never reaches Anubis's published port at all
+(`NS_ERROR_CONNECTION_REFUSED`, confirmed in Byparr's own container log
+for a real run). `ByparrMiddleware` falls back to a plain Scrapy
+request in that case, which *does* reach Anubis (Scrapy itself runs
+directly on the runner) — and gets the explicit `bot/ai-catchall` deny
+above, never the browser-UA challenge path at all. See
+`tests/integration/test_mock_target_live.py`'s module docstring for the
+full, CI-confirmed mechanism.
+
 **Policy:** `anubis/botPolicy.yaml` is Anubis's own real, official
 *default* `botPolicies.yaml` (MIT-licensed, copied verbatim — see the
 provenance comment at the top of the file), not a hand-rolled rule set.
