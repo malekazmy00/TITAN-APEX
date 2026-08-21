@@ -39,6 +39,10 @@ class MockTargetConfig:
         # round: gates real content server-side (not a CSS overlay) until
         # a consent cookie is present -- see structural/cookie_wall.py.
         self.enable_cookie_wall: bool = _env_bool("ENABLE_COOKIE_WALL", True)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's A/B-variant round:
+        # the post container tag varies between requests -- see
+        # structural/ab_variant.py.
+        self.enable_ab_variants: bool = _env_bool("ENABLE_AB_VARIANTS", True)
         self.markup_randomizer_interval_minutes: int = _env_int(
             "MARKUP_RANDOMIZER_INTERVAL_MINUTES", 15
         )

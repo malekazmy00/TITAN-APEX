@@ -179,6 +179,61 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     assert "botd.esm.js" not in body
 
 
+def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
+    cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
+    app = create_app(cfg, ab_variant_rand_fn=rand_fn)  # type: ignore[arg-type]
+    app.testing = True
+    return app.test_client()
+
+
+def test_ab_variant_a_renders_article_containers(tmp_path: Path) -> None:
+    """Happy path: a low roll renders the original <article> container,
+    with every data-role/content untouched."""
+    client = _ab_variant_client(tmp_path, rand_fn=lambda: 0.0)
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert '<article class="" data-role="post"' in body
+    assert '<div class="" data-role="post"' not in body
+    assert body.count('data-role="post"') == 11  # 10 real posts + 1 decoy, unaffected
+
+
+def test_ab_variant_b_renders_div_containers_with_the_same_data_roles(tmp_path: Path) -> None:
+    """Failure-adjacent case 1: a high roll swaps the container tag to
+    <div> -- a tag-qualified selector (`article[data-role="post"]`, this
+    project's own mock_target*.yaml configs) would match nothing here,
+    while the data-role attributes/content stay identical."""
+    client = _ab_variant_client(tmp_path, rand_fn=lambda: 0.99)
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert '<div class="" data-role="post"' in body
+    assert '<article class="" data-role="post"' not in body
+    assert body.count('data-role="post"') == 11
+
+
+def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
+    """Failure-adjacent case 2: disabling the layer must fall back to the
+    original, stable <article> tag regardless of rand_fn."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    cfg.enable_markup_randomizer = False
+    cfg.enable_ab_variants = False
+    app = create_app(cfg, ab_variant_rand_fn=lambda: 0.99)
+    app.testing = True
+
+    body = app.test_client().get("/").get_data(as_text=True)
+
+    assert '<article class="" data-role="post"' in body
+    assert '<div class="" data-role="post"' not in body
+
+
 def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")

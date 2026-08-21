@@ -261,8 +261,10 @@ looks "wrong" in a scraper's output (it's still a well-formed post), it's
 just the wrong one.
 
 **Verify it's active:** `curl -s http://mock-target:8000/` (bypassing
-Anubis from inside the network) and confirm two `article[data-role="post"]`
-elements share the same `data-post-id`, one with `style="display:none"`.
+Anubis from inside the network) and confirm two `[data-role="post"]`
+elements share the same `data-post-id`, one with `style="display:none"`
+(attribute-only, no tag qualifier -- 2.6's A/B-variant layer means the
+container tag itself may be `<article>` or `<div>` on any given request).
 
 ### 2.4 `/feed` — complex dynamic structure (social-media pattern)
 
@@ -331,6 +333,30 @@ contains `data-role="cookie-consent-wall"` and **no**
 `data-role="post"` at all; `curl -s -c - http://mock-target:8000/accept-cookies`
 followed by a request replaying that cookie shows real posts instead.
 
+### 2.6 A/B structural variants
+
+`structural/ab_variant.py`: on **every** request to `/` (not pinned to a
+session), a fresh coin flip picks between two container tags for every
+post — `<article data-role="post">` (variant "a") or
+`<div data-role="post">` (variant "b") — with every `data-*` attribute
+and the actual post content identical between them.
+
+Real A/B experiments are sometimes assigned per-request at an edge/CDN
+layer before any session cookie is even read
+(`docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md`'s own framing), so a
+scraper cannot assume a selector that matched once will keep matching on
+the very next request to the same URL. This directly caught a real,
+pre-existing issue in this project's own `mock_target*.yaml` configs:
+their `item` selector was `article[data-role="post"]` — tag-qualified —
+which only ever matches variant "a"; fixed to the attribute-only
+`[data-role="post"]` as part of adding this layer (found by reading the
+template/selector directly, not by letting CI run flaky first).
+
+**Verify it's active:** `curl -s http://mock-target:8000/` several times
+in a row (bypassing Anubis and the cookie wall — see 2.5's own
+verification for a cookie-carrying `curl`) and confirm the container tag
+around `data-role="post"` genuinely varies between calls.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently
@@ -345,6 +371,7 @@ isolated and tested alone — not just all-on together:
 | `ENABLE_DECOY_DATA` | `true` | 2.3 Decoy data |
 | `ENABLE_MARKUP_RANDOMIZER` | `true` | 2.1 Markup randomizer |
 | `ENABLE_COOKIE_WALL` | `true` | 2.5 Cookie-consent wall |
+| `ENABLE_AB_VARIANTS` | `true` | 2.6 A/B structural variants |
 | `MARKUP_RANDOMIZER_INTERVAL_MINUTES` | `15` | 2.1 rotation interval |
 | `FEED_RATE_LIMIT_THRESHOLD` | `20` | 2.4 requests/window before 429 |
 | `FEED_RATE_LIMIT_WINDOW_SECONDS` | `60` | 2.4 sliding window size |

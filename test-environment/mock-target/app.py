@@ -6,6 +6,7 @@ for and how to verify it's actually active.
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable
 from typing import Any
 
 from config import MockTargetConfig, get_config
@@ -14,6 +15,7 @@ from flask import Flask, Response, jsonify, redirect, render_template, request
 from security.botd_integration import VENDORED_SCRIPT_PATH, log_botd_report
 from security.file_logger import get_file_logger
 from security.honeypot_logger import log_honeypot_trigger
+from structural.ab_variant import choose_variant, container_tag_for
 from structural.cookie_wall import (
     ACCEPT_PATH,
     CONSENT_COOKIE_NAME,
@@ -41,12 +43,19 @@ RANDOMIZED_LOGICAL_NAMES = [
 ]
 
 
-def create_app(config: MockTargetConfig | None = None) -> Flask:
+def create_app(
+    config: MockTargetConfig | None = None,
+    ab_variant_rand_fn: Callable[[], float] | None = None,
+) -> Flask:
     """Build the mock-target Flask app.
 
     Every challenge layer reads its own toggle from ``config`` at request
     time (not baked in at import time), so tests can build multiple app
     instances with different configs in the same process.
+
+    ``ab_variant_rand_fn`` is injectable (see
+    ``structural.ab_variant.choose_variant``) so a test can pin which A/B
+    variant a request gets instead of depending on real randomness.
     """
     cfg = config or get_config()
     app = Flask(__name__)
@@ -93,6 +102,13 @@ def create_app(config: MockTargetConfig | None = None) -> Flask:
             decoy = generate_decoy_twin(posts[0], seed)
 
         honeypots = generate_honeypot_links() if cfg.enable_honeypots else []
+        # Chosen fresh per request (not pinned to the session) -- see
+        # structural/ab_variant.py's docstring for why.
+        container_tag = (
+            container_tag_for(choose_variant(rand_fn=ab_variant_rand_fn))
+            if cfg.enable_ab_variants
+            else "article"
+        )
 
         response = Response(
             render_template(
@@ -103,6 +119,7 @@ def create_app(config: MockTargetConfig | None = None) -> Flask:
                 classes=_classes(),
                 botd_enabled=cfg.enable_botd,
                 botd_script_path=VENDORED_SCRIPT_PATH,
+                container_tag=container_tag,
             )
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)

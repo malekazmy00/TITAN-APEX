@@ -20,6 +20,10 @@
 # click a real element -- this is the first real test of whether that's
 # actually enough to get past a second, independent gate stacked behind
 # the first one it already solves.
+#
+# `item` is attribute-only (`[data-role="post"]`, no `article` tag
+# qualifier) -- see mock_target.yaml's own comment for why (the A/B
+# variant round, section 2.6, swaps the container tag per request).
 name: mock_target_camoufox
 start_urls:
   - "http://localhost:8080/"
@@ -31,7 +35,7 @@ antibot_provider: camoufox
 max_concurrency: 1
 click_selector: "#accept-cookies"
 selectors:
-  item: 'article[data-role="post"]'
+  item: '[data-role="post"]'
   fields:
     post_id: "::attr(data-post-id)"
     author: '[data-role="post-author"]::text'

@@ -51,6 +51,10 @@ services:
       # present (structural/cookie_wall.py) -- on by default like every
       # other layer here.
       ENABLE_COOKIE_WALL: ${ENABLE_COOKIE_WALL:-true}
+      # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's A/B-variant round:
+      # the post container tag varies between requests
+      # (structural/ab_variant.py) -- on by default like every other layer.
+      ENABLE_AB_VARIANTS: ${ENABLE_AB_VARIANTS:-true}
       MARKUP_RANDOMIZER_INTERVAL_MINUTES: ${MARKUP_RANDOMIZER_INTERVAL_MINUTES:-15}
       FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
       FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}

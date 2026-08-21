@@ -18,11 +18,22 @@
 # "are our selectors built smartly".
 #
 # `item` intentionally matches the hidden decoy post too
-# (`article[data-role="post"]`, no visibility check) -- GenericSpider's
-# parse() has no concept of visibility at all, so this config does not
-# attempt to work around that gap; the live integration test documents
-# whether the decoy's stale data actually comes back instead of (or
-# alongside) the real post, per test-environment/README.md section 2.3.
+# (`[data-role="post"]`, no visibility check) -- GenericSpider's parse()
+# has no concept of visibility at all, so this config does not attempt to
+# work around that gap; the live integration test documents whether the
+# decoy's stale data actually comes back instead of (or alongside) the
+# real post, per test-environment/README.md section 2.3.
+#
+# `item` is deliberately attribute-only, no `article` tag qualifier --
+# test-environment/README.md section 2.6's A/B-variant round swaps the
+# post container tag between `<article>` and `<div>` on every request
+# (structural/ab_variant.py), so a tag-qualified selector
+# (`article[data-role="post"]`, what this config used before that round)
+# would only ever match half the time -- found and fixed while wiring
+# that layer in, before it ever ran flaky in real CI: the mechanism is
+# fully deterministic from reading structural/ab_variant.py and
+# templates/index.html directly, not something that needed a live run to
+# discover.
 #
 # click_selector (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
 # cookie-consent-wall round): test-environment/README.md section 2.5's
@@ -44,7 +55,7 @@ antibot_needed: true
 max_concurrency: 1
 click_selector: "#accept-cookies"
 selectors:
-  item: 'article[data-role="post"]'
+  item: '[data-role="post"]'
   fields:
     post_id: "::attr(data-post-id)"
     author: '[data-role="post-author"]::text'

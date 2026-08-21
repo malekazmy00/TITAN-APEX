@@ -13,16 +13,16 @@
        hidden -- a scraper whose selector picks "the first match" instead
        of checking visibility grabs this stale text instead of the real
        post below it. See structural/decoy_data.py. #}
-    <article class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ decoy.post_id }}"
+    <{{ container_tag }} class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ decoy.post_id }}"
               style="display:none" aria-hidden="true">
       <span class="{{ classes['post-author'] }}" data-role="post-author">{{ decoy.author }}</span>
       <p class="{{ classes['post-text'] }}" data-role="post-text">{{ decoy.text }}</p>
       <span class="{{ classes['post-likes'] }}" data-role="post-likes">{{ decoy.likes }}</span>
-    </article>
+    </{{ container_tag }}>
     {% endif %}
 
     {% for post in posts %}
-    <article class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ post.post_id }}">
+    <{{ container_tag }} class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ post.post_id }}">
       <span class="{{ classes['post-author'] }}" data-role="post-author">{{ post.author }}</span>
       <p class="{{ classes['post-text'] }}" data-role="post-text">{{ post.text }}</p>
       <span class="{{ classes['post-likes'] }}" data-role="post-likes">{{ post.likes }}</span>
@@ -34,7 +34,7 @@
         </div>
         {% endfor %}
       </div>
-    </article>
+    </{{ container_tag }}>
     {% endfor %}
 
     {% if honeypots %}
