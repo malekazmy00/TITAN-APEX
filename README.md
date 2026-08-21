@@ -2,12 +2,13 @@
 
 Core of an OSINT / web-scraping platform, built around swappable interfaces
 (`AntibotProvider`, `StorageBackend`, `AIAnalyzer`) and config-driven
-spiders. See `docs/REQUIREMENTS.md` for the full build plan (and the
-"Pending Real-Network Verification" section for what still needs proving
-on a VPS) and the rules every change must follow, and `docs/ARCHITECTURE.md`
-for how it all fits together.
+spiders. See `docs/REQUIREMENTS.md` for the full build plan (section 5,
+"Pending Real-Network Verification", tracks anything not yet proven in a
+real-internet environment — empty as of Phase 4) and the rules every
+change must follow, and `docs/ARCHITECTURE.md` for how it all fits
+together.
 
-## Status: through Phase 3
+## Status: through Phase 4
 
 - Interfaces: `src/core/interfaces/{antibot_provider,storage_backend,ai_analyzer}.py`
 - Config-driven spider: `src/spiders/generic_spider.py` — targets in
@@ -17,6 +18,8 @@ for how it all fits together.
 - Structured JSON logging: `src/logging_config.py`
 - Storage backend: `src/providers/storage/sqlite_backend.py`
 - Antibot provider: `src/providers/antibot/byparr_provider.py`
+- Task queue: `src/queue/` (Redis + RQ)
+- Alerting: `src/alerting.py` (repeated failure → CRITICAL log + optional webhook)
 
 ## Quickstart
 

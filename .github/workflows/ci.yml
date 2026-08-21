@@ -15,8 +15,13 @@ jobs:
         image: ghcr.io/thephaseless/byparr:latest
         ports:
           - 8191:8191
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
     env:
       TITAN_BYPARR_URL: http://localhost:8191
+      TITAN_REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

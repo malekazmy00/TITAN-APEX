@@ -36,3 +36,7 @@ class AIAnalyzerError(TitanApexError):
 
 class RenderError(TitanApexError):
     """Raised when a headless-browser render (e.g. Playwright) fails."""
+
+
+class QueueError(TitanApexError):
+    """Raised by the task queue (Redis/RQ) on connection or job failure."""

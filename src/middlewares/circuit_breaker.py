@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import Enum
 from logging import Logger
 from typing import Any
@@ -21,6 +22,7 @@ from urllib.parse import urlparse
 from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
 
+from src.alerting import AlertDispatcher, AlertEvent, dispatcher_from_settings
 from src.logging_config import get_logger
 
 FAILURE_STATUSES = frozenset({500, 502, 503, 504})
@@ -54,6 +56,7 @@ class CircuitBreakerMiddleware:
         cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS,
         clock: Callable[[], float] | None = None,
         logger: Logger | None = None,
+        alert_dispatcher: AlertDispatcher | None = None,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError(f"failure_threshold must be >= 1, got {failure_threshold}")
@@ -63,6 +66,7 @@ class CircuitBreakerMiddleware:
         self.cooldown_seconds = cooldown_seconds
         self._clock = clock or time.monotonic
         self.logger = logger or get_logger(__name__)
+        self._alert_dispatcher = alert_dispatcher or AlertDispatcher()
         self._circuits: dict[str, _DomainCircuit] = {}
 
     @classmethod
@@ -75,6 +79,7 @@ class CircuitBreakerMiddleware:
             cooldown_seconds=settings.getfloat(
                 "TITAN_CIRCUIT_COOLDOWN_SECONDS", DEFAULT_COOLDOWN_SECONDS
             ),
+            alert_dispatcher=dispatcher_from_settings(settings),
         )
 
     @staticmethod
@@ -139,6 +144,16 @@ class CircuitBreakerMiddleware:
                     "consecutive_failures": circuit.consecutive_failures,
                     "cooldown_seconds": self.cooldown_seconds,
                 },
+            )
+            self._alert_dispatcher.send(
+                AlertEvent(
+                    source="circuit_breaker",
+                    domain=domain,
+                    reason=reason,
+                    consecutive_failures=circuit.consecutive_failures,
+                    cooldown_seconds=self.cooldown_seconds,
+                    occurred_at=datetime.now(tz=UTC),
+                )
             )
 
     def _record_success(self, domain: str, circuit: _DomainCircuit) -> None:

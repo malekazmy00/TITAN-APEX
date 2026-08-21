@@ -87,9 +87,14 @@ titan-apex/
 - [x] Cookie management تلقائي (عبر `Set-Cookie` headers + Scrapy's `CookiesMiddleware` الموجود أصلاً)
 - [x] Fallback مسجل بوضوح (مش كراش) لو الـ provider فشل، أو لو `TITAN_BYPARR_URL` مش متظبط أصلاً
 
-### المرحلة 4 — التنظيم والتوسع
-- [ ] Redis + Celery/RQ
-- [ ] Logging + Alerting بسيط
+### المرحلة 4 — التنظيم والتوسع (منفذة)
+- [x] Redis + RQ (`src/queue/`: `connection.py`, `tasks.py`, `enqueue.py`) —
+      كل job بيشتغل في subprocess منفصل (Twisted reactor ميتفتحش غير مرة
+      واحدة لكل process)
+- [x] Logging + Alerting بسيط (فشل متكرر = تنبيه): `src/alerting.py`،
+      متوصل بـ `CircuitBreakerMiddleware` — لما circuit يفتح (5 فشل
+      متتالي افتراضيًا) بيتسجل CRITICAL دايمًا، وبيتبعت webhook لو
+      `TITAN_ALERT_WEBHOOK_URL` متظبط
 
 ### المرحلة 5 — طبقة الذكاء الاصطناعي (على اللاب)
 - [ ] `ai_analyzer` implementation بـ Qwen 14B عبر Ollama

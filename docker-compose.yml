@@ -1,4 +1,3 @@
-# Phase 4 (Redis) is still a placeholder — added when that phase lands.
 services:
   byparr:
     image: ghcr.io/thephaseless/byparr:latest
@@ -8,3 +7,18 @@ services:
     # Point TITAN_BYPARR_URL at http://byparr:8191 (from other containers)
     # or http://localhost:8191 (from the host) — never hardcode this in
     # code, it's read from the environment (see .env.example).
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    # Point TITAN_REDIS_URL at redis://redis:6379/0 (from other containers)
+    # or redis://localhost:6379/0 (from the host, e.g. running `rq worker`
+    # directly) — never hardcode this in code, it's read from the
+    # environment (see .env.example).
+
+volumes:
+  redis-data:

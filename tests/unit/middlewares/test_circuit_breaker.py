@@ -10,6 +10,7 @@ import pytest
 from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
 
+from src.alerting import AlertEvent
 from src.middlewares.circuit_breaker import CircuitBreakerMiddleware
 
 
@@ -172,6 +173,9 @@ def test_from_crawler_reads_settings() -> None:
         def getfloat(self, name: str, default: float) -> float:
             return {"TITAN_CIRCUIT_COOLDOWN_SECONDS": 10.0}.get(name, default)
 
+        def get(self, name: str, default: object = None) -> object:
+            return default
+
     class _FakeCrawler:
         settings = _FakeSettings()
 
@@ -179,3 +183,59 @@ def test_from_crawler_reads_settings() -> None:
 
     assert built.failure_threshold == 3
     assert built.cooldown_seconds == 10.0
+
+
+def test_opening_the_circuit_dispatches_an_alert(clock: _FakeClock) -> None:
+    """Phase 4: repeated failure (the circuit opening) must trigger an alert."""
+    sent_events: list[AlertEvent] = []
+
+    class _FakeDispatcher:
+        def send(self, event: AlertEvent) -> None:
+            sent_events.append(event)
+
+    middleware = CircuitBreakerMiddleware(
+        failure_threshold=5,
+        cooldown_seconds=60.0,
+        clock=clock,
+        alert_dispatcher=_FakeDispatcher(),  # type: ignore[arg-type]
+    )
+    url = "https://example.com/"
+    for _ in range(4):
+        req = _request(url)
+        middleware.process_request(req, spider=object())
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    assert sent_events == []  # not yet at threshold
+
+    req = _request(url)
+    middleware.process_request(req, spider=object())
+    middleware.process_response(req, _response(url, 503), spider=object())
+
+    assert len(sent_events) == 1
+    event = sent_events[0]
+    assert event.source == "circuit_breaker"
+    assert event.domain == "example.com"
+    assert event.consecutive_failures == 5
+    assert event.cooldown_seconds == 60.0
+
+
+def test_successful_responses_never_dispatch_an_alert(clock: _FakeClock) -> None:
+    sent_events: list[AlertEvent] = []
+
+    class _FakeDispatcher:
+        def send(self, event: AlertEvent) -> None:
+            sent_events.append(event)
+
+    middleware = CircuitBreakerMiddleware(
+        failure_threshold=5,
+        cooldown_seconds=60.0,
+        clock=clock,
+        alert_dispatcher=_FakeDispatcher(),  # type: ignore[arg-type]
+    )
+    url = "https://example.com/"
+    for _ in range(10):
+        req = _request(url)
+        middleware.process_request(req, spider=object())
+        middleware.process_response(req, _response(url, 200), spider=object())
+
+    assert sent_events == []

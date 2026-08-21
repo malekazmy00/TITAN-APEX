@@ -1,4 +1,4 @@
-# Architecture (through Phase 3)
+# Architecture (through Phase 4)
 
 TITAN-APEX is built around three abstract interfaces in `src/core/interfaces/`
 so that concrete providers can be swapped without touching the code that
@@ -69,3 +69,24 @@ Any new implementation of an interface (a new storage backend, a new
 antibot provider, ...) must pass the matching suite under `tests/contract/`
 before it is accepted. See `tests/contract/test_storage_backend_contract.py`
 and `tests/contract/test_antibot_provider_contract.py` for the pattern.
+
+## Task queue (Phase 4)
+
+`src/queue/enqueue.py` pushes a crawl job (a target config path) onto a
+Redis-backed RQ queue. `src/queue/tasks.run_spider_job` is what an RQ
+worker actually executes — it shells out to `scrapy runspider` in a
+**subprocess**, deliberately: Twisted's reactor can only be installed
+once per process, so a long-lived worker processing more than one crawl
+in-process would crash on the second job. A failed crawl raises
+`QueueError`, so RQ's own job-failure tracking (not a silently "succeeded"
+job) reflects reality.
+
+## Alerting (Phase 4)
+
+"فشل متكرر = تنبيه" (repeated failure = alert): `src/alerting.py`
+provides `AlertDispatcher`, wired into `CircuitBreakerMiddleware` — every
+time a circuit opens (the failure-threshold consecutive-failures event),
+an `AlertEvent` is sent. Delivery always logs at CRITICAL, and also POSTs
+a JSON payload to `TITAN_ALERT_WEBHOOK_URL` when one is configured.
+Webhook delivery failure is caught and logged (`alert.webhook_delivery_failed`)
+— an alerting problem never crashes the crawl that triggered the alert.
