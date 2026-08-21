@@ -134,3 +134,22 @@ pytest tests/unit tests/integration tests/contract -v
 - ✅ إعدادات جديدة عبر `.env.example` مش hardcoded
 - ✅ لو provider جديد: عدّى `tests/contract/` بالكامل
 - ✅ لو target جديد: أضيف كـ `config.yaml` بس، صفر كود مكرر
+
+---
+
+## 5. Pending Real-Network Verification
+
+> بنود مسجلة رسميًا كـ "لسه محتاجة إثبات فعلي على بيئة بإنترنت حر" — مش
+> منسية، هترجعلها بمجرد ما الـ VPS (القسم 0) يبقى جاهز.
+
+| البند | الحالة | تاريخ التسجيل |
+|---|---|---|
+| **رندر Playwright الحي** (`scrapingcourse_infinite_scrolling.yaml`, `render_js: true`) | الكود اتبنى واتاختبر بالكامل (unit tests + دليل حي إن الـ wiring صحيح: الـ browser بيفتح فعلاً ويحاول يتصل، والفشل بيتسجل كـ `RenderError` واضح بدل ما يكراش). **الرندر الفعلي (page.goto ينجح ويرجع HTML بعد تنفيذ JS) لسه محتاج إثبات على بيئة بإنترنت حر** — بيئة التطوير دي (sandbox) فيها قيد شبكي بيمنع أي اتصال خارج من الـ headless Chromium تحديدًا (اتأكد بعدة محاولات: curl/pip بينجحوا عادي، Chromium بيرجع `ERR_CONNECTION_RESET` مهما كان إعداد الـ proxy)، فمش مشكلة في الكود. | 2026-08-21 |
+
+**الخطوة المطلوبة لقفل البند ده:** بعد تجهيز الـ VPS (القسم 0)، شغّل:
+```bash
+scrapy runspider src/spiders/generic_spider.py \
+    -a config_path=src/spiders/configs/scrapingcourse_infinite_scrolling.yaml \
+    -s LOG_LEVEL=INFO
+```
+وتأكد إن `item_scraped_count` أكبر من 12 (يعني الـ infinite-scroll JS اشتغل فعليًا وجاب batches إضافية، مش بس الـ batch الأول اللي موجود في الـ HTML الثابت).
