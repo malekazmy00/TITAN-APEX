@@ -236,6 +236,8 @@ target جديد = `configs/*.yaml` جديد + integration test حي واحد ف�
 | `scrapingcourse_pagination.yaml` | 3 | ثابت بالكامل، 13 صفحة، `a.next-page` / `rel="next"` واضح |
 | `webscraper_io_pagination.yaml` | 3 | اخترنا صفحة `pagination` (كتالوج سيارات) كتمثيل ملموس من كتالوج `webscraper.io/test-sites` المذكور بشكل عام في القائمة؛ حقل `details` (سنة/بلد/مسافة) بيرجع list واحد مش 3 حقول منفصلة لأن الثلاثة بياخدوا نفس الـ class بالظبط بدون أي تمييز — قيد في المعمارية الحالية (كل field له selector واحد جوه الـ item)، مش باج |
 | `webscraper_io_scroll.yaml` | Tier 2 | infinite scroll حقيقي (`data-next-page` marker)، نفس نمط `scrapingcourse_infinite_scrolling.yaml` — نجح فعليًا في CI |
+| `scrapethissite_ajax_javascript.yaml` | 2 | ✅ **اتحل (2026-08-21)**: `render_wait_ms: 2500` — تفاصيل تحت وفي القسم 7 بند 3 |
+| `webscraper_io_load_more.yaml` | Tier 2 | ✅ **اتحل (2026-08-21)**: `click_selector: "button.load-more-btn"` — تفاصيل في القسم 7 بند 4 |
 
 > **تصحيح (2026-08-21):** `scrapethissite_ajax_javascript.yaml` كان
 > متسجّل هنا قبل كده كـ "نجح" بناءً على أول تشغيلة حقيقية له في CI (run
@@ -248,17 +250,22 @@ target جديد = `configs/*.yaml` جديد + integration test حي واحد ف�
 > بتتغطى بالصدفة — مش باج ثابت نقدر نصلّحه بإعادة المحاولة. الـ
 > config والاختبار اتشالوا نهائيًا (مش هيفضلوا موجودين كـ "شبه شغالين")،
 > واتسجّل رسميًا كـ Known Spider Limitation في القسم 7 تحت.
+>
+> **تحديث لاحق:** الفجوة دي اتقفلت فعليًا بعد كده بإضافة `render_wait_ms`
+> — راجع القسم 7 بند 3 للتفاصيل والدليل الحي (run 32473641117).
 
 ### فجوات مُكتشفة — مش هتتغطى بـ "صفر كود جديد"
 
-`quotes.toscrape.com/login`، `quotes.toscrape.com/tableful`،
-`scrapethissite.com/pages/ajax-javascript`، و
-`webscraper.io/test-sites/load-more` اتسجّلوا رسميًا كـ **"Known Spider
-Limitations"** في القسم 7 تحت — مش "Pending Real-Network Verification":
-المشكلة هنا مالهاش علاقة بإثبات حي في بيئة بإنترنت حر (اتّحقّق منها
-فعليًا في GitHub Actions)، هي قيد معماري حقيقي في `GenericSpider`/
-`PlaywrightMiddleware` النهارده هيفضل موجود لحد ما حد يقرر يضيف كود
-جديد.
+`quotes.toscrape.com/login` و`quotes.toscrape.com/tableful` اتسجّلوا
+رسميًا كـ **"Known Spider Limitations"** في القسم 7 تحت — مش
+"Pending Real-Network Verification": المشكلة هنا مالهاش علاقة بإثبات
+حي في بيئة بإنترنت حر، هي قيد معماري حقيقي في `GenericSpider` نفسه
+هيفضل موجود لحد ما حد يقرر يضيف كود جديد.
+
+(`scrapethissite.com/pages/ajax-javascript` و
+`webscraper.io/test-sites/load-more` كانوا مسجّلين هنا كـ Known Spider
+Limitations كمان، بس اتحلّوا فعليًا بعد كده بـ `render_wait_ms`/
+`click_selector` — التفاصيل والدليل الحي في القسم 7، بنود 3 و4.)
 
 ### المستوى 4 — `scrapingclub.com`: النتيجة نتيجة موقع، مش كود
 
@@ -326,6 +333,12 @@ Targets النهائي بدل ما تتفترض.
 > النهارده** — مش هيتحل بإثبات حي ولا بانتظار بيئة معينة، هيفضل موجود
 > لحد ما حد يقرر يكتب كود جديد يعالجه فعليًا. مفيش target هنا
 > "هيشتغل بعدين لوحده".
+>
+> **تحديث (2026-08-21):** بندين من الخمسة (3 و4) اتقفلوا فعليًا بعد ما
+> الكود الجديد اللي كانوا مستنيينه اتكتب وتحقّق منه حي في CI —
+> `render_wait_ms`/`click_selector` على `SpiderConfig`. باقيين هنا
+> كسجل تاريخي (يوضحوا ليه القيد كان موجود وإزاي اتحل)، مش لأنهم لسه
+> مفتوحين. البنود 1، 2، و5 لسه مفتوحة فعليًا.
 
 ### 1. `quotes.toscrape.com/login` (و`webscraper.io/test-sites/website-state-setup-login` بنفس القيد بالظبط) — POST / forms / session
 
@@ -382,7 +395,7 @@ Targets النهائي بدل ما تتفترض.
 - unit tests جديدة تغطي: تجميع صفوف ناجح، عدد صفوف غير متوقع
   (missing sibling)، فشل الـ regex/split
 
-### 3. `scrapethissite.com/pages/ajax-javascript` — انتظار ثابت مش كافي لتأخير متعمّد من الموقع
+### 3. `scrapethissite.com/pages/ajax-javascript` — انتظار ثابت مش كافي لتأخير متعمّد من الموقع — ✅ اتحل (2026-08-21)
 
 **الفجوة:** الموقع بيضيف تأخير JS متعمد (`setTimeout` ~1.5 ثانية) بعد
 ما رد الـ AJAX يوصل وقبل ما يعرض الصفوف فعليًا في الـ DOM (تعليق في
@@ -413,7 +426,19 @@ config (`scrapethissite_ajax_javascript.yaml`) والاختبار المرتبط
   بعد الـ navigation (وقبل الـ scroll-loop)، مستقل عن منطق الـ scroll
 - unit test جديد يتأكد إن القيمة دي بتتوصّل فعليًا لـ `render_with_playwright`
 
-### 4. `webscraper.io/test-sites/load-more` — زرار محتاج click، مش scroll
+**✅ تحديث (2026-08-21) — اتحل فعليًا:** الكود الجديد المذكور فوق
+اتنفّذ بالظبط زي ما كان متوصّف — `render_wait_ms: int | None` على
+`SpiderConfig`، بيوصل عبر `GenericSpider._request_meta()` لـ
+`request.meta`، و`PlaywrightMiddleware`/`render_with_playwright` بيعمل
+`page.wait_for_timeout(render_wait_ms)` بعد الـ scroll-loop وقبل قراءة
+`page.content()`. `scrapethissite_ajax_javascript.yaml` رجع بـ
+`render_wait_ms: 2500` (تقريبًا ضعف تأخير الموقع ~1.5 ثانية)، والاختبار
+الحي رجع كمان. **النتيجة اتّحقّق منها فعليًا في CI، مش افتراض**: run
+[32473641117](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32473641117)
+— `test_scrapethissite_ajax_javascript_yields_rows_after_hash_triggered_fetch PASSED`.
+الفجوة دي اتقفلت رسميًا.
+
+### 4. `webscraper.io/test-sites/load-more` — زرار محتاج click، مش scroll — ✅ اتحل (2026-08-21)
 
 **الفجوة:** المحتوى الإضافي محجوب وراء
 `<button class="load-more-btn ecommerce-items-scroll-more">Load More</button>`
@@ -437,6 +462,17 @@ flaky زي البند اللي فوق)، فمش هنعيد المحاولة أو
   زرار "Load More" اللي ممكن يظهر أكتر من مرة)
 - unit tests جديدة تغطي: click ناجح بيزود المحتوى، العنصر مش موجود
   (لا يبوّظ الكراول)، فشل الـ click نفسه
+
+**✅ تحديث (2026-08-21) — اتحل فعليًا:** `click_selector: str | None`
+اتضاف على `SpiderConfig`، نفس مسار `render_wait_ms` فوق (meta →
+`PlaywrightMiddleware` → `render_with_playwright`)، وبيعمل
+`page.click(click_selector, timeout=timeout_ms)` فورًا بعد `page.goto()`
+(Playwright بيسكرول للعنصر لوحده قبل الـ click). `webscraper_io_load_more.yaml`
+رجع بـ `click_selector: "button.load-more-btn"`، والاختبار الحي رجع
+كمان. **النتيجة اتّحقّق منها فعليًا في CI، مش افتراض**: run
+[32473641117](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32473641117)
+— `test_webscraper_io_load_more_yields_more_than_the_first_batch PASSED`
+(أكتر من 6 عناصر، تأكيد إن الزرار اتضغط فعليًا). الفجوة دي اتقفلت رسميًا.
 
 ### 5. SPA حقيقي (`react-shopping-cart`) — CSS-in-JS بـ hashed class names
 

@@ -19,7 +19,7 @@
 | الموقع | التحدي |
 |---|---|
 | `scrapethissite.com/pages/frames` | frames وiFrames (مُختبر بالفعل ✅) |
-| `scrapethissite.com/pages/ajax-javascript` | محتوى محمّل بـ AJAX (أفلام أوسكار) — **Known Spider Limitation**: فجوة زمنية حقيقية (مش دايمًا بتتغطى)، تفاصيل في `docs/REQUIREMENTS.md` قسم 7 بند 3 |
+| `scrapethissite.com/pages/ajax-javascript` | محتوى محمّل بـ AJAX (أفلام أوسكار) (مُختبر بالفعل ✅ — `render_wait_ms`، تفاصيل `docs/REQUIREMENTS.md` قسم 7 بند 3) |
 | `quotes.toscrape.com/js` | نفس البيانات لكن مُرندرة بالكامل عبر JS |
 | `quotes.toscrape.com/scroll` | infinite scroll |
 | `quotes.toscrape.com/login` | نماذج تسجيل دخول وإدارة جلسات (أي username/password شغال) |
@@ -35,7 +35,7 @@
 | `scrapingcourse.com/pagination` | pagination رقمية (مُختبر بالفعل ✅) |
 | `webscraper.io/test-sites/pagination` | pagination رقمية (مُختبر بالفعل ✅) |
 | `webscraper.io/test-sites/scroll` | infinite scroll (`data-next-page` marker) (مُختبر بالفعل ✅) |
-| `webscraper.io/test-sites/load-more` | زرار "Load More" — **Known Spider Limitation**: مُتأكّد فعليًا إنه click-triggered مش scroll (CI نتيجة ثابتة: 6 عناصر بالظبط)، تفاصيل في `docs/REQUIREMENTS.md` قسم 7 بند 4 |
+| `webscraper.io/test-sites/load-more` | زرار "Load More"، click-triggered (مُختبر بالفعل ✅ — `click_selector`، تفاصيل `docs/REQUIREMENTS.md` قسم 7 بند 4) |
 | `webscraper.io/test-sites/website-state-setup-login` | تسجيل دخول — نفس قيد `quotes.toscrape.com/login` (**Known Spider Limitation**، قسم 7 بند 1) |
 
 > **ملحوظة (2026-08-21):** عند الفحص الفعلي، الكتالوج الحالي لـ
