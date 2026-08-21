@@ -11,25 +11,36 @@ still needs to be up, which the CI workflow brings up alongside Byparr;
 skips cleanly, same as every other live test, in a plain local
 `pytest tests/unit` run).
 
-Real, expected result, based on CamoufoxProvider's actual design (not
-assumed -- see docs/REQUIREMENTS.md section 9 entry 4 and
-src/providers/antibot/camoufox_provider.py's own docstring for the full
-reasoning): unlike Byparr, Camoufox drives its browser in-process, in the
-same network namespace as Scrapy itself, so the network-namespace
-mismatch that blocked Byparr from ever reaching Anubis in CI
-(docs/REQUIREMENTS.md section 9 entry 1) structurally cannot happen here.
-And unlike Byparr's `/v1` API, CamoufoxProvider holds the browser open a
-configurable extra `post_load_wait_ms` (default 5s) after the page's
-`load` event before reading content -- giving Anubis's real, asynchronous
-post-load proof-of-work flow (docs/REQUIREMENTS.md section 9 entry 4) an
-actual chance to finish. If both of those hold up for real, the crawl
-should find real posts this time, not the challenge page.
+**Confirmed for real, not just expected** (CI run
+[32507637737](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32507637737),
+21/21 tests passed): Camoufox genuinely gets past Anubis's real
+proof-of-work challenge and this crawl yields real posts. Getting here
+took three real, evidenced fixes across this investigation
+(docs/REQUIREMENTS.md section 9, entries 1-5 -- full history, not
+summarized, is there):
 
-This assertion is not an aspiration written before the fact and left
-unchecked -- see the module's own git history/PR for the real CI run this
-was confirmed (or corrected) against, the same discipline already applied
-to test_mock_target_live.py's own docstring once round 1's CI run showed
-a different real mechanism than local testing had found.
+1. Unlike Byparr (a `services:` container on a different Docker network
+   than this stack, entry 1), Camoufox drives its browser in-process, in
+   the same network namespace as Scrapy itself -- that class of mismatch
+   structurally cannot happen here.
+2. `CamoufoxProvider` originally crashed outright ("Playwright Sync API
+   inside the asyncio loop") because it was called straight from
+   Scrapy's own reactor thread -- fixed by running provider solving via
+   `deferToThread`, the same pattern `PlaywrightMiddleware` already used
+   for the identical Playwright constraint (entry 5).
+3. Anubis's challenge-verification cookies need *both*
+   `COOKIE_SECURE=false` and `COOKIE_PARTITIONED=false` to persist in a
+   non-TLS deployment -- the second flag was verified by hand in round 2
+   but only actually committed to `docker-compose.test.yml` once this
+   test kept failing with "user has cookies disabled" even after the
+   crash was fixed (entry 5's final update).
+
+Only once all three were real did CamoufoxProvider's actual point --
+holding the browser open a configurable `post_load_wait_ms` (default 5s)
+past the page's `load` event -- get to matter: that's what gives
+Anubis's real, asynchronous post-load proof-of-work flow (unlike
+Byparr's `/v1` API, which tears the browser down right at `load`,
+entry 4) an actual chance to finish.
 """
 
 from __future__ import annotations
@@ -52,8 +63,9 @@ def test_mock_target_camoufox_gets_past_anubis_and_yields_real_posts(tmp_path: P
     items = run_spider_live("mock_target_camoufox.yaml", output_path, timeout=180)
 
     assert len(items) > 0, (
-        "expected real posts -- Camoufox should get past Anubis's challenge "
-        "this time (see this test's module docstring for why); got 0 items"
+        "expected real posts -- Camoufox is confirmed to get past Anubis's "
+        "challenge (see this test's module docstring for the real CI evidence); "
+        "got 0 items -- something regressed"
     )
     first = items[0]
     assert first["post_id"], "post_id should not be empty"

@@ -742,6 +742,14 @@ third-party)، مش تعديل سريع.
 Anubis الحقيقي كل مرة، بس مقدرش يكمّله. تقدّم حقيقي بمقياس دورة
 التصعيد (قسم 8)، مش دليل إن الفجوة اتقفلت.
 
+**تحديث (round 3، 2026-08-21):** الفجوة دي **لسه مفتوحة بالنسبة لـ
+Byparr نفسه** (upstream، مش تحت سيطرتنا — issue مقترح مسجّل، راجع
+"Antibot Provider Comparison" تحت لتفاصيل الطلب المقترح لمشروع
+Byparr). بس دلوقتي عندنا **بديل حقيقي شغّال**: `CamoufoxProvider`
+(بند 5 تحت) — بيحل بالظبط نفس نوع التحدي ده لأنه بيتحكم في توقيت
+إغلاق المتصفح بنفسه. الفرق الكامل بين الاتنين موثّق في "Antibot
+Provider Comparison" تحت، بناءً على نتايج حقيقية مش افتراض.
+
 ### 5. CamoufoxProvider crashed outright: Playwright's sync API can't share a thread with Scrapy's asyncio reactor — ✅ اتحل (round 3, 2026-08-21)
 
 **الفجوة (اكتشفت فعليًا في CI run
@@ -802,7 +810,41 @@ proof-of-work حقيقي (nonce/response hash/elapsedTime=171ms ظاهرين ف�
 متعمد: بند 2 وثّق إن الفلاجين الاتنين (`COOKIE_SECURE` و
 `COOKIE_PARTITIONED`) لازم يتظبطوا مع بعض، بس الـ commit وقتها ضاف
 `COOKIE_SECURE` بس. **✅ اتصلح فعليًا دلوقتي** — `COOKIE_PARTITIONED: "false"`
-اتضاف لـ `docker-compose.test.yml`، ونتيجته الحقيقية (هل Camoufox
-هيعدّي التحدي فعلاً المرة دي) موثّقة في
-`test_mock_target_camoufox_live.py`'s docstring ونتيجة CI الفعلية،
-مش هنا.
+اتضاف لـ `docker-compose.test.yml`.
+
+**✅✅ تأكيد نهائي (CI run [32507637737](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32507637737)):**
+بعد الفيكسين الاتنين مع بعض (deferToThread + `COOKIE_PARTITIONED=false`)،
+`test_mock_target_camoufox_gets_past_anubis_and_yields_real_posts`
+نجح فعليًا — **21/21 اختبار PASSED**، Camoufox عدّى تحدي Anubis
+الحقيقي بالكامل ورجّع posts حقيقية (مش صفر items) من `mock_target_camoufox.yaml`.
+الفجوة دي (بند 4 فوق، مأخوذة بمنظور Camoufox) اتقفلت رسميًا — أول
+اختبار حقيقي لمرونة `antibot_provider` نجح، وموثّق كـ round 3 في
+`test-environment/CHANGELOG.md`.
+
+## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
+
+مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-3 (runs
+32479883962 إلى 32507637737)، مش تخمين نظري:
+
+| | **Byparr** (`byparr_provider.py`) | **Camoufox** (`camoufox_provider.py`) |
+|---|---|---|
+| **آلية العمل** | HTTP delegation لخدمة خارجية (`/v1` API)، Chromium جوه الخدمة | متصفح Firefox-based حقيقي (Camoufox) بيتشغّل in-process |
+| **تحكم بتوقيت إغلاق المتصفح** | ❌ لأ — بيقفل فور ما `load` event يحصل، مفيش parameter لانتظار إضافي (اتأكّد منه فعليًا، README اتفحص) | ✅ أيوه — `post_load_wait_ms` قابل للتهيئة (افتراضي 5 ثواني)، بيستنى بعد `load` قبل ما يقرا المحتوى |
+| **تحديات Cloudflare Turnstile/WAF كلاسيكية** (`scrapingcourse.com/antibot-challenge`) | ✅ نجح فعليًا (`test_byparr_live_solve.py`، متكرر عبر كل الجولات) | لسه ملحقّقش عليه فعليًا لهذا النوع تحديدًا — مش مُختبر |
+| **تحديات async post-load زي Anubis's PoW الحقيقي** | ❌ فشل فعليًا وبثبات (rounds 1-3، دائمًا 0 items لسبب معماري: بيقفل قبل ما الـ JS الـ async يشتغل) | ✅ نجح فعليًا (round 3، run 32507637737 — items > 0 حقيقية) |
+| **الاعتمادية الخارجية** | محتاج خدمة Byparr شغّالة (container/service منفصل) | مفيهوش — بيتشغّل بالكامل في نفس process بتاع Scrapy |
+| **الاستهلاك** | أخف (HTTP call بس من طرفنا) | أتقل (متصفح Firefox حقيقي بيتشغّل محليًا لكل طلب) |
+
+**الخلاصة الحقيقية:** مفيش "أداة أفضل مطلقًا" — كل واحدة أقوى في نوع
+تحدي مختلف، بناءً على أدلة حقيقية مش افتراض:
+- **Byparr** لسه الافتراضي (`antibot_provider: byparr`) لأنه أخف
+  وأثبت نفسه فعليًا ضد تحديات WAF/Cloudflare-style الكلاسيكية.
+- **Camoufox** (`antibot_provider: camoufox`) هو الاختيار الصح لأي
+  تحدي بيعمل شغل حقيقي *بعد* `load` event (زي Anubis's real PoW) —
+  ده بالظبط نوع التحدي اللي Byparr's API الحالي مبنيًا هيكليًا إنه
+  يفشل فيه (مفيش parameter انتظار إضافي في بروتوكوله).
+
+**فجوة Byparr نفسها (upstream) لسه مسجّلة ومفتوحة** — مقترح GitHub
+issue كامل مكتوب في `docs/byparr-post-load-wait-issue-draft.md`
+(مش مرفوع فعليًا — الـ session ده مالوش صلاحية GitHub API لمستودعات
+تانية غير `malekazmy00`'s، اتأكّد منه فعليًا عبر `add_repo`).
