@@ -41,7 +41,15 @@
 |---|---|
 | `scrapingcourse.com/antibot-challenge` | حماية متوسطة (مُختبر بالفعل ✅) |
 | `scrapingcourse.com/cloudflare-challenge` | Cloudflare Turnstile حقيقي (مُختبر بالفعل ✅) |
-| `scrapingclub.com` | تمارين متنوعة (بما فيها CAPTCHA وinfinite scroll) بمستويات مصنّفة |
+
+> **`scrapingclub.com` اتشال من القائمة دي (2026-08-21):** عند الفحص
+> الفعلي، الدومين بالكامل بقى بيرجّع موقع كازينو غير متعلق ("Winspirit
+> Casino Australia") — مش الموقع التدريبي الأصلي خالص. اتأكد بـ fetch
+> مباشر للصفحة الرئيسية (200، محتوى كازينو) + مسار تمرين قديم معروف من
+> الموقع الأصلي (`/exercise/list_basic/` → 404). يعني الموقع اتغيّر
+> ملكيته/محتواه من وقت ما القائمة دي اتعملت، ومش target تدريبي شرعي
+> دلوقتي. التفاصيل الكاملة في `docs/REQUIREMENTS.md` قسم 6. لو محتاجين
+> بديل لمستوى 4 لاحقًا، يتضاف هنا بعد نفس فحص `legal_status`.
 
 ## المستوى 5 — واقعي معقد (بيانات كبيرة الحجم، تغيّر مستمر)
 
@@ -65,7 +73,7 @@
 ## ملحوظة قانونية
 
 كل المواقع دي إما:
-- مُصممة رسميًا لغرض التدريب (toscrape.com, scrapingcourse.com, scrapethissite.com, webscraper.io, scrapingclub.com, Oxylabs Sandbox) - إذن صريح
+- مُصممة رسميًا لغرض التدريب (toscrape.com, scrapingcourse.com, scrapethissite.com, webscraper.io, Oxylabs Sandbox) - إذن صريح
 - منصات عامة بسياسة استخدام واضحة تسمح بالوصول الآلي المعتدل (Wikipedia, Hacker News)
 
 لسه المبدأ نفسه ساري: أي target حقيقي (غير الموجودين هنا) لازم يعدي مراجعة `legal_status` مع المكتب القانوني قبل التفعيل، زي ما اتفقنا قبل كده.

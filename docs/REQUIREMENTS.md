@@ -237,12 +237,13 @@ target جديد = `configs/*.yaml` جديد + integration test حي واحد ف�
 | `scrapingcourse_pagination.yaml` | 3 | ثابت بالكامل، 13 صفحة، `a.next-page` / `rel="next"` واضح |
 | `webscraper_io_pagination.yaml` | 3 | اخترنا صفحة `pagination` (كتالوج سيارات) كتمثيل ملموس من كتالوج `webscraper.io/test-sites` المذكور بشكل عام في القائمة؛ حقل `details` (سنة/بلد/مسافة) بيرجع list واحد مش 3 حقول منفصلة لأن الثلاثة بياخدوا نفس الـ class بالظبط بدون أي تمييز — قيد في المعمارية الحالية (كل field له selector واحد جوه الـ item)، مش باج |
 
-### فجوات مُكتشفة — مش هتتغطى بـ "صفر كود جديد" (موثّقة بصراحة)
+### فجوات مُكتشفة — مش هتتغطى بـ "صفر كود جديد"
 
-| الموقع | المشكلة | السبب |
-|---|---|---|
-| `quotes.toscrape.com/login` | محتاج فعليًا FormRequest + استخراج CSRF token + إدارة session (POST) | `GenericSpider` بيعمل GET بس على `start_urls`، مفيهوش أي مسار لـ POST/forms — إضافته كود جديد حقيقي في `generic_spider.py`، مش config |
-| `quotes.toscrape.com/tableful` | كل quote منتشر على صفين `<tr>` منفصلين (نص+مؤلف في سطر، الـ tags في سطر تاني)، والنص والمؤلف نفسهم ملزوقين في text node واحد من غير أي فاصل/class | معمارية `SelectorsConfig` الحالية بتفترض item واحد = عنصر HTML واحد بكل حقوله جواه؛ الحالة دي محتاجة تجميع صفوف متعددة و/أو تقطيع نص (regex) — كود جديد |
+`quotes.toscrape.com/login` و`quotes.toscrape.com/tableful` اتسجّلوا
+رسميًا كـ **"Known Spider Limitations"** في القسم 7 تحت — مش
+"Pending Real-Network Verification": المشكلة هنا مالهاش علاقة بإثبات
+حي في بيئة بإنترنت حر، هي قيد معماري حقيقي في `GenericSpider` نفسه
+هيفضل موجود لحد ما حد يقرر يضيف كود جديد.
 
 ### المستوى 4 — `scrapingclub.com`: النتيجة نتيجة موقع، مش كود
 
@@ -266,3 +267,68 @@ config اتعمل لـ scrapingclub.com، ومفيش أي طلب scraping اتب
 مرتين بفاصل زمني حقيقي (45 ثانية) ضد الموقع الحي، ويقارن النتائج —
 النتيجة الفعلية (هل الترتيب/العناوين اتغيّرت ولا لأ) موثّقة في تقرير Test
 Targets النهائي بدل ما تتفترض.
+
+---
+
+## 7. Known Spider Limitations
+
+> **الفرق عن القسم 5 (Pending Real-Network Verification):** بند في
+> القسم 5 معناه "الكود جاهز ومُختبر، وبس محتاج إثبات حي في بيئة
+> معينة" — بيتشال لما الإثبات ده يحصل. بند هنا معناه حاجة تانية
+> تمامًا: **قيد معماري حقيقي وثابت في `GenericSpider`/`SpiderConfig`
+> النهارده** — مش هيتحل بإثبات حي ولا بانتظار بيئة معينة، هيفضل موجود
+> لحد ما حد يقرر يكتب كود جديد يعالجه فعليًا. مفيش target هنا
+> "هيشتغل بعدين لوحده".
+
+### 1. `quotes.toscrape.com/login` — POST / forms / session
+
+**الفجوة:** الصفحة دي محتاجة تسجيل دخول فعلي: `POST /login` مع
+`csrf_token` (موجود كـ hidden input بيتغيّر كل مرة) + `username` +
+`password`، وبعدين إدارة session/cookies عبر باقي الطلبات عشان الصفحة
+تفضل شايفة المستخدم مسجّل دخول.
+
+**ليه `GenericSpider` النهارده مش قادر:** الـ spider بيعمل `GET` بس
+على `start_urls` (`async def start()` / `start_requests()` كلاهم
+بيبنوا `scrapy.Request` عادي، من غير أي مفهوم لـ form/POST). مفيش أي
+مسار لـ:
+- استخراج قيمة hidden field (زي `csrf_token`) من صفحة قبل ما تبعتها
+  في طلب تاني
+- بناء `FormRequest` (POST) بدل `Request` (GET)
+- التفريق بين "طلب أول لازم يجيب توكن" و"طلب تاني بيستخدم التوكن ده"
+
+**لو قررنا نضيفها بعدين:** محتاجة كود جديد حقيقي في
+`generic_spider.py` (أو middleware مخصص) — مش `config.yaml` بس. أقل
+حاجة لازم تتضاف:
+- حقل config اختياري زي `login: {url, method: POST, form_fields,
+  csrf_selector}`
+- منطق جديد في الـ spider يعمل GET أول لصفحة اللوجن، يستخرج التوكن،
+  يبني `FormRequest` بيه، ويتأكد إن الـ session (Scrapy's
+  `CookiesMiddleware` الموجود أصلاً) بيفضل شغال في باقي الطلبات
+- unit tests جديدة تغطي: نجاح اللوجن، توكن مفقود/غير متوقع، فشل
+  الـ POST نفسه
+
+### 2. `quotes.toscrape.com/tableful` (و`hackernews.yaml` بنفس القيد جزئيًا)
+
+**الفجوة:** كل "item" منطقي منتشر على أكتر من عنصر HTML واحد، مش
+عنصر واحد بكل حقوله جواه:
+- `/tableful`: كل quote منتشر على صفين `<tr>` منفصلين (نص+مؤلف
+  ملزوقين في text node واحد من غير أي فاصل/class في الصف الأول،
+  والـ tags في صف تاني تمامًا)
+- `hackernews.yaml`: كل story منتشر على صفين `<tr>` (`tr.athing`
+  للعنوان/الرابط، وصف تاني منفصل للنقاط/عدد التعليقات) — هنا الـ
+  config بياخد بس بيانات الصف الأول (rank/title/url/site)، فمش نفس
+  درجة الفجوة (مفيش فشل، بس بيانات ناقصة موثّقة)
+
+**ليه المعمارية الحالية مش قادرة:** `SelectorsConfig` (في
+`src/spiders/spider_config.py`) بتفترض `item` = selector واحد، وكل
+`field` = selector تاني *جوه* نفس العنصر ده (`row.css(field_selector)`
+في `GenericSpider.parse()`). مفيش مفهوم لـ "اجمع الصف ده مع الصف اللي
+بعده" ولا "قطّع النص ده على أساس نمط معين" (regex/split).
+
+**لو قررنا نضيفها بعدين:** كود جديد حقيقي، مش config:
+- تجميع صفوف متعددة: مفهوم جديد زي `item_group` (عدد الصفوف اللي
+  بيتجمعوا كـ item واحد) أو selector لـ "sibling التاني"
+- تقطيع نص: قدرة اختيارية لكل field تحدد regex أو separator يقطّع بيه
+  نص واحد لأكتر من قيمة (زي فصل "quote text" عن "Author: X")
+- unit tests جديدة تغطي: تجميع صفوف ناجح، عدد صفوف غير متوقع
+  (missing sibling)، فشل الـ regex/split
