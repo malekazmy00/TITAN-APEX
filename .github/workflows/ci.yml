@@ -74,6 +74,15 @@ jobs:
           else
             echo "No integration tests yet (added from Phase 2 onward)."
           fi
+      - name: test-environment stack logs
+        # Unlike byparr/redis above, this stack isn't a `services:` entry,
+        # so its containers' logs aren't printed automatically on job
+        # cleanup -- anubis's own log is the only place that shows *why*
+        # a request it handled failed (its own request log, distinct from
+        # anything the client/provider side can observe), so print it for
+        # real before the containers are torn down.
+        if: always()
+        run: docker compose -f test-environment/docker-compose.test.yml logs anubis mock-target
       - name: test-environment stack teardown
         if: always()
         run: docker compose -f test-environment/docker-compose.test.yml down -v
