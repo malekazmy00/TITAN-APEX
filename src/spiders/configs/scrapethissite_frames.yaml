@@ -1,0 +1,21 @@
+# Level 2 target (docs/TEST_TARGETS.md): frames/iFrames training page.
+# The wrapper page (https://www.scrapethissite.com/pages/frames/) has no
+# scrapeable content of its own -- it's just an <iframe src="?frame=i">
+# shell, and GenericSpider does not execute JS or follow iframe sources
+# (only real navigations). The turtle-family data lives entirely in the
+# iframe's own document, which is a normal, directly fetchable URL, so
+# pointing start_urls at it directly is a config-only fix -- zero new code.
+name: scrapethissite_frames
+start_urls:
+  - "https://www.scrapethissite.com/pages/frames/?frame=i"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "div.turtle-family-card"
+  fields:
+    family_name: "h3.family-name::text"
+    image_url: "img.turtle-image::attr(src)"
+    learn_more_url: "a::attr(href)"

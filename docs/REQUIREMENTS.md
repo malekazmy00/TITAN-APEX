@@ -211,3 +211,58 @@ print(result)
 كلا الاختبارين بقوا جزء دائم من `ci.yml` (job-level `byparr` service +
 خطوة "Integration tests") — بيتشغّلوا فعليًا على كل push/PR، مش
 موثقين كـ "هيتحقق منهم بعدين" بس.
+
+---
+
+## 6. تغطية Test Targets (docs/TEST_TARGETS.md)
+
+توسيع منظّم لعدد الـ targets الحقيقية اللي `generic_spider.py` بيغطيها،
+حسب قائمة `docs/TEST_TARGETS.md` (19 موقع رسمي، 5 مستويات صعوبة). كل
+target جديد = `configs/*.yaml` جديد + integration test حي واحد في
+`tests/integration/` بنفس أسلوب `antibot-challenge`/`cloudflare-challenge`
+— **صفر كود جديد في `src/`**.
+
+### Configs جديدة (المستوى 1-3)
+
+| Config | المستوى | ملاحظة اكتشاف مهمة |
+|---|---|---|
+| `books_toscrape.yaml` | 1 | العنوان الظاهر مقصوص بـ "..."، لازم `h3 a::attr(title)` مش النص الظاهر |
+| `scrapethissite_simple.yaml` | 1 | كل الـ 250 دولة في صفحة واحدة، بدون pagination |
+| `scrapethissite_forms.yaml` | 1 | **باج حقيقي في الموقع نفسه** (مش عندنا): رابط "Next" في الصفحة من غير `?page_num` بيرجع لصفحة 1 نفسها بدل ما يتقدّم — الحل بـ config بس: start URL صريح `?page_num=1` |
+| `scrapethissite_frames.yaml` | 2 | صفحة الـ wrapper فاضية (iframe shell بس) — `GenericSpider` مبينفذش JS ولا بيتبع iframe src؛ الحل: start_url يشاور مباشرة على مستند الـ iframe نفسه (`?frame=i`) |
+| `scrapethissite_ajax_javascript.yaml` | 2 | المحتوى بيتحمّل بـ AJAX بس لما `document.location.hash` يبقى متظبط عند التحميل (أو click) — الحل: start URL فيه `#2015`. **احتمال فجوة زمنية حقيقية**: الموقع بيضيف تأخير JS متعمد (~1.5 ثانية) بعد رد الـ AJAX قبل ما يعرض الصفوف، وده أطول من انتظار الـ scroll-loop بعد الـ navigation — النتيجة الحقيقية موثّقة في تقرير Test Targets النهائي (اتفحصت فعليًا في CI، مش mفترضة) |
+| `quotes_toscrape_js.yaml` | 2 | نفس بيانات quotes.toscrape.com لكن مُرندرة كاملة بـ JS من array مضمّن؛ نفس الـ selectors ونفس نمط pagination (`li.next a`) بالظبط، `render_js: true` بس اللي اتغير |
+| `quotes_toscrape_scroll.yaml` | 2 | infinite scroll حقيقي (`div.quotes` فاضية في الـ HTML الثابت)، نفس نمط `scrapingcourse_infinite_scrolling.yaml` |
+| `scrapingcourse_javascript_rendering.yaml` | 3 | الـ HTML الثابت فيه 13 placeholder فاضي (name/price موجودين بس من غير نص) — `render_js: true` إلزامي |
+| `scrapingcourse_pagination.yaml` | 3 | ثابت بالكامل، 13 صفحة، `a.next-page` / `rel="next"` واضح |
+| `webscraper_io_pagination.yaml` | 3 | اخترنا صفحة `pagination` (كتالوج سيارات) كتمثيل ملموس من كتالوج `webscraper.io/test-sites` المذكور بشكل عام في القائمة؛ حقل `details` (سنة/بلد/مسافة) بيرجع list واحد مش 3 حقول منفصلة لأن الثلاثة بياخدوا نفس الـ class بالظبط بدون أي تمييز — قيد في المعمارية الحالية (كل field له selector واحد جوه الـ item)، مش باج |
+
+### فجوات مُكتشفة — مش هتتغطى بـ "صفر كود جديد" (موثّقة بصراحة)
+
+| الموقع | المشكلة | السبب |
+|---|---|---|
+| `quotes.toscrape.com/login` | محتاج فعليًا FormRequest + استخراج CSRF token + إدارة session (POST) | `GenericSpider` بيعمل GET بس على `start_urls`، مفيهوش أي مسار لـ POST/forms — إضافته كود جديد حقيقي في `generic_spider.py`، مش config |
+| `quotes.toscrape.com/tableful` | كل quote منتشر على صفين `<tr>` منفصلين (نص+مؤلف في سطر، الـ tags في سطر تاني)، والنص والمؤلف نفسهم ملزوقين في text node واحد من غير أي فاصل/class | معمارية `SelectorsConfig` الحالية بتفترض item واحد = عنصر HTML واحد بكل حقوله جواه؛ الحالة دي محتاجة تجميع صفوف متعددة و/أو تقطيع نص (regex) — كود جديد |
+
+### المستوى 4 — `scrapingclub.com`: النتيجة نتيجة موقع، مش كود
+
+عند الفحص الفعلي (2026-08-21)، دومين `scrapingclub.com` بالكامل بقى
+بيرجّع موقع كازينو غير متعلق ("Winspirit Casino Australia") — `curl` على
+الصفحة الرئيسية والمسارات المعروفة من الموقع الأصلي
+(`/exercise/list_basic/`) بترجع 404 على المسار القديم و200 على صفحة
+الكازينو. يعني الموقع اتغيّر ملكيته/محتواه من وقت ما القائمة اتعملت. **مفيش
+config اتعمل لـ scrapingclub.com، ومفيش أي طلب scraping اتبعت غير طلبين
+تحقّق (GET صفحة رئيسية + مسار تمرين قديم)** — مش target تدريبي شرعي
+دلوقتي، والفشل ده مالوش علاقة بـ Byparr ولا `CircuitBreakerMiddleware`.
+يُنصح بشطبه من `TEST_TARGETS.md` أو استبداله بموقع بديل لاحقًا.
+
+### المستوى 5 — `hackernews.yaml`
+
+بيانات متغيّرة فعليًا (مش ثابتة زي كل target سابق). كل story منتشر على
+صفين `<tr>` منفصلين (زي `/tableful`) — الـ config بياخد بس الحقول
+اللي في `tr.athing` نفسها (rank/title/url/site)؛ النقاط وعدد التعليقات
+موجودين في صف تاني منفصل، فمش متاحين بدون نفس التوسعة المعمارية المذكورة
+فوق. اختبار `tests/integration/test_hackernews_live.py` بيشغّل الكراول
+مرتين بفاصل زمني حقيقي (45 ثانية) ضد الموقع الحي، ويقارن النتائج —
+النتيجة الفعلية (هل الترتيب/العناوين اتغيّرت ولا لأ) موثّقة في تقرير Test
+Targets النهائي بدل ما تتفترض.

@@ -1,0 +1,22 @@
+# Level 2 target (docs/TEST_TARGETS.md): the same quotes data as
+# quotes_toscrape.yaml, but rendered client-side from an embedded JS
+# array (https://quotes.toscrape.com/js/). Confirmed by investigation:
+# the static HTML has zero "div.quote" elements -- the JS-rendered markup
+# uses the exact same classes as the static site (quote/text/author/tags)
+# and the same "li.next a" pagination pattern, so render_js is the only
+# thing that changes versus quotes_toscrape.yaml.
+name: quotes_toscrape_js
+start_urls:
+  - "https://quotes.toscrape.com/js/"
+allowed_domains:
+  - "quotes.toscrape.com"
+rate_limit: 1.0
+render_js: true
+max_concurrency: 2
+selectors:
+  item: "div.quote"
+  fields:
+    text: "span.text::text"
+    author: "small.author::text"
+    tags: "div.tags a.tag::text"
+next_page: "li.next a::attr(href)"

@@ -1,0 +1,17 @@
+# Level 3 target (docs/TEST_TARGETS.md): numbered-pagination product
+# catalog (https://www.scrapingcourse.com/pagination), 13 pages of static
+# HTML -- no JS needed to see products or the "Next page" link.
+name: scrapingcourse_pagination
+start_urls:
+  - "https://www.scrapingcourse.com/pagination"
+allowed_domains:
+  - "www.scrapingcourse.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "div.product-item"
+  fields:
+    name: "span.product-name::text"
+    price: "span.product-price::text"
+next_page: "a.next-page::attr(href)"

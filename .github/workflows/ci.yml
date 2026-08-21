@@ -33,8 +33,13 @@ jobs:
         run: pytest tests/unit -v --cov=src --cov-fail-under=85
       - name: Contract tests
         run: pytest tests/contract -v
-      - name: Integration tests (live network -- Playwright render, Byparr solve)
-        timeout-minutes: 6
+      - name: Integration tests (live network -- Playwright render, Byparr solve, Test Targets)
+        # Bumped from 6 -> 12 when the Test Targets configs/tests were added
+        # (docs/TEST_TARGETS.md): more live sites, several of them
+        # render_js (a fresh headless-browser launch per page), plus
+        # test_hackernews_live.py's deliberate 45s gap between its two
+        # live runs.
+        timeout-minutes: 12
         run: |
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             pytest tests/integration -v

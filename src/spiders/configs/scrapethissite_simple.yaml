@@ -1,0 +1,18 @@
+# Level 1 target (docs/TEST_TARGETS.md): official tabular-data training
+# page (https://www.scrapethissite.com/pages/simple/). All 250 countries
+# render on a single static page -- no pagination needed.
+name: scrapethissite_simple
+start_urls:
+  - "https://www.scrapethissite.com/pages/simple/"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "div.country"
+  fields:
+    name: "h3.country-name::text"
+    capital: "span.country-capital::text"
+    population: "span.country-population::text"
+    area: "span.country-area::text"

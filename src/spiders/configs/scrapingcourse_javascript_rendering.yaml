@@ -1,0 +1,19 @@
+# Level 3 target (docs/TEST_TARGETS.md): pure-JS product grid
+# (https://www.scrapingcourse.com/javascript-rendering). Confirmed by
+# investigation: the static HTML ships 13 empty product placeholders
+# (name/price spans present but with no text) -- content is injected
+# entirely by JS -- so render_js is required. No pagination on this
+# target.
+name: scrapingcourse_javascript_rendering
+start_urls:
+  - "https://www.scrapingcourse.com/javascript-rendering"
+allowed_domains:
+  - "www.scrapingcourse.com"
+rate_limit: 1.0
+render_js: true
+max_concurrency: 2
+selectors:
+  item: "div.product-item"
+  fields:
+    name: "span[data-testid='product-name']::text"
+    price: "span.product-price::text"

@@ -1,0 +1,21 @@
+# Level 2 target (docs/TEST_TARGETS.md): true infinite-scroll variant of
+# quotes.toscrape.com (https://quotes.toscrape.com/scroll). Confirmed by
+# investigation: the static HTML ships an empty "div.quotes" container
+# and loads quotes progressively via JS as the page is scrolled -- same
+# shape as scrapingcourse_infinite_scrolling.yaml, so no next_page here;
+# PlaywrightMiddleware's scroll-to-bottom loop is what pulls in more than
+# the first batch.
+name: quotes_toscrape_scroll
+start_urls:
+  - "https://quotes.toscrape.com/scroll"
+allowed_domains:
+  - "quotes.toscrape.com"
+rate_limit: 1.0
+render_js: true
+max_concurrency: 2
+selectors:
+  item: "div.quote"
+  fields:
+    text: "span.text::text"
+    author: "small.author::text"
+    tags: "div.tags a.tag::text"

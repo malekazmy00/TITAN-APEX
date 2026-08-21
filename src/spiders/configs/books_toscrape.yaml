@@ -1,0 +1,20 @@
+# Level 1 target (docs/TEST_TARGETS.md): official static-HTML book
+# catalog (https://books.toscrape.com/). No anti-bot, no JS -- pure
+# pagination + text extraction, a good baseline regression target.
+name: books_toscrape
+start_urls:
+  - "https://books.toscrape.com/"
+allowed_domains:
+  - "books.toscrape.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "article.product_pod"
+  fields:
+    # The visible <a> text is truncated with "..."; the untruncated title
+    # only exists in the anchor's title attribute.
+    title: "h3 a::attr(title)"
+    price: "p.price_color::text"
+    availability: "p.instock.availability::text"
+next_page: "li.next a::attr(href)"

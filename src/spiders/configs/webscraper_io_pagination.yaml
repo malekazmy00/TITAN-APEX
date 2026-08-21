@@ -1,0 +1,26 @@
+# Level 3 target (docs/TEST_TARGETS.md): official Web Scraper Chrome
+# extension test catalog -- the classic-cars pagination site
+# (https://webscraper.io/test-sites/pagination), a concrete, well-known
+# page from the broader "webscraper.io/test-sites" collection referenced
+# in TEST_TARGETS.md. Static HTML, 17 numbered pages.
+name: webscraper_io_pagination
+start_urls:
+  - "https://webscraper.io/test-sites/pagination"
+allowed_domains:
+  - "webscraper.io"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "div.card.sitemap-card"
+  fields:
+    name: "h3.card-title a::text"
+    description: "p.description::text"
+    price: "p.price span[itemprop='price']::text"
+    # Year / country of origin / mileage share one identical class
+    # (p.card-text) with no distinguishing marker per field, so they
+    # come back as one ordered list rather than three separate fields --
+    # a config-only limitation of a single item's fields all needing
+    # their own selector, not a bug.
+    details: "p.card-text::text"
+next_page: "a.page-link.next::attr(href)"

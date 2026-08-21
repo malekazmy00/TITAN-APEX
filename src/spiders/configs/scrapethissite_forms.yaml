@@ -1,0 +1,32 @@
+# Level 1 target (docs/TEST_TARGETS.md): official tabular NHL-stats
+# training page with numbered pagination
+# (https://www.scrapethissite.com/pages/forms/).
+#
+# Site quirk found during investigation: the bare URL (no ?page_num query
+# param) renders a "Next" link that points back to ?page_num=1 -- a
+# genuine bug on the target's own site, not ours -- which would make the
+# spider loop on page 1 forever. Starting the crawl at the explicit
+# "?page_num=1" URL avoids it (confirmed: that page's own "Next" link
+# correctly points to ?page_num=2). Zero spider code changed; this is a
+# config-only workaround.
+name: scrapethissite_forms
+start_urls:
+  - "https://www.scrapethissite.com/pages/forms/?page_num=1"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 2
+selectors:
+  item: "tr.team"
+  fields:
+    name: "td.name::text"
+    year: "td.year::text"
+    wins: "td.wins::text"
+    losses: "td.losses::text"
+    ot_losses: "td.ot-losses::text"
+    win_pct: "td.pct::text"
+    goals_for: "td.gf::text"
+    goals_against: "td.ga::text"
+    diff: "td.diff::text"
+next_page: "a[aria-label='Next']::attr(href)"

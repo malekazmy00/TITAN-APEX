@@ -33,7 +33,14 @@ a new spider class.
 3. Add a fixture (a saved HTML snapshot) under `tests/fixtures/targets/` and
    a unit test in `tests/unit/spiders/` asserting `GenericSpider.parse()`
    extracts the fields you expect — following the pattern in
-   `tests/unit/spiders/test_generic_spider.py`.
+   `tests/unit/spiders/test_generic_spider.py`. In practice, every real
+   target added so far (see `docs/TEST_TARGETS.md`) instead gets a live
+   `tests/integration/test_<target>_live.py` that runs the real config
+   against the real site via `scrapy runspider` in a subprocess and
+   asserts on the real scraped content — `SpiderConfig`/`GenericSpider`
+   themselves are already covered generically by `tests/unit/spiders/`,
+   so a per-config test's job is to prove the *selectors* work against
+   the real live page, which a static fixture can't do.
 
 4. If the target requires anti-bot handling (Cloudflare or similar), set
    `antibot_needed: true` — this routes the request through

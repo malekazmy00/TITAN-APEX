@@ -1,0 +1,26 @@
+# Level 5 target (docs/TEST_TARGETS.md): Hacker News front page
+# (https://news.ycombinator.com/) -- genuinely changing data (ranking,
+# story set) between any two runs, unlike every static/fixed-content
+# target used so far. Static HTML, no anti-bot, no JS needed.
+#
+# Investigation note: each story spans two sibling <tr> rows
+# (".athing" for the title/rank/link, a separate following <tr> for
+# score/author/comment-count) with no shared wrapping element, so a
+# single-selector "item" can only cleanly reach the first row's fields
+# (rank/title/url/site) -- score and comment count are not reachable
+# without a new "multi-row item" capability. See the Test Targets report.
+name: hackernews
+start_urls:
+  - "https://news.ycombinator.com/"
+allowed_domains:
+  - "news.ycombinator.com"
+rate_limit: 1.0
+render_js: false
+max_concurrency: 1
+selectors:
+  item: "tr.athing"
+  fields:
+    rank: "span.rank::text"
+    title: "span.titleline a::text"
+    url: "span.titleline a::attr(href)"
+    site: "span.sitestr::text"

@@ -13,7 +13,10 @@ together.
 
 - Interfaces: `src/core/interfaces/{antibot_provider,storage_backend,ai_analyzer}.py`
 - Config-driven spider: `src/spiders/generic_spider.py` — targets in
-  `src/spiders/configs/*.yaml`
+  `src/spiders/configs/*.yaml` (14 targets across Test Targets levels
+  1-3 and 5, see `docs/TEST_TARGETS.md` and `docs/REQUIREMENTS.md`
+  section 6 for coverage, discovered site quirks, and honestly-documented
+  gaps that need real spider code, not config)
 - Middlewares: `retry_backoff.py`, `circuit_breaker.py`,
   `playwright_middleware.py`, `byparr_middleware.py`
 - Structured JSON logging: `src/logging_config.py`
