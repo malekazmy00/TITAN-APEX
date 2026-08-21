@@ -741,3 +741,44 @@ third-party)، مش تعديل سريع.
 دلوقتي لسبب مختلف تمامًا وأعمق من الجولة الأولى — بيوصل فعليًا لتحدي
 Anubis الحقيقي كل مرة، بس مقدرش يكمّله. تقدّم حقيقي بمقياس دورة
 التصعيد (قسم 8)، مش دليل إن الفجوة اتقفلت.
+
+### 5. CamoufoxProvider crashed outright: Playwright's sync API can't share a thread with Scrapy's asyncio reactor — ✅ اتحل (round 3, 2026-08-21)
+
+**الفجوة (اكتشفت فعليًا في CI run
+[32503723559](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32503723559)،
+مش افتراض — الدليل جه من diagnostic logging اتضاف فورًا لما النتيجة
+الأولى كانت 0 items من غير أي سبب واضح):** `CamoufoxProvider.solve()`
+كان بيتنادى مباشرة من جوه `ByparrMiddleware.process_request()` —
+synchronous، على نفس الـ thread بتاع Scrapy's asyncio reactor. Camoufox
+(زي Playwright نفسه) بيرفض يشتغل كده، ورمى استثناء واضح جدًا فوري:
+```
+camoufox failed to solve http://localhost:8080/: It looks like you are
+using Playwright Sync API inside the asyncio loop.
+Please use the Async API instead.
+```
+يعني الكراول كان بيفشل فورًا (مش حتى بيوصل لـ Anubis بشكل حقيقي)،
+والنتيجة (0 items) كانت بتوهم إن المشكلة في التحدي نفسه — لغاية ما
+diagnostic logging (`camoufox_provider.solved`/`solve_failed` +
+طباعة stderr الحقيقي في `run_spider_live`) كشفت السبب الحقيقي.
+
+**ليه المعمارية الحالية مش كانت قادرة:** `PlaywrightMiddleware` عنده
+بالظبط نفس القيد ده من زمان، وحلّه بالفعل عبر `deferToThread` (تشغيل
+الـ renderer على thread منفصل، مش على reactor thread) —
+`ByparrMiddleware` مكانش بيعمل نفس الحاجة لأن `ByparrProvider`'s HTTP
+call العادي (`urllib`) مالوش نفس القيد، فمكانش محتاج thread hop. لما
+`CamoufoxProvider` (أول provider بيشغّل Playwright حقيقي) اتضاف، نفس
+القيد ظهر تاني.
+
+**✅ الحل:** `ByparrMiddleware.process_request()` دلوقتي بيرجّع نتيجة
+`self._thread_runner(self._solve, request)` — نفس الشكل بالظبط بتاع
+`PlaywrightMiddleware` (`deferToThread` افتراضيًا، قابل للحقن
+لل unit tests زي `_sync_thread_runner`). ده كمان بيحسّن حاجة تانية
+جانبية: طلب Byparr HTTP البطيء نفسه مش هيوقف الـ reactor thread تاني.
+unit test جديد (`test_process_request_defaults_to_a_real_thread_runner`)
+بيتأكد إن النتيجة الافتراضية فعلاً `Deferred` حقيقي، مش استدعاء مباشر.
+
+**النتيجة العملية:** الفجوة دي (crash فوري) اتقفلت رسميًا — الاختبار
+اتّحقّق منه محليًا (145 unit tests + 14 contract tests PASSED) قبل
+الدفع. **هل ده كفى Camoufox يعدّي تحدي Anubis فعليًا؟** — النتيجة
+الحقيقية موثّقة في `test_mock_target_camoufox_live.py`'s docstring
+ونتيجة CI الفعلية، مش هنا (تفاصيل الفجوة/الحل بس هنا زي المعتاد).

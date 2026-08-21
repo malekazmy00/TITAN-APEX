@@ -1,4 +1,11 @@
-"""Unit tests for src/middlewares/byparr_middleware.py."""
+"""Unit tests for src/middlewares/byparr_middleware.py.
+
+No real thread/Deferred is used here: the thread runner is injected
+(``_sync_thread_runner``), the same idiom test_playwright_middleware.py
+already uses for the identical reason (Playwright's sync API -- which
+CamoufoxProvider now also drives -- cannot share a thread with Scrapy's
+own asyncio reactor, docs/REQUIREMENTS.md section 9 entry 5).
+"""
 
 from __future__ import annotations
 
@@ -10,6 +17,11 @@ from scrapy.http import HtmlResponse, Request
 from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider, Solution
 from src.middlewares.byparr_middleware import ByparrMiddleware
+
+
+def _sync_thread_runner(solve_fn, request):  # type: ignore[no-untyped-def]
+    """Runs the solve function synchronously in-line (no real thread/Deferred)."""
+    return solve_fn(request)
 
 
 class _FakeProvider(AntibotProvider):
@@ -34,7 +46,9 @@ def test_process_request_returns_response_with_cookies_for_flagged_request() -> 
         cookies={"session": "abc", "cf_clearance": "xyz"},
         solved_at=datetime.now(tz=UTC),
     )
-    middleware = ByparrMiddleware(byparr_provider=_FakeProvider(solution=solution))
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(solution=solution), thread_runner=_sync_thread_runner
+    )
     request = Request("https://example.com/", meta={"antibot_needed": True})
 
     result = middleware.process_request(request, spider=object())
@@ -47,7 +61,9 @@ def test_process_request_returns_response_with_cookies_for_flagged_request() -> 
 
 
 def test_process_request_ignores_requests_without_the_flag() -> None:
-    middleware = ByparrMiddleware(byparr_provider=_FakeProvider())
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(), thread_runner=_sync_thread_runner
+    )
     request = Request("https://example.com/")
 
     result = middleware.process_request(request, spider=object())
@@ -66,7 +82,9 @@ def test_process_request_falls_back_when_no_provider_configured() -> None:
         def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
             logged.append(msg)
 
-    middleware = ByparrMiddleware(byparr_provider=None, logger=_FakeLogger())  # type: ignore[arg-type]
+    middleware = ByparrMiddleware(
+        byparr_provider=None, logger=_FakeLogger(), thread_runner=_sync_thread_runner  # type: ignore[arg-type]
+    )
     request = Request("https://example.com/", meta={"antibot_needed": True})
 
     result = middleware.process_request(request, spider=object())
@@ -89,6 +107,7 @@ def test_process_request_falls_back_and_logs_when_provider_fails() -> None:
     middleware = ByparrMiddleware(
         byparr_provider=_FakeProvider(error=AntibotError("challenge unsolvable")),
         logger=_FakeLogger(),  # type: ignore[arg-type]
+        thread_runner=_sync_thread_runner,
     )
     request = Request("https://example.com/", meta={"antibot_needed": True})
 
@@ -121,6 +140,7 @@ def test_process_request_routes_to_camoufox_when_selected() -> None:
     middleware = ByparrMiddleware(
         byparr_provider=_FakeProvider(solution=byparr_solution),
         camoufox_provider=_FakeProvider(solution=camoufox_solution),
+        thread_runner=_sync_thread_runner,
     )
     request = Request(
         "https://example.com/", meta={"antibot_needed": True, "antibot_provider": "camoufox"}
@@ -143,6 +163,7 @@ def test_process_request_defaults_to_byparr_when_provider_not_set_in_meta() -> N
     middleware = ByparrMiddleware(
         byparr_provider=_FakeProvider(solution=byparr_solution),
         camoufox_provider=_FakeProvider(error=AntibotError("should never be called")),
+        thread_runner=_sync_thread_runner,
     )
     request = Request("https://example.com/", meta={"antibot_needed": True})
 
@@ -165,7 +186,9 @@ def test_process_request_falls_back_on_unknown_provider_name() -> None:
             logged.append((msg, extra or {}))
 
     middleware = ByparrMiddleware(
-        byparr_provider=_FakeProvider(), logger=_FakeLogger()  # type: ignore[arg-type]
+        byparr_provider=_FakeProvider(),
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+        thread_runner=_sync_thread_runner,
     )
     request = Request(
         "https://example.com/", meta={"antibot_needed": True, "antibot_provider": "nope"}
@@ -177,6 +200,21 @@ def test_process_request_falls_back_on_unknown_provider_name() -> None:
     message, extra = logged[0]
     assert message == "byparr_middleware.not_configured_fallback"
     assert extra["provider"] == "nope"
+
+
+def test_process_request_defaults_to_a_real_thread_runner() -> None:
+    """No thread_runner injected -- process_request must actually hand off
+    to deferToThread (a real Deferred, not the solved Response directly),
+    the whole reason this middleware runs solving off the reactor thread
+    at all (docs/REQUIREMENTS.md section 9 entry 5)."""
+    from twisted.internet.defer import Deferred
+
+    middleware = ByparrMiddleware(byparr_provider=_FakeProvider())
+    request = Request("https://example.com/", meta={"antibot_needed": True})
+
+    result = middleware.process_request(request, spider=object())
+
+    assert isinstance(result, Deferred)
 
 
 def test_from_crawler_without_url_builds_middleware_with_no_byparr_provider(

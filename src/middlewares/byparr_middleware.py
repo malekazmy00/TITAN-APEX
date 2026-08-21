@@ -17,6 +17,17 @@ implementation a target selects, never target-specific code (section 1's
 same interface, plumbed in here once, not new code anywhere that depends
 on it.
 
+Provider solving runs off the Twisted reactor thread (``deferToThread``),
+the same way ``PlaywrightMiddleware`` already has to for its own renderer
+— not an optional nicety here: confirmed for real
+(docs/REQUIREMENTS.md section 9 entry 5) that ``CamoufoxProvider``, which
+drives a real Playwright-based browser directly, crashes outright
+("Playwright Sync API inside the asyncio loop") when called straight from
+``process_request`` on Scrapy's own asyncio-reactor thread. ByparrProvider
+(plain blocking HTTP) never technically needed the thread hop, but doesn't
+mind it either — this also stops a slow Byparr solve from blocking the
+reactor thread, a genuine (if secondary) improvement.
+
 Cookie management is automatic: the solved session's cookies are attached
 to the response as ``Set-Cookie`` headers, so Scrapy's own
 ``CookiesMiddleware`` (already in the default chain) picks them up and
@@ -25,18 +36,21 @@ needed here.
 
 Fallback is explicit and logged, never a crash: if the selected provider
 isn't configured, or it fails, the request is handed back to the normal
-downloader (``process_request`` returns ``None``) instead of dropping the
+downloader (the resolved response is ``None``) instead of dropping the
 request or raising.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from logging import Logger
 from typing import Any
 
 from scrapy.http import HtmlResponse, Request, Response
 from scrapy.http.headers import Headers
+from twisted.internet.defer import Deferred
+from twisted.internet.threads import deferToThread
 
 from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider
@@ -45,6 +59,14 @@ from src.providers.antibot.byparr_provider import ByparrProvider
 from src.providers.antibot.camoufox_provider import CamoufoxProvider
 
 DEFAULT_PROVIDER_NAME = "byparr"
+
+ThreadRunner = Callable[[Callable[[Request], "Response | None"], Request], Any]
+
+
+def _default_thread_runner(
+    solve_fn: Callable[[Request], Response | None], request: Request
+) -> Deferred[Response | None]:
+    return deferToThread(solve_fn, request)
 
 
 class ByparrMiddleware:
@@ -56,12 +78,14 @@ class ByparrMiddleware:
         byparr_provider: AntibotProvider | None = None,
         camoufox_provider: AntibotProvider | None = None,
         logger: Logger | None = None,
+        thread_runner: ThreadRunner | None = None,
     ) -> None:
         self._providers: dict[str, AntibotProvider | None] = {
             "byparr": byparr_provider,
             "camoufox": camoufox_provider,
         }
         self.logger = logger or get_logger(__name__)
+        self._thread_runner = thread_runner or _default_thread_runner
 
     @property
     def provider(self) -> AntibotProvider | None:
@@ -92,10 +116,12 @@ class ByparrMiddleware:
         camoufox_provider: AntibotProvider = CamoufoxProvider()
         return cls(byparr_provider=byparr_provider, camoufox_provider=camoufox_provider)
 
-    def process_request(self, request: Request, spider: Any) -> Response | None:
+    def process_request(self, request: Request, spider: Any) -> Any:
         if not request.meta.get("antibot_needed"):
             return None
+        return self._thread_runner(self._solve, request)
 
+    def _solve(self, request: Request) -> Response | None:
         provider_name = request.meta.get("antibot_provider") or DEFAULT_PROVIDER_NAME
         provider = self._providers.get(provider_name)
         if provider is None:
