@@ -880,33 +880,72 @@ Camoufox: happy path + 5 حالات فشل/حواف) + دمجه في `SpiderConf
 
 **`mock_target_patchright.yaml` + `test_mock_target_patchright_live.py`**
 اتضافوا لتشغيله فعليًا ضد نفس تحدي Anubis اللي Byparr فشل فيه
-وCamoufox عدّاه — **النتيجة لسه مش معروفة لحد ما CI الحقيقي يشتغل**
-(مش مفروض إن نجاح Camoufox معناه نجاح Patchright تلقائيًا — محرك
-مختلف، طبقة stealth مختلفة). هيتوثّق هنا وفي
-`test-environment/CHANGELOG.md` بمجرد ما النتيجة الحقيقية توصل.
+وCamoufox عدّاه.
+
+**❌ النتيجة الحقيقية (CI run [32524934383](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32524934383)):
+Patchright فشل — بس بسبب مختلف تمامًا وأعمق من فجوة Byparr.**
+`patchright_provider.solved`'s diagnostic log نفسه أظهر
+`"title": "Oh noes!"` (صفحة رفض Anubis) و`"cookie_names": []`. لوج
+Anubis نفسه (اللي اتضاف للـ CI مخصوص لهذا النوع من التشخيص) أوضّح
+السبب الجذري بالظبط:
+```
+"msg":"explicit deny", ... "check_result":{"name":"bot/headless-chrome","rule":"DENY","weight":0}
+```
+Anubis عنده rule مدمج بيتعرّف على fingerprint بتاع headless Chromium
+وبيرفضه صراحة — **قبل ما يوصل حتى لمرحلة تحدي الـ proof-of-work
+خالص**. طبقة stealth بتاعة Patchright بتعدّل fingerprints Chromium's
+automation، بس مش كفاية عشان تتخطى الـ rule ده تحديدًا في الـ
+deployment الحقيقي ده. الفرق الجوهري عن فجوة Byparr (بند 4): Byparr
+بيوصل فعليًا للتحدي ويستلمه بس بيقفل المتصفح قبل ما يكمّله (فجوة
+توقيت)، أما Patchright فمبيوصلش للتحدي أصلاً (fingerprint match) —
+يعني `post_load_wait_ms` (السبب الأساسي اللي Patchright موجود
+عشانه، زي Camoufox بالظبط) **معندوش فرصة يأثّر خالص هنا**، لأن
+الطلب اتّرفض قبل ما `load` حتى يحصل.
+
+**القرار:** بدل ما يفضل الاختبار فاشل (أحمر) في CI، اتحوّل لنفس
+النمط اللي `test_mock_target_live.py` بالفعل بيستخدمه لفجوة Byparr
+المؤكدة — assertion بيوثّق النتيجة الحقيقية المعروفة (صفر items،
+بسبب rejection صريح من Anubis) كـ regression sentinel، مش أمل. لو
+النتيجة اتغيّرت مستقبلًا (rule بتاع Anubis اتغيّر، أو طبقة stealth
+بتاعة Patchright اتحسّنت)، الاختبار يتحدّث وقتها.
+
+**قرار nodriver (شرط المستخدم الصريح: "لو الاتنين فشلوا مع
+Anubis"):** الشرط ده **مش متحقق** — Camoufox نجح فعليًا (round 3،
+run 32507637737)، فمش الاتنين فشلوا، Patchright بس. عندنا بالفعل
+بديل حقيقي شغّال لنفس نوع التحدي ده (Camoufox). **مفيش داعي لـ
+nodriver دلوقتي** بناءً على الشرط اللي اتحدد، مش قرار تقني إن
+nodriver مش هيفرق — لو المستخدم عايز redundancy إضافي أو تحدي مستقبلي
+تاني يحتاجه، ده قرار منفصل.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
-مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-3 (runs
-32479883962 إلى 32507637737)، مش تخمين نظري:
+مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
+32479883962 إلى 32524934383)، مش تخمين نظري:
 
-| | **Byparr** (`byparr_provider.py`) | **Camoufox** (`camoufox_provider.py`) |
-|---|---|---|
-| **آلية العمل** | HTTP delegation لخدمة خارجية (`/v1` API)، Chromium جوه الخدمة | متصفح Firefox-based حقيقي (Camoufox) بيتشغّل in-process |
-| **تحكم بتوقيت إغلاق المتصفح** | ❌ لأ — بيقفل فور ما `load` event يحصل، مفيش parameter لانتظار إضافي (اتأكّد منه فعليًا، README اتفحص) | ✅ أيوه — `post_load_wait_ms` قابل للتهيئة (افتراضي 5 ثواني)، بيستنى بعد `load` قبل ما يقرا المحتوى |
-| **تحديات Cloudflare Turnstile/WAF كلاسيكية** (`scrapingcourse.com/antibot-challenge`) | ✅ نجح فعليًا (`test_byparr_live_solve.py`، متكرر عبر كل الجولات) | لسه ملحقّقش عليه فعليًا لهذا النوع تحديدًا — مش مُختبر |
-| **تحديات async post-load زي Anubis's PoW الحقيقي** | ❌ فشل فعليًا وبثبات (rounds 1-3، دائمًا 0 items لسبب معماري: بيقفل قبل ما الـ JS الـ async يشتغل) | ✅ نجح فعليًا (round 3، run 32507637737 — items > 0 حقيقية) |
-| **الاعتمادية الخارجية** | محتاج خدمة Byparr شغّالة (container/service منفصل) | مفيهوش — بيتشغّل بالكامل في نفس process بتاع Scrapy |
-| **الاستهلاك** | أخف (HTTP call بس من طرفنا) | أتقل (متصفح Firefox حقيقي بيتشغّل محليًا لكل طلب) |
+| | **Byparr** (`byparr_provider.py`) | **Camoufox** (`camoufox_provider.py`) | **Patchright** (`patchright_provider.py`) |
+|---|---|---|---|
+| **آلية العمل** | HTTP delegation لخدمة خارجية (`/v1` API)، Chromium جوه الخدمة | متصفح Firefox-based حقيقي (Camoufox) بيتشغّل in-process | متصفح Chromium حقيقي (Patchright، drop-in Playwright replacement + stealth layer) بيتشغّل in-process |
+| **تحكم بتوقيت إغلاق المتصفح** | ❌ لأ — بيقفل فور ما `load` event يحصل، مفيش parameter لانتظار إضافي (اتأكّد منه فعليًا، README اتفحص) | ✅ أيوه — `post_load_wait_ms` قابل للتهيئة (افتراضي 5 ثواني) | ✅ أيوه — نفس `post_load_wait_ms` بالظبط، بس (اتأكّد فعليًا) معندوش فرصة يأثّر لو Anubis رفض الطلب قبل `load` أصلاً |
+| **تحديات Cloudflare Turnstile/WAF كلاسيكية** (`scrapingcourse.com/antibot-challenge`) | ✅ نجح فعليًا (`test_byparr_live_solve.py`، متكرر عبر كل الجولات) | لسه ملحقّقش عليه فعليًا لهذا النوع تحديدًا — مش مُختبر | لسه ملحقّقش عليه فعليًا لهذا النوع تحديدًا — مش مُختبر |
+| **تحديات async post-load زي Anubis's PoW الحقيقي** | ❌ فشل فعليًا وبثبات (rounds 1-3، دائمًا 0 items لسبب معماري: بيقفل قبل ما الـ JS الـ async يشتغل) | ✅ نجح فعليًا (round 3، run 32507637737 — items > 0 حقيقية) | ❌ فشل فعليًا (round 4، run 32524934383) — **لسبب مختلف عن الاتنين**: Anubis's `bot/headless-chrome` fingerprint rule بيرفضه explicit deny قبل حتى مرحلة التحدي |
+| **الاعتمادية الخارجية** | محتاج خدمة Byparr شغّالة (container/service منفصل) | مفيهوش — بيتشغّل بالكامل في نفس process بتاع Scrapy | مفيهوش — بيتشغّل بالكامل في نفس process بتاع Scrapy |
+| **الاستهلاك** | أخف (HTTP call بس من طرفنا) | أتقل (متصفح Firefox حقيقي بيتشغّل محليًا لكل طلب) | أخف من Camoufox (بيعيد استخدام Playwright/Chromium الموجود + stealth layer بس)، بس أتقل من Byparr |
 
-**الخلاصة الحقيقية:** مفيش "أداة أفضل مطلقًا" — كل واحدة أقوى في نوع
-تحدي مختلف، بناءً على أدلة حقيقية مش افتراض:
+**الخلاصة الحقيقية (محدّثة بعد round 4):** مفيش "أداة أفضل مطلقًا" —
+كل واحدة أقوى (أو أضعف) في نوع تحدي مختلف، بناءً على أدلة حقيقية مش
+افتراض:
 - **Byparr** لسه الافتراضي (`antibot_provider: byparr`) لأنه أخف
   وأثبت نفسه فعليًا ضد تحديات WAF/Cloudflare-style الكلاسيكية.
 - **Camoufox** (`antibot_provider: camoufox`) هو الاختيار الصح لأي
   تحدي بيعمل شغل حقيقي *بعد* `load` event (زي Anubis's real PoW) —
   ده بالظبط نوع التحدي اللي Byparr's API الحالي مبنيًا هيكليًا إنه
   يفشل فيه (مفيش parameter انتظار إضافي في بروتوكوله).
+- **Patchright** (`antibot_provider: patchright`) أخف من Camoufox
+  فعليًا، بس **مش بديل عنه لتحديات fingerprint-based زي Anubis's
+  `bot/headless-chrome` rule** — اتأكّد فعليًا إنه بيترفض قبل حتى
+  مرحلة التحدي. الخيار الصح ليه (لسه لازم يتأكّد فعليًا، مش افتراض)
+  هو تحديات أخف مايحتجوش تحمّل fingerprint كامل مختلف عن Chromium
+  العادي — مش تحديات بتستهدف Chromium/headless-Chrome تحديدًا.
 
 **فجوة Byparr نفسها (upstream) لسه مسجّلة ومفتوحة** — مقترح GitHub
 issue كامل مكتوب في `docs/byparr-post-load-wait-issue-draft.md`
