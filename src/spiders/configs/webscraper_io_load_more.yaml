@@ -1,0 +1,28 @@
+# Tier 2 target (docs/TEST_TARGETS.md): webscraper.io's "Load More"
+# classic-cars catalog (https://webscraper.io/test-sites/load-more).
+# Confirmed by investigation: 6 static cards on load, plus a
+# "<button class='load-more-btn ecommerce-items-scroll-more'>Load More
+# </button>" at the bottom -- confirmed via real CI (run 32471707326)
+# that this is genuinely click-triggered, not scroll-triggered: with
+# render_js alone the item count stayed at exactly 6 every time.
+#
+# docs/REQUIREMENTS.md section 7 entry 4: click_selector makes
+# PlaywrightMiddleware click the button after navigation (Playwright
+# scrolls it into view first) before the existing scroll loop and
+# page.content() read -- config-only, zero new spider code.
+name: webscraper_io_load_more
+start_urls:
+  - "https://webscraper.io/test-sites/load-more"
+allowed_domains:
+  - "webscraper.io"
+rate_limit: 1.0
+render_js: true
+click_selector: "button.load-more-btn"
+max_concurrency: 2
+selectors:
+  item: "div.card.sitemap-card"
+  fields:
+    name: "h3.card-title a::text"
+    description: "p.description::text"
+    price: "p.price span[itemprop='price']::text"
+    details: "p.card-text::text"

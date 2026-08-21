@@ -75,10 +75,12 @@ class GenericSpider(scrapy.Spider):
         )
         return spider
 
-    def _request_meta(self) -> dict[str, bool]:
+    def _request_meta(self) -> dict[str, Any]:
         return {
             "playwright": self.config.render_js,
             "antibot_needed": self.config.antibot_needed,
+            "render_wait_ms": self.config.render_wait_ms,
+            "click_selector": self.config.click_selector,
         }
 
     def _build_start_requests(self) -> Iterator[scrapy.Request]:

@@ -40,6 +40,8 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert config.render_js is False
     assert config.max_concurrency == 2
     assert config.antibot_needed is False
+    assert config.render_wait_ms is None
+    assert config.click_selector is None
 
 
 def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> None:
@@ -65,6 +67,31 @@ def test_non_positive_max_concurrency_raises_config_error(tmp_path: Path) -> Non
     """Failure case 5: max_concurrency must be a positive integer."""
     config_file = tmp_path / "target.yaml"
     config_file.write_text(VALID_YAML + "\nmax_concurrency: 0\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="failed schema validation"):
+        load_spider_config(str(config_file))
+
+
+def test_render_wait_ms_and_click_selector_are_read_from_yaml(tmp_path: Path) -> None:
+    """render_wait_ms/click_selector (docs/REQUIREMENTS.md section 7, entries 3-4)
+    are config-only knobs -- no spider code changes needed to set them."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nrender_wait_ms: 2500\nclick_selector: \"button.load-more\"\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.render_wait_ms == 2500
+    assert config.click_selector == "button.load-more"
+
+
+def test_non_positive_render_wait_ms_raises_config_error(tmp_path: Path) -> None:
+    """Failure case 6: a zero or negative render_wait_ms is meaningless (there is
+    nothing to wait for) and must be rejected, not silently treated as 'no wait'."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nrender_wait_ms: 0\n", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="failed schema validation"):
         load_spider_config(str(config_file))

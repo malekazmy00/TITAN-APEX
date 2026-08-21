@@ -51,7 +51,9 @@ def test_process_request_renders_a_flagged_request() -> None:
     """Happy path: a request with meta['playwright']=True is rendered and returns
     an HtmlResponse built from the renderer's output."""
 
-    def fake_renderer(url: str) -> RenderedPage:
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
         return RenderedPage(html="<html><body>rendered</body></html>", status=200)
 
     middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
@@ -68,7 +70,9 @@ def test_process_request_ignores_requests_without_the_playwright_flag() -> None:
     """A plain request (no meta flag) passes straight through — renderer never called."""
     calls: list[str] = []
 
-    def fake_renderer(url: str) -> RenderedPage:
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
         calls.append(url)
         return RenderedPage(html="<html></html>", status=200)
 
@@ -84,7 +88,9 @@ def test_process_request_ignores_requests_without_the_playwright_flag() -> None:
 def test_process_request_propagates_render_error() -> None:
     """Failure case 1: a renderer failure surfaces as RenderError, never swallowed."""
 
-    def failing_renderer(url: str) -> RenderedPage:
+    def failing_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
         raise RenderError(f"boom rendering {url}")
 
     middleware = PlaywrightMiddleware(renderer=failing_renderer, thread_runner=_sync_thread_runner)
@@ -105,7 +111,9 @@ def test_process_request_logs_before_reraising(monkeypatch: pytest.MonkeyPatch) 
         def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
             pass
 
-    def failing_renderer(url: str) -> RenderedPage:
+    def failing_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
         raise RenderError("render failed")
 
     middleware = PlaywrightMiddleware(
@@ -119,6 +127,51 @@ def test_process_request_logs_before_reraising(monkeypatch: pytest.MonkeyPatch) 
         middleware.process_request(request, spider=object())
 
     assert "playwright_middleware.render_failed" in logged
+
+
+def test_render_wait_ms_and_click_selector_reach_the_renderer_from_meta() -> None:
+    """Happy path: render_wait_ms/click_selector set in request.meta (i.e. by
+    GenericSpider from a target's config) are passed through to the renderer call,
+    not silently dropped."""
+    received: dict[str, object] = {}
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        received["render_wait_ms"] = render_wait_ms
+        received["click_selector"] = click_selector
+        return RenderedPage(html="<html></html>", status=200)
+
+    middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
+    request = Request(
+        "https://example.com/",
+        meta={"playwright": True, "render_wait_ms": 2500, "click_selector": "button.load-more"},
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert received == {"render_wait_ms": 2500, "click_selector": "button.load-more"}
+
+
+def test_render_wait_ms_and_click_selector_default_to_none() -> None:
+    """A request whose meta never set render_wait_ms/click_selector (every target
+    before this feature existed, and every render_js target that doesn't need it)
+    must not regress -- both must reach the renderer as None."""
+    received: dict[str, object] = {}
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        received["render_wait_ms"] = render_wait_ms
+        received["click_selector"] = click_selector
+        return RenderedPage(html="<html></html>", status=200)
+
+    middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert received == {"render_wait_ms": None, "click_selector": None}
 
 
 def test_from_crawler_builds_default_instance() -> None:
@@ -150,8 +203,8 @@ def test_from_crawler_binds_a_configured_executable_path() -> None:
     middleware = PlaywrightMiddleware.from_crawler(crawler=_FakeCrawler())
 
     assert middleware.renderer is not render_with_playwright
-    assert middleware.renderer.func is render_with_playwright  # type: ignore[attr-defined]
-    assert middleware.renderer.keywords == {  # type: ignore[attr-defined]
+    assert middleware.renderer.func is render_with_playwright  # type: ignore[union-attr]
+    assert middleware.renderer.keywords == {  # type: ignore[union-attr]
         "executable_path": "/opt/pw-browsers/chromium"
     }
 

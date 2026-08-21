@@ -1,0 +1,35 @@
+# Level 2 target (docs/TEST_TARGETS.md): Oscar-winning-films table loaded
+# entirely via AJAX (https://www.scrapethissite.com/pages/ajax-javascript/).
+# Confirmed by investigation: the static HTML ships an empty
+# <tbody id="table-body"></tbody> -- rows only appear after JS fires the
+# AJAX call -- so render_js is required (same PlaywrightMiddleware path
+# already used by scrapingcourse_infinite_scrolling.yaml).
+#
+# The page's own JS only calls fetchFilms(year) in two cases: a click on
+# a ".year-link" tab, or document.location.hash already being set when
+# the page loads. GenericSpider/PlaywrightMiddleware never click
+# anything, so the start URL uses a "#2015" hash fragment to trigger the
+# fetch automatically on load -- config-only, zero new code.
+#
+# docs/REQUIREMENTS.md section 7 entry 3: the site also adds a
+# deliberate ~1.5s client-side setTimeout before rendering rows *after*
+# the AJAX response arrives -- longer than PlaywrightMiddleware's
+# post-navigation scroll dwell, confirmed flaky across two real CI runs
+# (pass, then fail with the same config). render_wait_ms forces a fixed
+# extra wait after the scroll loop and before reading page.content(),
+# specifically to close that gap.
+name: scrapethissite_ajax_javascript
+start_urls:
+  - "https://www.scrapethissite.com/pages/ajax-javascript/#2015"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+render_js: true
+render_wait_ms: 2500
+max_concurrency: 2
+selectors:
+  item: "tr.film"
+  fields:
+    title: "td.film-title::text"
+    nominations: "td.film-nominations::text"
+    awards: "td.film-awards::text"

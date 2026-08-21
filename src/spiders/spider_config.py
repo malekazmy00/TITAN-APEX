@@ -38,6 +38,15 @@ class SpiderConfig(BaseModel):
     max_concurrency: int = Field(default=2, gt=0)
     # Phase 3: anti-bot solving via Byparr, also config-driven.
     antibot_needed: bool = False
+    # Real, evidenced gaps found expanding Test Targets coverage
+    # (docs/REQUIREMENTS.md, section 7, entries 3-4): some render_js
+    # targets need a fixed extra dwell after navigation (a site-added
+    # client-side render delay PlaywrightMiddleware's scroll loop doesn't
+    # reliably cover), or a specific element clicked before the content
+    # is there at all (e.g. a "Load More" button, never scroll-triggered).
+    # Both are no-ops unless set.
+    render_wait_ms: int | None = Field(default=None, gt=0)
+    click_selector: str | None = None
 
 
 def load_spider_config(path: str) -> SpiderConfig:

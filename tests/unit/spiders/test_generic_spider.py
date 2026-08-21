@@ -158,6 +158,36 @@ def test_start_sets_antibot_needed_meta_true_when_enabled(tmp_path: Path) -> Non
     assert requests[0].meta["antibot_needed"] is True
 
 
+def test_start_sets_render_wait_ms_and_click_selector_meta_to_none_by_default(
+    config_path: str,
+) -> None:
+    """render_wait_ms/click_selector are opt-in -- every existing target (and any
+    new one that doesn't need them) must see None for both, not a crash or a
+    surprising default."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["render_wait_ms"] is None
+    assert requests[0].meta["click_selector"] is None
+
+
+def test_start_sets_render_wait_ms_and_click_selector_meta_from_config(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "wait_and_click_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML + '\nrender_wait_ms: 2500\nclick_selector: "button.load-more"\n',
+        encoding="utf-8",
+    )
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["render_wait_ms"] == 2500
+    assert requests[0].meta["click_selector"] == "button.load-more"
+
+
 def test_parse_pagination_follow_carries_playwright_meta(tmp_path: Path) -> None:
     config_file = tmp_path / "js_target.yaml"
     config_file.write_text(CONFIG_YAML + "\nrender_js: true\n", encoding="utf-8")

@@ -34,7 +34,13 @@ class RenderedPage(NamedTuple):
     status: int
 
 
-Renderer = Callable[[str], RenderedPage]
+# A precise Protocol would need to describe render_with_playwright's full
+# keyword surface (executable_path, scroll tuning, ...) just to satisfy
+# structural typing for the two calls that actually cross the
+# PlaywrightMiddleware boundary (url, render_wait_ms, click_selector) --
+# Callable[..., RenderedPage] says the same thing without that ceremony,
+# and injected fakes in tests still get checked against RenderedPage.
+Renderer = Callable[..., RenderedPage]
 ThreadRunner = Callable[[Callable[[Request], Response], Request], Any]
 
 
@@ -44,18 +50,27 @@ def render_with_playwright(
     executable_path: str | None = None,
     max_scroll_attempts: int = DEFAULT_MAX_SCROLL_ATTEMPTS,
     scroll_pause_ms: int = DEFAULT_SCROLL_PAUSE_MS,
+    render_wait_ms: int | None = None,
+    click_selector: str | None = None,
 ) -> RenderedPage:
     """Default renderer: launches a real headless Chromium via Playwright.
 
-    After the initial navigation, this scrolls to the bottom of the page
-    repeatedly (up to ``max_scroll_attempts`` times, pausing
-    ``scroll_pause_ms`` between attempts for lazy-loaded content to
-    arrive) and stops early once the page stops growing. This is what
-    makes infinite-scroll targets (e.g. render_js: true on a target whose
-    content loads in batches as you scroll) actually pull in more than the
-    first batch — a plain ``page.goto()`` alone never triggers that JS.
-    Harmless (a couple of no-op scrolls) on a page that doesn't use
-    infinite scroll.
+    After the initial navigation:
+
+    1. if ``click_selector`` is set, that element is clicked (Playwright
+       scrolls it into view first) -- for content that only appears after
+       an explicit interaction, e.g. a "Load More" button that a scroll
+       never triggers (docs/REQUIREMENTS.md, section 7, entry 4);
+    2. the page is scrolled to the bottom repeatedly (up to
+       ``max_scroll_attempts`` times, pausing ``scroll_pause_ms`` between
+       attempts) and stops early once the page stops growing -- this is
+       what makes infinite-scroll targets actually pull in more than the
+       first batch. Harmless (a couple of no-op scrolls) on a page that
+       doesn't use infinite scroll;
+    3. if ``render_wait_ms`` is set, one more fixed wait -- for a site
+       that adds its own client-side delay *after* content has already
+       arrived and before it renders, which neither of the above is
+       guaranteed to cover (docs/REQUIREMENTS.md, section 7, entry 3).
 
     Must be called off the Twisted reactor thread (Playwright's sync API
     cannot share a thread with an already-running event loop) — see
@@ -79,7 +94,11 @@ def render_with_playwright(
             page = browser.new_page()
             try:
                 response = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+                if click_selector:
+                    page.click(click_selector, timeout=timeout_ms)
                 _scroll_to_load_lazy_content(page, max_scroll_attempts, scroll_pause_ms)
+                if render_wait_ms:
+                    page.wait_for_timeout(render_wait_ms)
                 html = page.content()
                 status = response.status if response is not None else 200
                 return RenderedPage(html=html, status=status)
@@ -143,7 +162,11 @@ class PlaywrightMiddleware:
 
     def _render(self, request: Request) -> Response:
         try:
-            page = self.renderer(request.url)
+            page = self.renderer(
+                request.url,
+                render_wait_ms=request.meta.get("render_wait_ms"),
+                click_selector=request.meta.get("click_selector"),
+            )
         except RenderError:
             self.logger.error("playwright_middleware.render_failed", extra={"url": request.url})
             raise
