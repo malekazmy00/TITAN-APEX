@@ -82,6 +82,7 @@ def test_from_crawler_wires_download_delay_and_storage_pipeline(config_path: str
         "src.spiders.pipelines.StorageBackendPipeline": 300
     }
     assert crawler.settings.getdict("DOWNLOADER_MIDDLEWARES") == {
+        "src.middlewares.byparr_middleware.ByparrMiddleware": 520,
         "src.middlewares.playwright_middleware.PlaywrightMiddleware": 543,
         "src.middlewares.retry_backoff.RetryBackoffMiddleware": 550,
         "src.middlewares.circuit_breaker.CircuitBreakerMiddleware": 900,
@@ -137,6 +138,24 @@ def test_start_sets_playwright_meta_true_when_render_js_enabled(tmp_path: Path) 
     requests = _run_async_start(spider)
 
     assert requests[0].meta["playwright"] is True
+
+
+def test_start_sets_antibot_needed_meta_from_config(config_path: str) -> None:
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["antibot_needed"] is False
+
+
+def test_start_sets_antibot_needed_meta_true_when_enabled(tmp_path: Path) -> None:
+    config_file = tmp_path / "antibot_target.yaml"
+    config_file.write_text(CONFIG_YAML + "\nantibot_needed: true\n", encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["antibot_needed"] is True
 
 
 def test_parse_pagination_follow_carries_playwright_meta(tmp_path: Path) -> None:

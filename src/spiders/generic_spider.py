@@ -66,6 +66,7 @@ class GenericSpider(scrapy.Spider):
                 # seen first for process_response/process_exception. See
                 # each middleware's module docstring for why this order
                 # matters (docs/REQUIREMENTS.md, section 2).
+                "src.middlewares.byparr_middleware.ByparrMiddleware": 520,
                 "src.middlewares.playwright_middleware.PlaywrightMiddleware": 543,
                 "src.middlewares.retry_backoff.RetryBackoffMiddleware": 550,
                 "src.middlewares.circuit_breaker.CircuitBreakerMiddleware": 900,
@@ -74,11 +75,15 @@ class GenericSpider(scrapy.Spider):
         )
         return spider
 
+    def _request_meta(self) -> dict[str, bool]:
+        return {
+            "playwright": self.config.render_js,
+            "antibot_needed": self.config.antibot_needed,
+        }
+
     def _build_start_requests(self) -> Iterator[scrapy.Request]:
         for url in self.start_urls:
-            yield scrapy.Request(
-                url, callback=self.parse, meta={"playwright": self.config.render_js}
-            )
+            yield scrapy.Request(url, callback=self.parse, meta=self._request_meta())
 
     async def start(self) -> AsyncIterator[scrapy.Request]:
         # Scrapy >= 2.13 calls this instead of start_requests() — see
@@ -122,6 +127,4 @@ class GenericSpider(scrapy.Spider):
         if self.config.next_page:
             next_href = response.css(self.config.next_page).get()
             if next_href:
-                yield response.follow(
-                    next_href, callback=self.parse, meta={"playwright": self.config.render_js}
-                )
+                yield response.follow(next_href, callback=self.parse, meta=self._request_meta())

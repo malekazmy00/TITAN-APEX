@@ -12,6 +12,9 @@ a new spider class.
    allowed_domains:
      - "example.com"
    rate_limit: 1.0          # seconds between requests (DOWNLOAD_DELAY)
+   max_concurrency: 2       # optional; CONCURRENT_REQUESTS_PER_DOMAIN, default 2
+   render_js: false         # optional; true routes through PlaywrightMiddleware
+   antibot_needed: false    # optional; true routes through ByparrMiddleware first
    selectors:
      item: "div.result"           # CSS selector for one repeated item
      fields:
@@ -32,6 +35,11 @@ a new spider class.
    extracts the fields you expect — following the pattern in
    `tests/unit/spiders/test_generic_spider.py`.
 
-4. If the target requires anti-bot handling, set `antibot_needed: true` in
-   the config (Phase 3+ — not wired up yet in Phase 1) instead of adding
-   target-specific code.
+4. If the target requires anti-bot handling (Cloudflare or similar), set
+   `antibot_needed: true` — this routes the request through
+   `ByparrMiddleware` (requires `TITAN_BYPARR_URL` to be set; otherwise it
+   falls back to a plain request and logs a warning, it never crashes the
+   crawl). If the target only needs JS to render its content (no anti-bot
+   challenge), set `render_js: true` instead, which uses
+   `PlaywrightMiddleware`. Either way: config only, never target-specific
+   code.

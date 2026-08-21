@@ -82,10 +82,10 @@ titan-apex/
 - [x] Circuit Breaker (قابل للتهيئة، افتراضي 5 فشل متتالي / 60 ثانية cooldown)
 - [x] Rate limiting ذاتي عبر config كل target (`rate_limit`, `max_concurrency`)
 
-### المرحلة 3 — الحماية المتوسطة
-- [ ] `byparr_provider.py` implementation من `antibot_provider`
-- [ ] Cookie management تلقائي
-- [ ] Fallback مسجل بوضوح (مش كراش) لو الـ provider فشل
+### المرحلة 3 — الحماية المتوسطة (منفذة)
+- [x] `byparr_provider.py` implementation من `antibot_provider` (عدّى `tests/contract/`)
+- [x] Cookie management تلقائي (عبر `Set-Cookie` headers + Scrapy's `CookiesMiddleware` الموجود أصلاً)
+- [x] Fallback مسجل بوضوح (مش كراش) لو الـ provider فشل، أو لو `TITAN_BYPARR_URL` مش متظبط أصلاً
 
 ### المرحلة 4 — التنظيم والتوسع
 - [ ] Redis + Celery/RQ
@@ -145,11 +145,18 @@ pytest tests/unit tests/integration tests/contract -v
 | البند | الحالة | تاريخ التسجيل |
 |---|---|---|
 | **رندر Playwright الحي** (`scrapingcourse_infinite_scrolling.yaml`, `render_js: true`) | الكود اتبنى واتاختبر بالكامل (unit tests + دليل حي إن الـ wiring صحيح: الـ browser بيفتح فعلاً ويحاول يتصل، والفشل بيتسجل كـ `RenderError` واضح بدل ما يكراش). **الرندر الفعلي (page.goto ينجح ويرجع HTML بعد تنفيذ JS) لسه محتاج إثبات على بيئة بإنترنت حر** — بيئة التطوير دي (sandbox) فيها قيد شبكي بيمنع أي اتصال خارج من الـ headless Chromium تحديدًا (اتأكد بعدة محاولات: curl/pip بينجحوا عادي، Chromium بيرجع `ERR_CONNECTION_RESET` مهما كان إعداد الـ proxy)، فمش مشكلة في الكود. | 2026-08-21 |
+| **Byparr الحقيقي جوه Docker** (`docker-compose.yml`, service `byparr`) | الكود اتبنى واتاختبر بالكامل (unit tests + contract tests + دليل حي كامل: `ByparrProvider`/`ByparrMiddleware` اتجربوا فعليًا ضد سيرفر HTTP حقيقي على localhost بيتكلم نفس بروتوكول Byparr/FlareSolverr — حل فعلي + cookies + تخزين في SQLite، وكمان الـ fallback اتجرب حي في الحالتين (مش متظبط / الـ provider فشل) وسجّل بوضوح من غير كراش). **مفيش Docker daemon شغال في بيئة التطوير دي** (`docker ps` بيفشل: "no such file or directory")، فمقدرتش أشغّل الـ Byparr container الحقيقي نفسه ولا أتأكد إنه بيحل تحديات Cloudflare حقيقية. | 2026-08-21 |
 
-**الخطوة المطلوبة لقفل البند ده:** بعد تجهيز الـ VPS (القسم 0)، شغّل:
+**الخطوات المطلوبة لقفل البنود دي:** بعد تجهيز الـ VPS (القسم 0)، شغّل:
 ```bash
+# Playwright:
 scrapy runspider src/spiders/generic_spider.py \
     -a config_path=src/spiders/configs/scrapingcourse_infinite_scrolling.yaml \
     -s LOG_LEVEL=INFO
+# تأكد إن item_scraped_count أكبر من 12 (يعني infinite-scroll JS اشتغل فعليًا).
+
+# Byparr:
+docker compose up -d byparr
+# وجّه TITAN_BYPARR_URL لعنوان الـ container، وشغّل أي target بـ antibot_needed: true
+# ضد موقع محمي فعليًا بـ Cloudflare، وتأكد إن الحل رجع HTML حقيقي بعد الـ challenge.
 ```
-وتأكد إن `item_scraped_count` أكبر من 12 (يعني الـ infinite-scroll JS اشتغل فعليًا وجاب batches إضافية، مش بس الـ batch الأول اللي موجود في الـ HTML الثابت).

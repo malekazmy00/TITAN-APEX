@@ -2,18 +2,21 @@
 
 Core of an OSINT / web-scraping platform, built around swappable interfaces
 (`AntibotProvider`, `StorageBackend`, `AIAnalyzer`) and config-driven
-spiders. See `docs/REQUIREMENTS.md` for the full build plan and the rules
-every change must follow, and `docs/ARCHITECTURE.md` for how Phase 1 fits
-together.
+spiders. See `docs/REQUIREMENTS.md` for the full build plan (and the
+"Pending Real-Network Verification" section for what still needs proving
+on a VPS) and the rules every change must follow, and `docs/ARCHITECTURE.md`
+for how it all fits together.
 
-## Status: Phase 1 (foundations)
+## Status: through Phase 3
 
 - Interfaces: `src/core/interfaces/{antibot_provider,storage_backend,ai_analyzer}.py`
-- Config-driven spider: `src/spiders/generic_spider.py`, first target
-  `src/spiders/configs/quotes_toscrape.yaml`
-- Retry + exponential backoff middleware: `src/middlewares/retry_backoff.py`
+- Config-driven spider: `src/spiders/generic_spider.py` — targets in
+  `src/spiders/configs/*.yaml`
+- Middlewares: `retry_backoff.py`, `circuit_breaker.py`,
+  `playwright_middleware.py`, `byparr_middleware.py`
 - Structured JSON logging: `src/logging_config.py`
 - Storage backend: `src/providers/storage/sqlite_backend.py`
+- Antibot provider: `src/providers/antibot/byparr_provider.py`
 
 ## Quickstart
 

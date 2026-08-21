@@ -1,4 +1,10 @@
-# Phase 1 needs no external services (SQLite is a plain file). This file
-# is a placeholder for Phase 3+ (Byparr) and Phase 4 (Redis) — services
-# will be added here as those phases land, not before.
-services: {}
+# Phase 4 (Redis) is still a placeholder — added when that phase lands.
+services:
+  byparr:
+    image: ghcr.io/thephaseless/byparr:latest
+    ports:
+      - "8191:8191"
+    restart: unless-stopped
+    # Point TITAN_BYPARR_URL at http://byparr:8191 (from other containers)
+    # or http://localhost:8191 (from the host) — never hardcode this in
+    # code, it's read from the environment (see .env.example).

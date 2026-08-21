@@ -36,6 +36,8 @@ class SpiderConfig(BaseModel):
     # never by target-specific code (docs/REQUIREMENTS.md, section 2).
     render_js: bool = False
     max_concurrency: int = Field(default=2, gt=0)
+    # Phase 3: anti-bot solving via Byparr, also config-driven.
+    antibot_needed: bool = False
 
 
 def load_spider_config(path: str) -> SpiderConfig:

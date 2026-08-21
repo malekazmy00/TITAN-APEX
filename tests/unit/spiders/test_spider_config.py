@@ -39,6 +39,7 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert config.next_page == "li.next a::attr(href)"
     assert config.render_js is False
     assert config.max_concurrency == 2
+    assert config.antibot_needed is False
 
 
 def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> None:
@@ -49,6 +50,15 @@ def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> Non
 
     assert config.render_js is True
     assert config.max_concurrency == 4
+
+
+def test_antibot_needed_is_read_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nantibot_needed: true\n", encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.antibot_needed is True
 
 
 def test_non_positive_max_concurrency_raises_config_error(tmp_path: Path) -> None:
