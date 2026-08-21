@@ -5,6 +5,18 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    # byparr is only needed by tests/integration/test_byparr_live_solve.py.
+    # GitHub Actions runners have real, unrestricted outbound internet
+    # (unlike a sandboxed local dev environment), so this is where the two
+    # "Pending Real-Network Verification" items in docs/REQUIREMENTS.md
+    # actually get proven for real.
+    services:
+      byparr:
+        image: ghcr.io/thephaseless/byparr:latest
+        ports:
+          - 8191:8191
+    env:
+      TITAN_BYPARR_URL: http://localhost:8191
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,7 +28,8 @@ jobs:
         run: pytest tests/unit -v --cov=src --cov-fail-under=85
       - name: Contract tests
         run: pytest tests/contract -v
-      - name: Integration tests
+      - name: Integration tests (live network -- Playwright render, Byparr solve)
+        timeout-minutes: 6
         run: |
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             pytest tests/integration -v
