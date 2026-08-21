@@ -1,4 +1,4 @@
-# Architecture (through Phase 4)
+# Architecture (through Phase 5)
 
 TITAN-APEX is built around three abstract interfaces in `src/core/interfaces/`
 so that concrete providers can be swapped without touching the code that
@@ -8,8 +8,11 @@ depends on them:
   `src/providers/antibot/byparr_provider.py` (Phase 3).
 - **`StorageBackend`** — `save(item)`, `query(filters)`, `close()`.
   Implemented by `src/providers/storage/sqlite_backend.py` (Phase 1).
-- **`AIAnalyzer`** — `analyze(text) -> AnalysisResult`. No implementation
-  yet (Phase 5, on the GPU lab machine).
+- **`AIAnalyzer`** — `analyze(text) -> AnalysisResult`. Implemented by
+  `src/ai_analysis/ollama_analyzer.py` (Phase 5). Code is fully tested;
+  live inference on a real GPU is tracked as pending in
+  `docs/REQUIREMENTS.md` section 5 (a legitimate hardware exception —
+  see below).
 
 ## Data flow
 
@@ -67,8 +70,9 @@ failure is silent, and none of them takes the whole crawl down.
 
 Any new implementation of an interface (a new storage backend, a new
 antibot provider, ...) must pass the matching suite under `tests/contract/`
-before it is accepted. See `tests/contract/test_storage_backend_contract.py`
-and `tests/contract/test_antibot_provider_contract.py` for the pattern.
+before it is accepted. See `tests/contract/test_storage_backend_contract.py`,
+`tests/contract/test_antibot_provider_contract.py`, and
+`tests/contract/test_ai_analyzer_contract.py` for the pattern.
 
 ## Task queue (Phase 4)
 
@@ -90,3 +94,22 @@ an `AlertEvent` is sent. Delivery always logs at CRITICAL, and also POSTs
 a JSON payload to `TITAN_ALERT_WEBHOOK_URL` when one is configured.
 Webhook delivery failure is caught and logged (`alert.webhook_delivery_failed`)
 — an alerting problem never crashes the crawl that triggered the alert.
+
+## AI analysis (Phase 5)
+
+`src/ai_analysis/ollama_analyzer.py` implements `AIAnalyzer` against a
+local/remote Ollama instance (`/api/generate`), default model
+**`qwen3:14b`** — a general-purpose instruction model, not
+`qwen2.5-coder`, since this analyzes/summarizes scraped OSINT text rather
+than reasoning about code. Output is never free text: Ollama's `format`
+parameter is set to a JSON schema matching `AnalysisResult` exactly, so
+the model is constrained to emit valid, schema-conformant JSON — parsed
+and re-validated through `AnalysisResult.model_validate()` before it ever
+reaches a caller. Every failure mode (connection error, malformed
+envelope, non-JSON structured output, schema violation) raises
+`AIAnalyzerError`, never returns a guessed or partial result.
+
+GPU inference itself cannot be verified here or in CI (no GPU in either
+environment) — see docs/REQUIREMENTS.md section 5 for the tracked pending
+item and why that's a legitimate exception to the "prove it in CI first"
+rule (a hardware constraint, not an assumed network/environment limit).

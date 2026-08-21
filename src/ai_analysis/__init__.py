@@ -1,1 +1,1 @@
-"""AI analysis implementation, e.g. Qwen via Ollama (Phase 5). Empty for now."""
+"""AI analysis implementation: OllamaAnalyzer, an AIAnalyzer for Qwen via Ollama (Phase 5)."""

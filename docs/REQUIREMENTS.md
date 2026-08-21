@@ -96,8 +96,18 @@ titan-apex/
       متتالي افتراضيًا) بيتسجل CRITICAL دايمًا، وبيتبعت webhook لو
       `TITAN_ALERT_WEBHOOK_URL` متظبط
 
-### المرحلة 5 — طبقة الذكاء الاصطناعي (على اللاب)
-- [ ] `ai_analyzer` implementation بـ Qwen 14B عبر Ollama
+### المرحلة 5 — طبقة الذكاء الاصطناعي (على اللاب) (الكود منفذ، الـ inference الحي pending)
+- [x] `ai_analyzer` implementation بـ Qwen عبر Ollama —
+      `src/ai_analysis/ollama_analyzer.py` (`OllamaAnalyzer`)، الموديل
+      الافتراضي **`qwen3:14b`** (عام، مش `qwen2.5-coder` المتخصص في كود —
+      المهمة هنا تلخيص/تصنيف نص OSINT مش كود)
+- [x] `analyze(text) -> AnalysisResult`: structured output مضمون عبر
+      `format` (JSON schema) في Ollama — مش نص حر، JSON دايمًا
+- [x] Contract tests (`tests/contract/test_ai_analyzer_contract.py`)
+- [x] Config قابل للتهيئة: `TITAN_OLLAMA_URL`, `TITAN_AI_MODEL`
+      (`.env.example`)
+- [ ] **الـ inference الحي الفعلي على GPU حقيقي — pending، مسجل في
+      القسم 5 تحت**
 
 ### المرحلة 6 — Proxies (مؤجلة)
 - implementation جديد فوق نفس `antibot_provider` interface، بس عند الحاجة الفعلية
@@ -154,8 +164,26 @@ Verification — مش يُفترض تلقائيًا إنه pending.
 > بعد إثبات حاسم في بيئة بإنترنت حر فعلي (GitHub Actions runners، أو الـ
 > VPS بعدين). دلوقتي مفيش بنود pending.
 
-**لا يوجد بنود pending حاليًا.** الاتنين اللي كانوا مسجلين (2026-08-21)
-اتحلوا نهائيًا في نفس اليوم:
+### بنود Pending حاليًا
+
+| البند | الحالة | تاريخ التسجيل |
+|---|---|---|
+| **تحليل AI الحي** (`OllamaAnalyzer.analyze()` ضد موديل حقيقي، `qwen3:14b`) | الكود اتبنى واتاختبر بالكامل (unit tests + contract tests بحقن HTTP client وهمي، زي `retry_backoff`/`byparr_provider` قبل كده) + دليل حي جزئي: HTTP transport الحقيقي (uninjected) اتجرب فعليًا ضد سيرفر HTTP محلي حقيقي بيتكلم نفس بروتوكول `/api/generate` (مش mock داخل الـ process) — الطلب اتبنى صح، الـ `format` (JSON schema) اتبعت صح، والرد اتحلل صح. **الـ inference الحقيقي على GPU (استدعاء `qwen3:14b` فعليًا عبر Ollama حقيقي) لسه محتاج إثبات على اللاب (RTX 4070S)** — ده **استثناء شرعي** من قاعدة "جرب في GitHub Actions الأول": ده قيد هاردوير حقيقي (GPU) مش افتراض قيد شبكة/بيئة — لا بيئة التطوير دي ولا GitHub Actions runners العادية عندهم GPU، فمفيش طريقة تانية تثبته غير على اللاب فعليًا. | 2026-08-21 |
+
+**الخطوة المطلوبة لقفل البند ده:** بعد ما اللاب يبقى جاهز (القسم 0)،
+شغّل Ollama حقيقي (`ollama serve`, `ollama pull qwen3:14b`)، وشغّل:
+```python
+from src.ai_analysis.ollama_analyzer import analyzer_from_env
+analyzer = analyzer_from_env()
+result = analyzer.analyze("<نص حقيقي من scraping>")
+print(result)
+```
+وتأكد إن `result.summary`/`result.entities` منطقيين فعليًا (مش بس JSON
+صحيح شكليًا) — يعني تحقق من جودة المحتوى، مش بس إن الـ schema اتاحترم.
+
+### بنود اتحلت
+
+الاتنين اللي كانوا مسجلين قبل كده (2026-08-21) اتحلوا نهائيًا في نفس اليوم:
 
 - **رندر Playwright الحي**: كان مسجل "pending" على أساس إنه قيد شبكة في
   sandbox التطوير. لما اتشغّل فعليًا جوه GitHub Actions (إنترنت حر

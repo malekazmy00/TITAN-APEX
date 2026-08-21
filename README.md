@@ -4,11 +4,12 @@ Core of an OSINT / web-scraping platform, built around swappable interfaces
 (`AntibotProvider`, `StorageBackend`, `AIAnalyzer`) and config-driven
 spiders. See `docs/REQUIREMENTS.md` for the full build plan (section 5,
 "Pending Real-Network Verification", tracks anything not yet proven in a
-real-internet environment — empty as of Phase 4) and the rules every
-change must follow, and `docs/ARCHITECTURE.md` for how it all fits
+real environment — currently one item: live GPU inference for Phase 5,
+a legitimate hardware exception, not a network assumption) and the rules
+every change must follow, and `docs/ARCHITECTURE.md` for how it all fits
 together.
 
-## Status: through Phase 4
+## Status: through Phase 5
 
 - Interfaces: `src/core/interfaces/{antibot_provider,storage_backend,ai_analyzer}.py`
 - Config-driven spider: `src/spiders/generic_spider.py` — targets in
@@ -20,6 +21,9 @@ together.
 - Antibot provider: `src/providers/antibot/byparr_provider.py`
 - Task queue: `src/queue/` (Redis + RQ)
 - Alerting: `src/alerting.py` (repeated failure → CRITICAL log + optional webhook)
+- AI analyzer: `src/ai_analysis/ollama_analyzer.py` (Ollama, `qwen3:14b`
+  by default — structured JSON output only; live GPU inference pending
+  the lab machine, see `docs/REQUIREMENTS.md` section 5)
 
 ## Quickstart
 
