@@ -102,6 +102,17 @@ services:
       # container plus getting Byparr's Chromium to trust a self-signed
       # CA, an unverified extra failure surface for no real benefit here).
       COOKIE_SECURE: "false"
+      # COOKIE_SECURE alone was NOT enough -- confirmed for real (round 3,
+      # docs/REQUIREMENTS.md section 9 entry 4): Anubis's own log kept
+      # showing "user has cookies disabled, this is not an anubis bug" on
+      # every pass-challenge attempt even with Secure off, because this
+      # flag was missing here (it was tested by hand alongside
+      # COOKIE_SECURE back in round 2 but never actually committed to
+      # this file -- an oversight, not a deliberate choice). Anubis's
+      # cookies default to CHIPS-Partitioned; not every automated browser
+      # context (confirmed: Camoufox's Firefox-based one) handles a
+      # Partitioned cookie the same way a normal profile does.
+      COOKIE_PARTITIONED: "false"
     depends_on:
       mock-target:
         condition: service_healthy

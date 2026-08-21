@@ -779,6 +779,30 @@ unit test جديد (`test_process_request_defaults_to_a_real_thread_runner`)
 
 **النتيجة العملية:** الفجوة دي (crash فوري) اتقفلت رسميًا — الاختبار
 اتّحقّق منه محليًا (145 unit tests + 14 contract tests PASSED) قبل
-الدفع. **هل ده كفى Camoufox يعدّي تحدي Anubis فعليًا؟** — النتيجة
-الحقيقية موثّقة في `test_mock_target_camoufox_live.py`'s docstring
-ونتيجة CI الفعلية، مش هنا (تفاصيل الفجوة/الحل بس هنا زي المعتاد).
+الدفع.
+
+**بعد ما الـ crash اتحل، النتيجة الحقيقية في CI run
+[32505555570](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32505555570)
+كانت تقدّم حقيقي وواضح:** `camoufox_provider.solved` (diagnostic
+logging اتضاف مخصوص للجولة دي) أكد إن Camoufox فعلاً حسب واستلم حل
+proof-of-work حقيقي (nonce/response hash/elapsedTime=171ms ظاهرين في
+الـ URL النهائي، `.../pass-challenge?id=...&response=...&nonce=431&elapsedTime=171`)
+— يعني التحدي بقى بيتحل فعليًا، مش مجرد وصول. بس الصفحة النهائية
+كانت لسه "Oh noes!" (صفحة خطأ Anubis)، بـ`cookie_names: []`.
+
+**السبب الجذري النهائي (اتأكّد منه من لوج Anubis نفسه بعد ما
+`docker compose logs anubis` اتضاف لخطوة الـ CI، run
+[32506681634](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32506681634)):**
+```
+"msg":"user has cookies disabled, this is not an anubis bug"
+```
+**نفس رسالة بند 2 بالظبط.** السبب: `COOKIE_PARTITIONED=false` كان
+**اتّحقّق منه يدويًا في الجولة التانية (round 2) بس ما اتضافش فعليًا
+لـ `docker-compose.test.yml`** — غلطة حقيقية (oversight)، مش قرار
+متعمد: بند 2 وثّق إن الفلاجين الاتنين (`COOKIE_SECURE` و
+`COOKIE_PARTITIONED`) لازم يتظبطوا مع بعض، بس الـ commit وقتها ضاف
+`COOKIE_SECURE` بس. **✅ اتصلح فعليًا دلوقتي** — `COOKIE_PARTITIONED: "false"`
+اتضاف لـ `docker-compose.test.yml`، ونتيجته الحقيقية (هل Camoufox
+هيعدّي التحدي فعلاً المرة دي) موثّقة في
+`test_mock_target_camoufox_live.py`'s docstring ونتيجة CI الفعلية،
+مش هنا.
