@@ -280,12 +280,14 @@ Targets النهائي بدل ما تتفترض.
 > لحد ما حد يقرر يكتب كود جديد يعالجه فعليًا. مفيش target هنا
 > "هيشتغل بعدين لوحده".
 
-### 1. `quotes.toscrape.com/login` — POST / forms / session
+### 1. `quotes.toscrape.com/login` (و`webscraper.io/test-sites/website-state-setup-login` بنفس القيد بالظبط) — POST / forms / session
 
-**الفجوة:** الصفحة دي محتاجة تسجيل دخول فعلي: `POST /login` مع
-`csrf_token` (موجود كـ hidden input بيتغيّر كل مرة) + `username` +
-`password`، وبعدين إدارة session/cookies عبر باقي الطلبات عشان الصفحة
-تفضل شايفة المستخدم مسجّل دخول.
+**الفجوة:** الصفحتين محتاجين تسجيل دخول فعلي — `quotes.toscrape.com`
+عبر `POST /login` مع `csrf_token` (hidden input بيتغيّر كل مرة) +
+`username` + `password`؛ `webscraper.io`'s login page نفس الفكرة (form
+فيه username/password، على الأرجح AJAX-based مش POST تقليدي) — وبعدين
+إدارة session/cookies عبر باقي الطلبات عشان الصفحة تفضل شايفة المستخدم
+مسجّل دخول.
 
 **ليه `GenericSpider` النهارده مش قادر:** الـ spider بيعمل `GET` بس
 على `start_urls` (`async def start()` / `start_requests()` كلاهم

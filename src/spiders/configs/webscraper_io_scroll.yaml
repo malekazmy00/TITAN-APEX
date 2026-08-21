@@ -1,0 +1,22 @@
+# Tier 2 target (docs/TEST_TARGETS.md): webscraper.io's infinite-scroll
+# classic-cars catalog (https://webscraper.io/test-sites/scroll).
+# Confirmed by investigation: 6 static cards on load, plus a
+# <div class="pagination-test-sites scroll-more" data-next-page="2">
+# marker -- the same shape as scrapingcourse_infinite_scrolling.yaml, so
+# no next_page here; PlaywrightMiddleware's scroll-to-bottom loop is what
+# should pull in more than the first 6.
+name: webscraper_io_scroll
+start_urls:
+  - "https://webscraper.io/test-sites/scroll"
+allowed_domains:
+  - "webscraper.io"
+rate_limit: 1.0
+render_js: true
+max_concurrency: 2
+selectors:
+  item: "div.card.sitemap-card"
+  fields:
+    name: "h3.card-title a::text"
+    description: "p.description::text"
+    price: "p.price span[itemprop='price']::text"
+    details: "p.card-text::text"

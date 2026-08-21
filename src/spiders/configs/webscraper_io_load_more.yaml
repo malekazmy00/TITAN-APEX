@@ -1,0 +1,30 @@
+# Tier 2 target (docs/TEST_TARGETS.md): webscraper.io's "Load More"
+# classic-cars catalog (https://webscraper.io/test-sites/load-more).
+# Confirmed by investigation: 6 static cards on load, plus a
+# "<button class='load-more-btn ecommerce-items-scroll-more'>Load More
+# </button>" at the bottom -- unlike webscraper_io_scroll.yaml's explicit
+# data-next-page marker, this is a click-triggered control by design,
+# and PlaywrightMiddleware has no click support (scroll-to-bottom only).
+#
+# render_js: true is set anyway (config-only, zero new code) on the
+# chance the button's own class name ("...-scroll-more") means it is
+# ALSO wired to a scroll listener, not click-only -- this is deliberately
+# run for real in CI rather than assumed to fail, per the "verify, don't
+# assume" rule (docs/REQUIREMENTS.md section 3). The real, evidenced
+# result (more than 6 items, or exactly 6) is in the Test Targets report
+# and docs/REQUIREMENTS.md section 6/7.
+name: webscraper_io_load_more
+start_urls:
+  - "https://webscraper.io/test-sites/load-more"
+allowed_domains:
+  - "webscraper.io"
+rate_limit: 1.0
+render_js: true
+max_concurrency: 2
+selectors:
+  item: "div.card.sitemap-card"
+  fields:
+    name: "h3.card-title a::text"
+    description: "p.description::text"
+    price: "p.price span[itemprop='price']::text"
+    details: "p.card-text::text"

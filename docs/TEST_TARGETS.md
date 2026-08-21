@@ -31,16 +31,34 @@
 |---|---|
 | `scrapingcourse.com/ecommerce` | كتالوج ديناميكي (مُختبر بالفعل ✅) |
 | `scrapingcourse.com/infinite-scrolling` | تحميل تدريجي بالسحب (مُختبر بالفعل ✅) |
-| `scrapingcourse.com/javascript-rendering` | محتوى JS خالص |
-| `scrapingcourse.com/pagination` | أنماط pagination متعددة (رقمية، load-more، scroll) |
-| `webscraper.io/test-sites` | مجموعة كاملة من متاجر تجريبية بأنماط مختلفة (categories, AJAX pagination) |
+| `scrapingcourse.com/javascript-rendering` | محتوى JS خالص (مُختبر بالفعل ✅) |
+| `scrapingcourse.com/pagination` | pagination رقمية (مُختبر بالفعل ✅) |
+| `webscraper.io/test-sites/pagination` | pagination رقمية (مُختبر بالفعل ✅) |
+| `webscraper.io/test-sites/scroll` | infinite scroll (`data-next-page` marker) |
+| `webscraper.io/test-sites/load-more` | زرار "Load More" — click-triggered، مش scroll؛ نتيجة الاختبار الفعلي في تقرير Tier 2 |
+| `webscraper.io/test-sites/website-state-setup-login` | تسجيل دخول — نفس قيد `quotes.toscrape.com/login` (Known Spider Limitation) |
+
+> **ملحوظة (2026-08-21):** عند الفحص الفعلي، الكتالوج الحالي لـ
+> `webscraper.io/test-sites` بقى 4 صفحات بس (مش "أكتر من 10 أنماط" زي
+> ما كان متوقع) — `pagination`، `scroll`، `load-more`،
+> `website-state-setup-login`. مفيش صفحات "dropdown filters" أو "nested
+> categories" منفصلة موجودة على الموقع الحي دلوقتي.
 
 ## المستوى 4 — حماية Anti-bot متدرجة
 
 | الموقع | التحدي |
 |---|---|
 | `scrapingcourse.com/antibot-challenge` | حماية متوسطة (مُختبر بالفعل ✅) |
-| `scrapingcourse.com/cloudflare-challenge` | Cloudflare Turnstile حقيقي (مُختبر بالفعل ✅) |
+| `scrapingcourse.com/cloudflare-challenge` | Cloudflare Turnstile حقيقي، حماية على مستوى WAF (مُختبر بالفعل ✅) |
+| `nowsecure.nl` | Cloudflare Turnstile تاني، مستقل عن `scrapingcourse.com` — نتيجة الاختبار الفعلي في تقرير Tier 2؛ ملحوظة: التحدي هنا cosmetic/client-side بس (مش WAF block زي التاني) |
+
+### أدوات تشخيص (مش targets بيانات — خطوة تحقق بعد أي محاولة تجاوز)
+
+| الأداة | الاستخدام | الحالة |
+|---|---|---|
+| `bot.sannysoft.com` | فحص 20+ اختبار (webdriver, plugins, WebGL...) بيوضح هل الـ browser ظاهر كـ automated ولا لأ | مُدمج كـ diagnostic test (`tests/integration/test_sannysoft_diagnostic_live.py`) — بيسجّل النتيجة، مش بيفشّل CI على أساسها |
+| `browserleaks.com` | فحص fingerprint شامل (canvas, WebGL, TLS) | متسجّل هنا بس لسه مش مُدمج — نفس فكرة sannysoft، هيتضاف لاحقًا لو احتجناه |
+| `demo.fingerprint.com/web-scraping` | demo رسمي من Fingerprint.com لكشف الـ bots | متسجّل هنا بس لسه مش مُدمج |
 
 > **`scrapingclub.com` اتشال من القائمة دي (2026-08-21):** عند الفحص
 > الفعلي، الدومين بالكامل بقى بيرجّع موقع كازينو غير متعلق ("Winspirit
@@ -61,6 +79,15 @@
 
 ---
 
+## مؤجّل — محتاج قرار قبل ما نبدأ
+
+**SPA (Single-Page App) demo حقيقي** (زي `react-shopping-cart` أو مشروع
+مفتوح المصدر مشابه): تحدي مختلف تمامًا عن "صفحة فيها JS" — كل التنقل
+جوه JS من غير صفحات منفصلة أصلاً. مش هيتضاف هنا لحد ما يتحدد demo بعينه
+(URL محدد) ويعدي فحص `legal_status` زي أي target تاني.
+
+---
+
 ## استراتيجية الاستخدام المقترحة
 
 1. **اختبار انحداري (regression) دوري:** المستويات 1-3 تتشغّل تلقائيًا في كل CI run (زي ما بيحصل بالفعل) - دول بيضمنوا إن أي تعديل جديد ملخبطش الأساسيات.
@@ -75,5 +102,6 @@
 كل المواقع دي إما:
 - مُصممة رسميًا لغرض التدريب (toscrape.com, scrapingcourse.com, scrapethissite.com, webscraper.io, Oxylabs Sandbox) - إذن صريح
 - منصات عامة بسياسة استخدام واضحة تسمح بالوصول الآلي المعتدل (Wikipedia, Hacker News)
+- demo pages تشخيصية مُعدّة عمدًا للاختبار الآلي/أدوات الـ scraping (`nowsecure.nl`, `bot.sannysoft.com`) - نفس مبدأ `scrapingcourse.com`'s anti-bot demos
 
 لسه المبدأ نفسه ساري: أي target حقيقي (غير الموجودين هنا) لازم يعدي مراجعة `legal_status` مع المكتب القانوني قبل التفعيل، زي ما اتفقنا قبل كده.
