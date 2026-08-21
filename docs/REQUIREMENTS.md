@@ -122,6 +122,11 @@ pytest tests/unit tests/integration tests/contract -v
 
 أي كود فيه `except Exception` عام أو `except: pass` بدون تسجيل واضح للسبب — **يُرفض تلقائيًا**.
 
+### قاعدة "لا افتراض قيد بيئة":
+أي فشل بسبب افتراض قيد شبكة/بيئة لازم يتأكد فعليًا في GitHub Actions
+(`services:` أو step مباشر) قبل ما يُسجّل في Pending Real-Network
+Verification — مش يُفترض تلقائيًا إنه pending.
+
 ---
 
 ## 4. Definition of Done
