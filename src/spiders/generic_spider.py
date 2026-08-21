@@ -37,8 +37,25 @@ class GenericSpider(scrapy.Spider):
         self.config = load_spider_config(config_path)
         self.start_urls = list(self.config.start_urls)
         self.allowed_domains = list(self.config.allowed_domains)
-        self.custom_settings = {"DOWNLOAD_DELAY": self.config.rate_limit}
         self.json_logger = get_logger(f"spiders.{self.config.name}")
+
+    @classmethod
+    def from_crawler(cls, crawler: Any, *args: Any, **kwargs: Any) -> GenericSpider:
+        # NOTE: a plain `self.custom_settings = {...}` assigned in __init__
+        # has no effect — Scrapy reads `custom_settings` off the *class*
+        # (via Spider.update_settings) before the spider instance (and
+        # therefore its YAML config) even exists. `crawler.settings` is
+        # still mutable at this point (from_crawler runs before the engine
+        # starts and freezes it), so this is where per-target settings
+        # that depend on config_path must be applied instead.
+        spider = super().from_crawler(crawler, *args, **kwargs)
+        crawler.settings.set("DOWNLOAD_DELAY", spider.config.rate_limit, priority="spider")
+        crawler.settings.set(
+            "ITEM_PIPELINES",
+            {"src.spiders.pipelines.StorageBackendPipeline": 300},
+            priority="spider",
+        )
+        return spider
 
     def parse(self, response: Response, **kwargs: Any) -> Iterator[dict[str, Any] | scrapy.Request]:
         selectors = self.config.selectors

@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from scrapy.crawler import Crawler
 from scrapy.http import HtmlResponse, Request
 
 from src.core.exceptions import ConfigError
@@ -61,6 +62,22 @@ def test_spider_extracts_items_from_fixture_page(config_path: str) -> None:
     assert "world as we have created it" in first["text"]
     assert isinstance(first["tags"], list)
     assert first["source_url"] == "https://quotes.toscrape.com/"
+
+
+def test_from_crawler_wires_download_delay_and_storage_pipeline(config_path: str) -> None:
+    """from_crawler must apply the per-target DOWNLOAD_DELAY and enable the storage
+    pipeline on crawler.settings — a plain instance-level custom_settings assignment
+    does *not* achieve this, since Scrapy reads custom_settings off the class before
+    the instance (and its YAML config) exists."""
+    crawler = Crawler(GenericSpider, settings={})
+
+    spider = GenericSpider.from_crawler(crawler, config_path=config_path)
+
+    assert spider.config.rate_limit == 1.0
+    assert crawler.settings.getfloat("DOWNLOAD_DELAY") == 1.0
+    assert crawler.settings.getdict("ITEM_PIPELINES") == {
+        "src.spiders.pipelines.StorageBackendPipeline": 300
+    }
 
 
 def test_missing_config_path_raises_config_error() -> None:
