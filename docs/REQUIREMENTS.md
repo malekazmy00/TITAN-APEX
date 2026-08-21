@@ -139,24 +139,37 @@ pytest tests/unit tests/integration tests/contract -v
 
 ## 5. Pending Real-Network Verification
 
-> بنود مسجلة رسميًا كـ "لسه محتاجة إثبات فعلي على بيئة بإنترنت حر" — مش
-> منسية، هترجعلها بمجرد ما الـ VPS (القسم 0) يبقى جاهز.
+> بنود بتتسجل هنا لما فشل إثباتها في بيئة التطوير (sandbox) يفضل غامض —
+> هل هو قيد بيئة حقيقي (محتاج VPS) ولا حاجة تانية؟ لا تتشال من هنا إلا
+> بعد إثبات حاسم في بيئة بإنترنت حر فعلي (GitHub Actions runners، أو الـ
+> VPS بعدين). دلوقتي مفيش بنود pending.
 
-| البند | الحالة | تاريخ التسجيل |
-|---|---|---|
-| **رندر Playwright الحي** (`scrapingcourse_infinite_scrolling.yaml`, `render_js: true`) | الكود اتبنى واتاختبر بالكامل (unit tests + دليل حي إن الـ wiring صحيح: الـ browser بيفتح فعلاً ويحاول يتصل، والفشل بيتسجل كـ `RenderError` واضح بدل ما يكراش). **الرندر الفعلي (page.goto ينجح ويرجع HTML بعد تنفيذ JS) لسه محتاج إثبات على بيئة بإنترنت حر** — بيئة التطوير دي (sandbox) فيها قيد شبكي بيمنع أي اتصال خارج من الـ headless Chromium تحديدًا (اتأكد بعدة محاولات: curl/pip بينجحوا عادي، Chromium بيرجع `ERR_CONNECTION_RESET` مهما كان إعداد الـ proxy)، فمش مشكلة في الكود. | 2026-08-21 |
-| **Byparr الحقيقي جوه Docker** (`docker-compose.yml`, service `byparr`) | الكود اتبنى واتاختبر بالكامل (unit tests + contract tests + دليل حي كامل: `ByparrProvider`/`ByparrMiddleware` اتجربوا فعليًا ضد سيرفر HTTP حقيقي على localhost بيتكلم نفس بروتوكول Byparr/FlareSolverr — حل فعلي + cookies + تخزين في SQLite، وكمان الـ fallback اتجرب حي في الحالتين (مش متظبط / الـ provider فشل) وسجّل بوضوح من غير كراش). **مفيش Docker daemon شغال في بيئة التطوير دي** (`docker ps` بيفشل: "no such file or directory")، فمقدرتش أشغّل الـ Byparr container الحقيقي نفسه ولا أتأكد إنه بيحل تحديات Cloudflare حقيقية. | 2026-08-21 |
+**لا يوجد بنود pending حاليًا.** الاتنين اللي كانوا مسجلين (2026-08-21)
+اتحلوا نهائيًا في نفس اليوم:
 
-**الخطوات المطلوبة لقفل البنود دي:** بعد تجهيز الـ VPS (القسم 0)، شغّل:
-```bash
-# Playwright:
-scrapy runspider src/spiders/generic_spider.py \
-    -a config_path=src/spiders/configs/scrapingcourse_infinite_scrolling.yaml \
-    -s LOG_LEVEL=INFO
-# تأكد إن item_scraped_count أكبر من 12 (يعني infinite-scroll JS اشتغل فعليًا).
+- **رندر Playwright الحي**: كان مسجل "pending" على أساس إنه قيد شبكة في
+  sandbox التطوير. لما اتشغّل فعليًا جوه GitHub Actions (إنترنت حر
+  بالكامل) عبر `tests/integration/test_playwright_live_render.py`، طلع
+  إن السبب **مكنش قيد بيئة أصلاً** — كان **باج حقيقي في الكود**:
+  `render_with_playwright()` كان بيعمل `page.goto()` بس من غير أي
+  scroll، فصفحات الـ infinite-scroll كانت بترجع نفس الـ 12 عنصر
+  الموجودين في الـ HTML الثابت بس (CI run
+  [32436779117](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32436779117)
+  فشل بـ `assert 12 > 12`، دليل واضح إن المتصفح وصل وقرأ الصفحة صح، بس
+  من غير scroll). اتصلح بإضافة scroll-to-bottom loop قبل قراءة الـ
+  content (`src/middlewares/playwright_middleware.py`,
+  `_scroll_to_load_lazy_content`)، وأعيد التشغيل ونجح فعليًا: CI run
+  [32437190471](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32437190471) —
+  `test_infinite_scrolling_target_yields_more_than_the_static_batch PASSED`.
+- **Byparr الحقيقي جوه Docker**: نفس الـ CI run
+  [32437190471](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32437190471)
+  شغّل الـ Byparr container الحقيقي (`ghcr.io/thephaseless/byparr:latest`
+  كـ `services:` في `ci.yml`) وحلّ تحدي anti-bot حقيقي على
+  `scrapingcourse.com/antibot-challenge` — لوج الـ container نفسه بيقول:
+  `Challenge detected, waiting for it to clear... Clicked the challenge
+  checkbox (attempt 1/2)... Done ... in 13.18s`. الاختبار
+  `tests/integration/test_byparr_live_solve.py` عدّى: `PASSED`.
 
-# Byparr:
-docker compose up -d byparr
-# وجّه TITAN_BYPARR_URL لعنوان الـ container، وشغّل أي target بـ antibot_needed: true
-# ضد موقع محمي فعليًا بـ Cloudflare، وتأكد إن الحل رجع HTML حقيقي بعد الـ challenge.
-```
+كلا الاختبارين بقوا جزء دائم من `ci.yml` (job-level `byparr` service +
+خطوة "Integration tests") — بيتشغّلوا فعليًا على كل push/PR، مش
+موثقين كـ "هيتحقق منهم بعدين" بس.
