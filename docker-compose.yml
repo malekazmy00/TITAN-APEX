@@ -1,0 +1,4 @@
+# Phase 1 needs no external services (SQLite is a plain file). This file
+# is a placeholder for Phase 3+ (Byparr) and Phase 4 (Redis) — services
+# will be added here as those phases land, not before.
+services: {}

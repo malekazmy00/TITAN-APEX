@@ -1,0 +1,25 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]"
+      - run: playwright install --with-deps chromium
+      - name: Unit tests (coverage gate >= 85%)
+        run: pytest tests/unit -v --cov=src --cov-fail-under=85
+      - name: Contract tests
+        run: pytest tests/contract -v
+      - name: Integration tests
+        run: |
+          if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
+            pytest tests/integration -v
+          else
+            echo "No integration tests yet (added from Phase 2 onward)."
+          fi

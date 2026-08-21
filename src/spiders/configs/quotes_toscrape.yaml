@@ -1,0 +1,16 @@
+# First real target: an official training/sandbox site with no anti-bot
+# protection (https://quotes.toscrape.com/). Safe to use as a smoke test
+# for generic_spider.py.
+name: quotes_toscrape
+start_urls:
+  - "https://quotes.toscrape.com/"
+allowed_domains:
+  - "quotes.toscrape.com"
+rate_limit: 1.0
+selectors:
+  item: "div.quote"
+  fields:
+    text: "span.text::text"
+    author: "small.author::text"
+    tags: "div.tags a.tag::text"
+next_page: "li.next a::attr(href)"
