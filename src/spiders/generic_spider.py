@@ -189,8 +189,15 @@ class GenericSpider(scrapy.Spider):
             # stub doesn't carry it either, mypy just doesn't flag those).
             data = response.json()  # type: ignore[attr-defined]
         except ValueError:
+            # body_snippet: real diagnostic evidence, not a guess -- e.g.
+            # this is exactly what caught a real browser (Camoufox drives
+            # Firefox, which has its own built-in JSON viewer) rendering
+            # a raw JSON response as something response.json()'s plain
+            # json.loads(response.text) can't parse
+            # (docs/REQUIREMENTS.md section 9 entry 9).
             self.json_logger.warning(
-                "generic_spider.invalid_json", extra={"url": response.url}
+                "generic_spider.invalid_json",
+                extra={"url": response.url, "body_snippet": response.text[:300]},
             )
             return
 
