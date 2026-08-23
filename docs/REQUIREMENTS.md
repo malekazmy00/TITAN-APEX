@@ -1018,8 +1018,30 @@ regression sentinel (زي Byparr/Patchright) لحد ما الحل يتنفّذ.
 الاختبار الحي رجع لصيغته الأصلية (يتوقع نتايج حقيقية من `/api/feed`،
 مش صفر items) — `test_mock_target_feed_yields_real_posts_from_the_json_api`.
 اتّحقّق محليًا (ruff/mypy --strict/189 unit+contract test PASSED، 89.24%
-coverage) قبل الدفع؛ **النتيجة الحقيقية من CI هتتحدّث هنا بمجرد ما
-الـ run يخلص، مش قبل كده.**
+coverage) قبل الدفع.
+
+**❌ محاولة الحل الأولى فشلت فعليًا (CI run [32660273266](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32660273266)) — بسبب جذري تاني، اتأكّد بالدليل مش افتراض:**
+اللوج أظهر `"content_type": "text/html; charset=utf-8", "used_raw_network_body": false`
+— يعني الشرط `application/json` ماتحققش خالص، فالكود رجع يستخدم
+`page.content()` القديم. **السبب:** `response = page.goto(url, ...)`
+بيرجّع استجابة صفحة **تحدي Anubis المؤقتة** (`content-type: text/html`)،
+مش الهدف الحقيقي — Anubis's الحقيقي بيوجّه للمحتوى الفعلي (JSON) بشكل
+**async من جوه الـ JS بعد ما الـ challenge يتحل**، بعد ما `page.goto()`
+يكون رجع خلاص. نفس شكل فجوة "async بعد load" بالظبط اللي `post_load_wait_ms`
+موجود أصلاً عشانها (بند 4) — بس هنا أثّرت على *الـ response object*
+نفسه مش بس على المحتوى المرئي.
+
+**✅✅ الحل الصحيح (تصحيح مباشر، بدليل السبب الحقيقي):** `_default_camoufox_solve`
+و`_default_patchright_solve` دلوقتي بيسجّلوا **كل** استجابات الـ
+main-frame عبر `page.on("response", ...)`، ومش بيعتمدوا على أول
+استجابة من `goto()` بس — بياخدوا **آخر** استجابة main-frame (اللي
+بتعكس أي redirect حصل بعد الـ challenge)، وبيتحققوا من الـ content-type
+بتاعها هي. دلوقتي `content_type`/`used_raw_network_body` في اللوج
+بيعكسوا الاستجابة الحقيقية النهائية، مش الأولى. اتّحقّق محليًا (ruff/mypy
+--strict/189 unit+contract test PASSED، 87.82% coverage) قبل الدفع.
+
+**النتيجة الحقيقية من محاولة الحل التانية هتتحدّث هنا بمجرد ما CI
+يخلص، مش قبل كده.**
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

@@ -75,16 +75,20 @@ def _default_patchright_solve(
     configurable) is reused as the "wait after click" delay, not a new
     parameter.
 
-    Same JSON handling as ``_default_camoufox_solve``: reads the raw
-    network body (``response.text()``) instead of the rendered DOM for a
-    JSON response, since Chromium (which this provider drives) has its
-    own built-in JSON viewer with the identical DOM-wrapping risk
-    confirmed for real against Camoufox's Firefox
-    (docs/REQUIREMENTS.md section 9 entry 9) -- not independently
-    confirmed for Patchright/Chromium specifically (it never reaches a
-    JSON endpoint in this stack at all, entry 7's Anubis deny), applied
-    here on the same principle rather than left inconsistent between the
-    two real-browser providers.
+    Same JSON handling as ``_default_camoufox_solve`` -- including its
+    second-round fix: reads the raw network body of the *last*
+    main-frame navigation response (tracked via
+    ``page.on("response", ...)``), not just whatever ``page.goto()``
+    itself returned, since an Anubis-protected URL's real target is
+    only reached via an async, client-side redirect *after* that first
+    response (docs/REQUIREMENTS.md section 9 entry 9's second round).
+    Chromium (which this provider drives) has its own built-in JSON
+    viewer with the identical DOM-wrapping risk confirmed for real
+    against Camoufox's Firefox -- not independently confirmed for
+    Patchright/Chromium specifically (it never reaches a JSON endpoint
+    in this stack at all, entry 7's Anubis deny), applied here on the
+    same principle rather than left inconsistent between the two
+    real-browser providers.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, or read
@@ -94,6 +98,7 @@ def _default_patchright_solve(
             replacement for it).
     """
     from patchright.sync_api import Error as PatchrightError
+    from patchright.sync_api import Response as PatchrightResponse
     from patchright.sync_api import sync_playwright
 
     logger = get_logger(__name__)
@@ -110,7 +115,19 @@ def _default_patchright_solve(
             page = browser.new_page()
             try:
                 try:
-                    response = page.goto(url, timeout=timeout_ms)
+                    # Tracks the *last* main-frame navigation response --
+                    # see this function's own docstring for why the first
+                    # response alone is unreliable for an
+                    # Anubis-protected URL.
+                    last_main_frame_response: PatchrightResponse | None = None
+
+                    def _track_main_frame_response(resp: PatchrightResponse) -> None:
+                        nonlocal last_main_frame_response
+                        if resp.frame is page.main_frame:
+                            last_main_frame_response = resp
+
+                    page.on("response", _track_main_frame_response)
+                    initial_response = page.goto(url, timeout=timeout_ms)
                     if click_selector:
                         page.click(click_selector, timeout=timeout_ms)
                     # The same capability CamoufoxProvider's own
@@ -122,15 +139,25 @@ def _default_patchright_solve(
                     # if a click just happened above, give whatever it
                     # triggered time to settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
-                    content_type = response.headers.get("content-type", "") if response else ""
+                    final_response = last_main_frame_response or initial_response
+                    content_type = (
+                        final_response.headers.get("content-type", "")
+                        if final_response is not None
+                        else ""
+                    )
                     if "application/json" in content_type:
-                        # The raw network body -- sidesteps Chromium's own
-                        # built-in JSON viewer wrapping the rendered DOM
-                        # (see this function's docstring).
-                        html = response.text() if response is not None else page.content()
+                        # The raw network body of the *real, final*
+                        # response -- sidesteps Chromium's own built-in
+                        # JSON viewer wrapping the rendered DOM (see this
+                        # function's docstring).
+                        html = (
+                            final_response.text()
+                            if final_response is not None
+                            else page.content()
+                        )
                     else:
                         html = page.content()
-                    status = response.status if response is not None else 200
+                    status = final_response.status if final_response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
                     # Same reasoning as camoufox_provider.py's identical
                     # log line: status 200 alone means nothing for a

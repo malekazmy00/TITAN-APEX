@@ -89,19 +89,30 @@ def _default_camoufox_solve(
     click below, so it doubles as "wait for the consent overlay to
     actually disappear" without inventing a second, overlapping knob.
 
-    For a JSON response, reads the raw network body
-    (``response.text()``) instead of the rendered DOM
-    (``page.content()``) -- confirmed for real
+    For a JSON response, reads the raw network body instead of the
+    rendered DOM (``page.content()``) -- confirmed for real
     (docs/REQUIREMENTS.md section 9 entry 9) that Firefox (which this
     provider drives) wraps a raw ``application/json`` response in its
     own built-in plaintext viewer (``<html><body><pre>...`` +
     ``resource://content-accessible/plaintext.css``) before
     ``page.content()`` ever reads it, corrupting it for
-    ``response.json()`` downstream. Playwright's own navigation
-    ``Response.text()`` is the raw network body, captured independently
-    of whatever the DOM later renders, and sidesteps that entirely. Every
-    non-JSON response keeps using ``page.content()`` exactly as before --
-    this only changes behavior for the one content-type that gets wrapped.
+    ``response.json()`` downstream.
+
+    **Not simply ``page.goto()``'s own return value** -- a real,
+    evidenced follow-up gap (docs/REQUIREMENTS.md section 9 entry 9's
+    second round): for an Anubis-protected URL, that first response is
+    Anubis's own interim *challenge* page (``content-type: text/html``),
+    not the real target -- the actual redirect to the JSON endpoint
+    happens *asynchronously, client-side*, after the challenge JS
+    resolves (the exact same async-after-``load`` shape
+    ``post_load_wait_ms`` itself exists to wait out, entry 4). A
+    ``page.on("response", ...)`` listener tracks every main-frame
+    navigation response as it happens, so the *last* one reflects the
+    real, final document -- including one reached via that async
+    redirect, not just the first (possibly stale) one ``goto()`` handed
+    back. Every non-JSON response keeps using ``page.content()`` exactly
+    as before -- this only changes behavior for the one content-type
+    that gets wrapped.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
@@ -113,6 +124,7 @@ def _default_camoufox_solve(
     from camoufox.exceptions import CamoufoxNotInstalled
     from camoufox.sync_api import Camoufox
     from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import Response as PlaywrightResponse
 
     logger = get_logger(__name__)
     try:
@@ -124,7 +136,19 @@ def _default_camoufox_solve(
             try:
                 page = browser.new_page()
                 try:
-                    response = page.goto(url, timeout=timeout_ms)
+                    # Tracks the *last* main-frame navigation response,
+                    # not just the first one `goto()` returns -- see this
+                    # function's own docstring for why the first response
+                    # alone is unreliable for an Anubis-protected URL.
+                    last_main_frame_response: PlaywrightResponse | None = None
+
+                    def _track_main_frame_response(resp: PlaywrightResponse) -> None:
+                        nonlocal last_main_frame_response
+                        if resp.frame is page.main_frame:
+                            last_main_frame_response = resp
+
+                    page.on("response", _track_main_frame_response)
+                    initial_response = page.goto(url, timeout=timeout_ms)
                     if click_selector:
                         page.click(click_selector, timeout=timeout_ms)
                     # The one thing ByparrProvider structurally cannot
@@ -135,15 +159,25 @@ def _default_camoufox_solve(
                     # triggered (e.g. a consent-wall reload) time to
                     # settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
-                    content_type = response.headers.get("content-type", "") if response else ""
+                    final_response = last_main_frame_response or initial_response
+                    content_type = (
+                        final_response.headers.get("content-type", "")
+                        if final_response is not None
+                        else ""
+                    )
                     if "application/json" in content_type:
-                        # The raw network body -- sidesteps Firefox's own
-                        # built-in plaintext/JSON viewer wrapping the
-                        # rendered DOM (see this function's docstring).
-                        html = response.text() if response is not None else page.content()
+                        # The raw network body of the *real, final*
+                        # response -- sidesteps Firefox's own built-in
+                        # plaintext/JSON viewer wrapping the rendered DOM
+                        # (see this function's docstring).
+                        html = (
+                            final_response.text()
+                            if final_response is not None
+                            else page.content()
+                        )
                     else:
                         html = page.content()
-                    status = response.status if response is not None else 200
+                    status = final_response.status if final_response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
                     # Always logged (not just on failure): the one piece of
                     # evidence that actually distinguishes "got real
