@@ -978,14 +978,36 @@ validator الجديد.
 `GenericSpider`). زي `/`، `/api/feed` وراء Anubis برضه، فمحتاج
 `antibot_provider: camoufox` (الوحيد المؤكد إنه بيعدّي Anubis فعليًا).
 
-**سؤال حقيقي مفتوح، لسه مش معروف الجواب:** Camoufox بيشغّل Firefox
-حقيقي، وFirefox عنده JSON viewer مدمج ممكن يحوّل الـ DOM المعروض لصفحة
-JSON response خام — هل `response.json()` (اللي بيعمل
-`json.loads(response.text)` ببساطة) هيفضل يشتغل صح ضد الـ DOM المتحوّل
-ده؟ **مش مفروض، هيتأكّد من نتيجة CI حقيقية.**
+**سؤال حقيقي كان مفتوح:** Camoufox بيشغّل Firefox حقيقي، وFirefox عنده
+viewer مدمج ممكن يحوّل الـ DOM المعروض لصفحة JSON response خام — هل
+`response.json()` هيفضل يشتغل صح ضد الـ DOM المتحوّل ده؟
 
-**النتيجة الحقيقية:** لسه محتاجة تأكيد CI — هتتحدّث هنا فور ما الـ run
-يخلص (مش قبل كده).
+**❌ النتيجة الحقيقية (CI run [32656904590](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32656904590)):
+فشل — والسبب الجذري اتأكّد بالدليل، مش افتراض.** لوج
+`camoufox_provider.solved` أظهر إن Camoufox عدّى Anubis فعليًا بنجاح
+(status 200، html_length 7433، كوكيز Anubis الحقيقية موجودة) — يعني
+مفيش مشكلة في الوصول خالص. بس `generic_spider.invalid_json` طلع بعده
+على طول، وبعد ما أضفنا diagnostic logging لأول 300 حرف من الـ body
+الفعلي (commit `b2ef256`)، ده اللي رجع فعليًا:
+```
+<html><head><link rel="stylesheet" href="resource://content-accessible/plaintext.css"></head><body><pre>{"edges":[{"comments":[{"author":"delgadotiffany",...
+```
+**تأكيد كامل للفرضية:** Firefox (اللي Camoufox بيشغّله) بيلف أي
+استجابة `application/json` بغلاف HTML خاص بيه (`<html><body><pre>` +
+`plaintext.css`) قبل ما `page.content()` (اللي `CamoufoxProvider`
+بيرجّعه) يتقرا خالص. `response.json()` بيشوف الغلاف ده، مش الـ JSON
+الخام، فبيرفضه بحق — كود الـ parsing نفسه اشتغل صح 100% (معالج الفشل
+اشتغل زي ما اتصمم، مفيش crash)، الفجوة في مصدر البيانات (الـ provider)
+مش في منطق الـ parsing.
+
+**القرار: مش هيتصلح الجولة دي، بالظبط زي قاعدة المشروع** — سجّلنا
+الفجوة بالدليل بدل ما نحاول نصلحها بطريقة مصطنعة. الحل الحقيقي المحتمل
+لجولة جاية: JSON فعليًا لسه موجود جوه الـ `<pre>` tag سليم تمامًا —
+استخدام `Response.text()` بتاع Playwright نفسه (الـ raw network body،
+منفصل تمامًا عن أي rendering) بدل `page.content()` كان هيتجنّب المشكلة
+دي من الأساس؛ ده اتجاه حل حقيقي، مش اتعمل هذه الجولة. الاختبار الحي
+(`test_mock_target_feed_yields_zero_items_firefox_json_viewer_wraps_the_body`)
+اتحوّل لنفس نمط regression sentinel اللي Byparr/Patchright بيستخدموه.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
