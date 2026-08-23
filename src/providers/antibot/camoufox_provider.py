@@ -140,11 +140,20 @@ def _default_camoufox_solve(
                     # not just the first one `goto()` returns -- see this
                     # function's own docstring for why the first response
                     # alone is unreliable for an Anubis-protected URL.
+                    # `is_navigation_request()` is required, not just
+                    # `resp.frame is page.main_frame` -- confirmed for
+                    # real (docs/REQUIREMENTS.md section 9 entry 9's
+                    # third round) that a plain frame check also matches
+                    # ordinary fetch/XHR calls a page's own JS makes
+                    # (e.g. Anubis's own pass-challenge API call, which
+                    # returns JSON) -- those have the same `.frame` as a
+                    # real navigation but are not one, and one such call
+                    # was overwriting the real page's response entirely.
                     last_main_frame_response: PlaywrightResponse | None = None
 
                     def _track_main_frame_response(resp: PlaywrightResponse) -> None:
                         nonlocal last_main_frame_response
-                        if resp.frame is page.main_frame:
+                        if resp.frame is page.main_frame and resp.request.is_navigation_request():
                             last_main_frame_response = resp
 
                     page.on("response", _track_main_frame_response)

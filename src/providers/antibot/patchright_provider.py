@@ -118,12 +118,19 @@ def _default_patchright_solve(
                     # Tracks the *last* main-frame navigation response --
                     # see this function's own docstring for why the first
                     # response alone is unreliable for an
-                    # Anubis-protected URL.
+                    # Anubis-protected URL. `is_navigation_request()` is
+                    # required, not just `resp.frame is page.main_frame`
+                    # -- see camoufox_provider.py's identical comment for
+                    # the real, confirmed reason (an ordinary fetch/XHR a
+                    # page's own JS makes -- e.g. Anubis's own
+                    # pass-challenge call -- shares the main frame but is
+                    # not a navigation, and was overwriting the real
+                    # page's response).
                     last_main_frame_response: PatchrightResponse | None = None
 
                     def _track_main_frame_response(resp: PatchrightResponse) -> None:
                         nonlocal last_main_frame_response
-                        if resp.frame is page.main_frame:
+                        if resp.frame is page.main_frame and resp.request.is_navigation_request():
                             last_main_frame_response = resp
 
                     page.on("response", _track_main_frame_response)

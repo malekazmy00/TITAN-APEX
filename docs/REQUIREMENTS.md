@@ -958,7 +958,7 @@ selector-based مش بيتحقق من الـ visibility). الـ 3 configs
 نتيجتهم مع cookie wall فضلت **غير قابلة للتمييز** عن فجوة Anubis
 الأسبق بتاعتهم — موثّق صراحة، مش مخفي.
 
-### 9. JSON/API parsing support في GenericSpider — ✅ اتحل فعليًا (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
+### 9. JSON/API parsing support في GenericSpider — قيد الحل (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
 
 **الإضافة:** `SpiderConfig` كسب `response_format: "html" | "json"` +
 `json_selectors` (dotted-key paths زي `"post.author"` بدل CSS selectors،
@@ -1040,7 +1040,27 @@ main-frame عبر `page.on("response", ...)`، ومش بيعتمدوا على أ
 بيعكسوا الاستجابة الحقيقية النهائية، مش الأولى. اتّحقّق محليًا (ruff/mypy
 --strict/189 unit+contract test PASSED، 87.82% coverage) قبل الدفع.
 
-**النتيجة الحقيقية من محاولة الحل التانية هتتحدّث هنا بمجرد ما CI
+**❌ محاولة الحل التانية فشلت برضه — بس المهم: فشلت بطريقة مختلفة
+تمامًا، كشفت regression حقيقي في الكود نفسه (CI run [32662253990](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32662253990)):**
+مش اختبار JSON هو اللي فشل هذه المرة — `test_mock_target_camoufox_gets_past_anubis_and_yields_real_posts`
+(اختبار الـ cookie wall المؤكد ناجح من قبل) فشل بـ:
+```
+ValueError: Cannot use css on a Selector of type 'json'
+```
+**السبب الجذري (اتأكّد بقراءة الـ traceback مباشرة، مش تخمين):**
+الفلتر `resp.frame is page.main_frame` مش كافي لتحديد "هل ده تحميل
+صفحة حقيقي" — أي طلب `fetch`/XHR بتعمله JS الصفحة نفسها (زي طلب
+Anubis's الحقيقي لـ `pass-challenge` API، اللي بيرجّع JSON) بيشارك
+نفس الـ `.frame` بتاع الصفحة الرئيسية، فكان بيتسجّل كـ "آخر استجابة"
+ويطغى على استجابة الصفحة الحقيقية بالكامل — حتى لما الهدف كان HTML
+عادي مش JSON خالص.
+
+**✅✅✅ الحل الصحيح النهائي:** أضفنا شرط `resp.request.is_navigation_request()`
+جنب فحص الـ frame — كده بس تحميلات الصفحة الحقيقية (navigation) بتتسجّل،
+مش أي طلب فرعي بتعمله JS الصفحة. اتّحقّق محليًا (ruff/mypy --strict/189
+unit+contract test PASSED، 87.82% coverage) قبل الدفع.
+
+**النتيجة الحقيقية من محاولة الحل التالتة هتتحدّث هنا بمجرد ما CI
 يخلص، مش قبل كده.**
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
