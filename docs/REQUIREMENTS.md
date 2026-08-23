@@ -958,7 +958,7 @@ selector-based مش بيتحقق من الـ visibility). الـ 3 configs
 نتيجتهم مع cookie wall فضلت **غير قابلة للتمييز** عن فجوة Anubis
 الأسبق بتاعتهم — موثّق صراحة، مش مخفي.
 
-### 9. JSON/API parsing support في GenericSpider (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
+### 9. JSON/API parsing support في GenericSpider — ✅ اتحل فعليًا (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
 
 **الإضافة:** `SpiderConfig` كسب `response_format: "html" | "json"` +
 `json_selectors` (dotted-key paths زي `"post.author"` بدل CSS selectors،
@@ -1000,14 +1000,26 @@ viewer مدمج ممكن يحوّل الـ DOM المعروض لصفحة JSON re
 اشتغل زي ما اتصمم، مفيش crash)، الفجوة في مصدر البيانات (الـ provider)
 مش في منطق الـ parsing.
 
-**القرار: مش هيتصلح الجولة دي، بالظبط زي قاعدة المشروع** — سجّلنا
-الفجوة بالدليل بدل ما نحاول نصلحها بطريقة مصطنعة. الحل الحقيقي المحتمل
-لجولة جاية: JSON فعليًا لسه موجود جوه الـ `<pre>` tag سليم تمامًا —
-استخدام `Response.text()` بتاع Playwright نفسه (الـ raw network body،
-منفصل تمامًا عن أي rendering) بدل `page.content()` كان هيتجنّب المشكلة
-دي من الأساس؛ ده اتجاه حل حقيقي، مش اتعمل هذه الجولة. الاختبار الحي
-(`test_mock_target_feed_yields_zero_items_firefox_json_viewer_wraps_the_body`)
-اتحوّل لنفس نمط regression sentinel اللي Byparr/Patchright بيستخدموه.
+**القرار وقتها: نأجل ونسجل** — سجّلنا الفجوة بالدليل بدل ما نحاول
+نصلحها بطريقة مصطنعة في نفس جولة الاكتشاف. الاختبار الحي اتحوّل لنمط
+regression sentinel (زي Byparr/Patchright) لحد ما الحل يتنفّذ.
+
+**✅ الحل (جولة تالية مباشرة، بمجرد ما اتطلب صراحة):** الحل الحقيقي
+المتوقع من التشخيص فوق نُفّذ بالظبط زي ما اتوصّف — `_default_camoufox_solve`
+(و`_default_patchright_solve` بنفس المبدأ، رغم إن Patchright مايوصلش
+لـ endpoint من نوع JSON في البيئة دي أصلاً، بند 7) دلوقتي بيتحقق من
+`content-type` header بتاع الاستجابة الحقيقية؛ لو `application/json`،
+بيستخدم `response.text()` بتاع Playwright (الـ raw network body، اللي
+ماتلمسوش أي DOM rendering خالص) بدل `page.content()` — أي content-type
+تاني فاضل يستخدم `page.content()` زي ما كان بالظبط، مفيش تغيير في
+سلوك الصفحات العادية. اللوج (`camoufox_provider.solved`/`patchright_provider.solved`)
+دلوقتي بيسجّل `content_type` و`used_raw_network_body` كدليل مباشر.
+
+الاختبار الحي رجع لصيغته الأصلية (يتوقع نتايج حقيقية من `/api/feed`،
+مش صفر items) — `test_mock_target_feed_yields_real_posts_from_the_json_api`.
+اتّحقّق محليًا (ruff/mypy --strict/189 unit+contract test PASSED، 89.24%
+coverage) قبل الدفع؛ **النتيجة الحقيقية من CI هتتحدّث هنا بمجرد ما
+الـ run يخلص، مش قبل كده.**
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

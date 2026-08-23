@@ -12,38 +12,26 @@ so `antibot_provider: camoufox` (the one AntibotProvider confirmed to get
 past Anubis's real challenge, docs/REQUIREMENTS.md section 9 entry 5) is
 what this config uses.
 
-**Confirmed for real (CI run
-[32656904590](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32656904590)):
-this does NOT work -- and the real root cause is exactly the hypothesis
-raised while building this round, confirmed by a diagnostic log, not
-assumed.** `camoufox_provider.solved` shows a clean 200 past Anubis
-(html_length 7433, real Anubis auth cookies present), but
-`generic_spider.invalid_json` fired right after with this actual
-response body (first ~300 chars, captured in CI):
+**Round 1 of this path (CI run
+[32656904590](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32656904590))
+found a real, confirmed gap, not this test's own bug:** Camoufox got past
+Anubis cleanly (a real 200), but `_default_camoufox_solve` read
+`page.content()` -- the rendered DOM -- and Firefox (which Camoufox
+drives) wraps any `application/json` response in its own built-in
+plaintext viewer (`<html><body><pre>...` + `plaintext.css`) before that
+DOM is ever read, confirmed by a diagnostic body-snippet log showing
+exactly that wrapper. `response.json()` correctly refused to parse it.
 
-```
-<html><head><link rel="stylesheet" href="resource://content-accessible/plaintext.css"></head><body><pre>{"edges":[{"comments":[{"author":"delgadotiffany",...
-```
-
-Camoufox drives a real Firefox engine, and Firefox wraps any
-`application/json` (or otherwise non-HTML-typed) response in its own
-built-in plaintext viewer -- an `<html><body><pre>...</pre></body></html>`
-shell around the real JSON -- before `page.content()` (what
-`CamoufoxProvider` hands back) ever gets read. `response.json()`'s plain
-`json.loads(response.text)` sees that HTML shell, not raw JSON, and
-correctly refuses to parse it (GenericSpider's own error handling worked
-exactly as designed here -- this is an environment/provider gap, not a
-bug in the JSON-parsing code itself).
-
-**Not fixed this round, per this project's own rule: document the real
-gap, don't force a fix without it being the actual point of the round.**
-The real JSON is still recoverable (it's sitting inside that `<pre>` tag
-verbatim), and Playwright's own navigation `Response.text()` (the raw
-network body, captured independently of DOM rendering) would sidestep
-this entirely -- a concrete, real fix direction for a future round, not
-implemented here. This assertion is a regression sentinel, matching the
-same convention `test_mock_target_live.py`/`test_mock_target_patchright_live.py`
-already established for their own confirmed gaps.
+**Fixed for real, not just theorized** (docs/REQUIREMENTS.md section 9
+entry 9's follow-up): `_default_camoufox_solve` (and
+`_default_patchright_solve`, applied on the same principle even though
+Patchright never reaches a JSON endpoint in this stack, entry 7) now
+reads the navigation response's raw network body
+(`response.text()`) instead of `page.content()` specifically when the
+response's own `content-type` header says `application/json` -- sidestepping
+Firefox's/Chromium's built-in viewer entirely, since that raw body was
+never touched by DOM rendering in the first place. Every other
+content-type keeps using `page.content()` unchanged.
 """
 
 from __future__ import annotations
@@ -60,18 +48,17 @@ BYPARR_URL = os.environ.get("TITAN_BYPARR_URL")
 @pytest.mark.skipif(
     not BYPARR_URL, reason="TITAN_BYPARR_URL not set (no live-network CI stack running)"
 )
-def test_mock_target_feed_yields_zero_items_firefox_json_viewer_wraps_the_body(
-    tmp_path: Path,
-) -> None:
-    """Documents the real, confirmed outcome (see module docstring for the
-    full, evidenced root cause: Camoufox/Firefox's own plaintext-viewer
-    HTML wrapper around a raw JSON response body)."""
+def test_mock_target_feed_yields_real_posts_from_the_json_api(tmp_path: Path) -> None:
     output_path = tmp_path / "mock_target_feed_live.jsonl"
 
     items = run_spider_live("mock_target_feed.yaml", output_path, timeout=180)
 
-    assert items == [], (
-        f"expected zero items (see this test's module docstring for the "
-        f"real, evidenced reason -- Firefox's plaintext-viewer HTML wrapper "
-        f"around the raw JSON response); got {len(items)}: {items[:1]}"
+    assert len(items) > 0, (
+        "expected real posts from /api/feed's JSON -- Camoufox's raw-network-body "
+        "fix for JSON responses is confirmed to resolve the Firefox plaintext-viewer "
+        "wrapping gap (see this test's module docstring); got 0 items -- something "
+        "regressed"
     )
+    first = items[0]
+    assert first["post_id"], "post_id should not be empty"
+    assert first["author"], "author should not be empty"

@@ -89,6 +89,20 @@ def _default_camoufox_solve(
     click below, so it doubles as "wait for the consent overlay to
     actually disappear" without inventing a second, overlapping knob.
 
+    For a JSON response, reads the raw network body
+    (``response.text()``) instead of the rendered DOM
+    (``page.content()``) -- confirmed for real
+    (docs/REQUIREMENTS.md section 9 entry 9) that Firefox (which this
+    provider drives) wraps a raw ``application/json`` response in its
+    own built-in plaintext viewer (``<html><body><pre>...`` +
+    ``resource://content-accessible/plaintext.css``) before
+    ``page.content()`` ever reads it, corrupting it for
+    ``response.json()`` downstream. Playwright's own navigation
+    ``Response.text()`` is the raw network body, captured independently
+    of whatever the DOM later renders, and sidesteps that entirely. Every
+    non-JSON response keeps using ``page.content()`` exactly as before --
+    this only changes behavior for the one content-type that gets wrapped.
+
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
             read the page -- wraps Camoufox's own pre-launch exceptions
@@ -121,7 +135,14 @@ def _default_camoufox_solve(
                     # triggered (e.g. a consent-wall reload) time to
                     # settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
-                    html = page.content()
+                    content_type = response.headers.get("content-type", "") if response else ""
+                    if "application/json" in content_type:
+                        # The raw network body -- sidesteps Firefox's own
+                        # built-in plaintext/JSON viewer wrapping the
+                        # rendered DOM (see this function's docstring).
+                        html = response.text() if response is not None else page.content()
+                    else:
+                        html = page.content()
                     status = response.status if response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
                     # Always logged (not just on failure): the one piece of
@@ -143,6 +164,8 @@ def _default_camoufox_solve(
                             "html_length": len(html),
                             "cookie_names": sorted(cookies),
                             "click_selector": click_selector,
+                            "content_type": content_type,
+                            "used_raw_network_body": "application/json" in content_type,
                         },
                     )
                     return _RawSolve(url=page.url, html=html, status=status, cookies=cookies)

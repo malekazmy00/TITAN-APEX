@@ -75,6 +75,17 @@ def _default_patchright_solve(
     configurable) is reused as the "wait after click" delay, not a new
     parameter.
 
+    Same JSON handling as ``_default_camoufox_solve``: reads the raw
+    network body (``response.text()``) instead of the rendered DOM for a
+    JSON response, since Chromium (which this provider drives) has its
+    own built-in JSON viewer with the identical DOM-wrapping risk
+    confirmed for real against Camoufox's Firefox
+    (docs/REQUIREMENTS.md section 9 entry 9) -- not independently
+    confirmed for Patchright/Chromium specifically (it never reaches a
+    JSON endpoint in this stack at all, entry 7's Anubis deny), applied
+    here on the same principle rather than left inconsistent between the
+    two real-browser providers.
+
     Raises:
         AntibotError: if the browser fails to launch, navigate, or read
             the page -- wraps Patchright's own launch/navigation/page
@@ -111,7 +122,14 @@ def _default_patchright_solve(
                     # if a click just happened above, give whatever it
                     # triggered time to settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
-                    html = page.content()
+                    content_type = response.headers.get("content-type", "") if response else ""
+                    if "application/json" in content_type:
+                        # The raw network body -- sidesteps Chromium's own
+                        # built-in JSON viewer wrapping the rendered DOM
+                        # (see this function's docstring).
+                        html = response.text() if response is not None else page.content()
+                    else:
+                        html = page.content()
                     status = response.status if response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
                     # Same reasoning as camoufox_provider.py's identical
@@ -130,6 +148,8 @@ def _default_patchright_solve(
                             "html_length": len(html),
                             "cookie_names": sorted(cookies),
                             "click_selector": click_selector,
+                            "content_type": content_type,
+                            "used_raw_network_body": "application/json" in content_type,
                         },
                     )
                     return _RawSolve(url=page.url, html=html, status=status, cookies=cookies)
