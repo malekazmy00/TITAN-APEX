@@ -1188,11 +1188,23 @@ Playwright locators بتسأل الصفحة الحية بدل parsel على `pag
 **اتّحقّق محليًا** قبل الدفع: test-environment's own pytest suite (92
 passed، 100% coverage — الطبقة الجديدة كسبت unit tests لـ
 `structural/shadow_dom.py` + `test_app.py` + `test_config.py`)، ruff
-نضيف على `test-environment/` نضيف (مفيش mypy --strict عليها — خارج
-نطاق `lint.yml`، زي باقي test-environment/mock-target)، وruff/mypy
---strict على `src`/`tests` (مفيش كود src اتغيّر الجولة دي أصلاً — الفجوة
-موثّقة، مش متصلحة). **النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما يخلص،
-مش قبل كده.**
+على `test-environment/` (مفيش mypy --strict عليها — خارج نطاق
+`lint.yml`، زي باقي test-environment/mock-target)، وruff/mypy --strict
+على `src`/`tests` (مفيش كود src اتغيّر الجولة دي أصلاً — الفجوة موثّقة،
+مش متصلحة).
+
+**✅✅✅ اتأكّد فعليًا (CI run [32678444498](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32678444498)) — دليل حقيقي من الـ job logs، مش افتراض:**
+`26 passed, 2 warnings in 304.11s (0:05:04)`، صفر FAILED. الاختبار
+الجديد نفسه اتأكّد PASSED صراحة:
+```
+tests/integration/test_mock_target_shadow_dom_live.py::test_mock_target_camoufox_misses_every_shadow_dom_wrapped_post PASSED
+```
+يعني الرقم الحتمي المتوقع (6 items بالظبط، مش تقريبي) اتأكّد فعليًا في
+كراول حقيقي — الفجوة المعمارية دي حقيقية ومؤكدة، مش نظرية. test-environment's
+own 92 unit tests كمان PASSED (رقم منفصل عن الـ 26 اللي فوق، step
+مختلف في CI). باقي الـ 25 اختبار تاني (byparr/patchright sentinels،
+JSON API، الجولة المركّبة من بند 10، Test Targets التانية) كلهم PASSED
+برضه — regression check كامل، الطبقة الجديدة مبوّظتش أي حاجة شغالة.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
