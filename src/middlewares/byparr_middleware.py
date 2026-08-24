@@ -156,11 +156,13 @@ class ByparrMiddleware:
 
         click_selector = request.meta.get("click_selector")
         extraction_selectors = request.meta.get("extraction_selectors")
+        progressive_extraction = bool(request.meta.get("progressive_extraction"))
         try:
             solution = provider.solve(
                 request.url,
                 click_selector=click_selector,
                 extraction_selectors=extraction_selectors,
+                progressive_extraction=progressive_extraction,
             )
         except AntibotError as exc:
             self.logger.error(
@@ -182,6 +184,13 @@ class ByparrMiddleware:
             # `response.request.meta` for the *same* request object
             # passed to HtmlResponse below.
             request.meta["live_dom_items"] = solution.items
+        if solution.html_snapshots is not None:
+            # docs/REQUIREMENTS.md section 9 entry 14: the "parsed_html"
+            # progressive-collection half -- same request.meta passthrough
+            # reasoning as live_dom_items above, for GenericSpider to
+            # parse and merge itself (it's the only one that knows which
+            # field is the identity key -- this middleware doesn't).
+            request.meta["html_snapshots"] = solution.html_snapshots
 
         return HtmlResponse(
             url=solution.url,

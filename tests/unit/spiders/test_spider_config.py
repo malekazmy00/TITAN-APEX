@@ -218,6 +218,91 @@ def test_live_dom_extraction_mode_requires_html_response_format(tmp_path: Path) 
         load_spider_config(str(config_file))
 
 
+# --- progressive_extraction (docs/REQUIREMENTS.md section 9 entry 14 --
+# the real fix for entry 13's confirmed DOM Virtualization gap) ---------
+
+
+def test_progressive_extraction_defaults_to_false(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.progressive_extraction is False
+
+
+def test_progressive_extraction_is_read_from_yaml_with_parsed_html(tmp_path: Path) -> None:
+    """Happy path: progressive_extraction works with the default
+    extraction_mode ("parsed_html") -- independent of it, not requiring
+    live_dom."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        "progressive_extraction: true\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.progressive_extraction is True
+    assert config.extraction_mode == "parsed_html"
+
+
+def test_progressive_extraction_works_with_live_dom_too(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        "extraction_mode: live_dom\nprogressive_extraction: true\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.progressive_extraction is True
+    assert config.extraction_mode == "live_dom"
+
+
+def test_progressive_extraction_requires_antibot_needed(tmp_path: Path) -> None:
+    """Failure case 13: no antibot_needed means no provider ever drives a
+    live browser page to scroll at all."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_provider: camoufox\nprogressive_extraction: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_needed"):
+        load_spider_config(str(config_file))
+
+
+def test_progressive_extraction_requires_a_real_browser_provider(tmp_path: Path) -> None:
+    """Failure case 14: byparr (the default antibot_provider) has no live
+    browser page to scroll and re-read step by step."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nprogressive_extraction: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_provider"):
+        load_spider_config(str(config_file))
+
+
+def test_progressive_extraction_requires_html_response_format(tmp_path: Path) -> None:
+    """Failure case 15: progressive collection needs `selectors`
+    (post-id-keyed dedup), not `json_selectors`."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        'name: x\nstart_urls: ["http://x/"]\nrate_limit: 1.0\n'
+        "response_format: json\njson_selectors:\n  items_path: a\n  fields:\n    x: b\n"
+        "antibot_needed: true\nantibot_provider: camoufox\nprogressive_extraction: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires response_format"):
+        load_spider_config(str(config_file))
+
+
 def test_missing_file_raises_config_error(tmp_path: Path) -> None:
     """Failure case 1: a non-existent path raises ConfigError, not a raw OSError."""
     missing_path = tmp_path / "does_not_exist.yaml"

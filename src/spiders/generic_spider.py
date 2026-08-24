@@ -21,6 +21,7 @@ from scrapy.http import Response
 from src.core.exceptions import ConfigError
 from src.core.interfaces.antibot_provider import LiveDomSelectors
 from src.logging_config import get_logger
+from src.providers.antibot.parsed_html import extract_parsed_html_items
 from src.spiders.spider_config import load_spider_config
 
 
@@ -120,6 +121,7 @@ class GenericSpider(scrapy.Spider):
             "render_wait_ms": self.config.render_wait_ms,
             "click_selector": self.config.click_selector,
             "extraction_selectors": extraction_selectors,
+            "progressive_extraction": self.config.progressive_extraction,
         }
 
     def _build_start_requests(self) -> Iterator[scrapy.Request]:
@@ -155,6 +157,34 @@ class GenericSpider(scrapy.Spider):
         selectors = self.config.selectors
         assert selectors is not None  # SpiderConfig guarantees this for response_format="html"
 
+        # docs/REQUIREMENTS.md section 9 entry 14: when the provider
+        # captured multiple HTML snapshots during progressive scrolling
+        # (extraction_mode: "parsed_html" + progressive_extraction: true
+        # -- ByparrMiddleware attaches them to request.meta the same way
+        # live_dom_items reaches here below), each snapshot is parsed with
+        # this same `selectors` block and merged, deduplicated by
+        # `post_id`, across *all* of them -- not just the final one. A
+        # single final read (what happens without progressive_extraction)
+        # can only ever reflect whatever's in the DOM at that one moment,
+        # missing anything a virtualized list (entry 13's confirmed gap)
+        # already evicted by then.
+        html_snapshots = response.meta.get("html_snapshots")
+        if html_snapshots is not None:
+            merged: dict[str, dict[str, Any]] = {}
+            for snapshot in html_snapshots:
+                for raw_item in extract_parsed_html_items(
+                    snapshot, selectors.item, selectors.fields
+                ):
+                    post_id = raw_item.get("post_id")
+                    if post_id is not None and post_id not in merged:
+                        merged[post_id] = raw_item
+            if not merged:
+                self.json_logger.warning(
+                    "generic_spider.no_items_found",
+                    extra={"url": response.url, "item_selector": selectors.item},
+                )
+            for raw_item in merged.values():
+                yield {"source_url": response.url, **raw_item}
         # docs/REQUIREMENTS.md section 9 entry 12: when a real, live
         # browser page already extracted items directly (extraction_mode:
         # "live_dom" -- ByparrMiddleware attaches them to request.meta,
@@ -164,8 +194,7 @@ class GenericSpider(scrapy.Spider):
         # reachable live (a Shadow DOM's content, entry 11's confirmed
         # gap), since it was never in that serialized string to begin
         # with, and would also just be redundant work for everything else.
-        live_dom_items = response.meta.get("live_dom_items")
-        if live_dom_items is not None:
+        elif (live_dom_items := response.meta.get("live_dom_items")) is not None:
             if not live_dom_items:
                 self.json_logger.warning(
                     "generic_spider.no_items_found",

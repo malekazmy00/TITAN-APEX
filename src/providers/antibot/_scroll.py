@@ -21,10 +21,24 @@ exact logic.
 Typed loosely (``Any`` for the live Playwright/Patchright ``Page``
 object) on purpose -- same tradeoff as
 ``src.providers.antibot._live_dom``'s own module docstring.
+
+**Progressive collection (docs/REQUIREMENTS.md section 9 entry 14):**
+:func:`scroll_and_collect` is a second entry point, for the real fix to
+entry 13's confirmed DOM Virtualization gap -- reading the page once,
+after scrolling finishes, structurally cannot recover content a
+virtualized list evicted along the way (it's genuinely gone from the DOM
+by then, not merely hidden/encapsulated). Collecting a snapshot after
+*every* scroll step instead, before eviction has a chance to remove
+what's rendered *right now*, is the fix. :func:`scroll_to_load_lazy_content`
+itself is deliberately untouched (no callback, same exact function body
+as before) -- zero risk of changing behavior for its own already-proven
+callers; this is the version any progressive/incremental strategy builds
+on instead.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 
@@ -60,3 +74,58 @@ def scroll_to_load_lazy_content(page: Any, max_attempts: int, pause_ms: int) -> 
         if current_height <= previous_height:
             break
         previous_height = current_height
+
+
+def scroll_and_collect(
+    page: Any, max_attempts: int, pause_ms: int, collect_fn: Callable[[], None]
+) -> None:
+    """Same scroll-to-stable loop as :func:`scroll_to_load_lazy_content`,
+    but calls ``collect_fn()`` after *every* read of the page -- including
+    the very first, pre-scroll one -- so a caller can capture or extract
+    that moment's content before a later step (e.g. DOM Virtualization's
+    own eviction) potentially removes it.
+
+    ``collect_fn`` takes no arguments and returns nothing -- it's expected
+    to close over ``page`` itself and accumulate into a caller-owned
+    collection (e.g. a dict keyed by post id, for real deduplication
+    across steps -- see this module's own docstring for why the id, not
+    just "was this call the first time we saw this element", is the
+    correct key: an element that's evicted and never comes back needs no
+    special handling either way, since it was already captured on an
+    earlier step).
+
+    Raises:
+        ValueError: if ``max_attempts`` is not positive, or ``pause_ms``
+            is negative -- both are meaningless configurations.
+    """
+    if max_attempts <= 0:
+        raise ValueError(f"max_attempts must be > 0, got {max_attempts}")
+    if pause_ms < 0:
+        raise ValueError(f"pause_ms must be >= 0, got {pause_ms}")
+
+    collect_fn()
+    previous_height = page.evaluate("document.body.scrollHeight")
+    for _ in range(max_attempts):
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(pause_ms)
+        collect_fn()
+        current_height = page.evaluate("document.body.scrollHeight")
+        if current_height <= previous_height:
+            break
+        previous_height = current_height
+
+
+def collect_html_snapshots(page: Any, max_attempts: int, pause_ms: int) -> list[str]:
+    """The ``"parsed_html"`` half of docs/REQUIREMENTS.md section 9 entry
+    14's progressive-collection fix: captures ``page.content()`` after
+    *every* scroll step via :func:`scroll_and_collect`, instead of just
+    the final one, returning every snapshot in order for the caller
+    (``generic_spider.py``, via
+    :func:`~src.providers.antibot.parsed_html.extract_parsed_html_items`)
+    to parse and merge itself -- this module only captures the raw
+    strings, since only the caller knows which field is the real identity
+    key to deduplicate by.
+    """
+    snapshots: list[str] = []
+    scroll_and_collect(page, max_attempts, pause_ms, lambda: snapshots.append(page.content()))
+    return snapshots

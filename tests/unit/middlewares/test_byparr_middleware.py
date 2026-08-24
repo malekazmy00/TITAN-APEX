@@ -30,15 +30,18 @@ class _FakeProvider(AntibotProvider):
         self._error = error
         self.last_click_selector: str | None = None
         self.last_extraction_selectors: LiveDomSelectors | None = None
+        self.last_progressive_extraction: bool = False
 
     def solve(
         self,
         url: str,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> Solution:
         self.last_click_selector = click_selector
         self.last_extraction_selectors = extraction_selectors
+        self.last_progressive_extraction = progressive_extraction
         if self._error is not None:
             raise self._error
         assert self._solution is not None
@@ -225,6 +228,76 @@ def test_process_request_does_not_set_live_dom_items_when_the_provider_did_not_e
 
     assert isinstance(result, HtmlResponse)
     assert "live_dom_items" not in result.meta
+
+
+def test_process_request_passes_progressive_extraction_from_meta_to_the_provider() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 14:
+    request.meta["progressive_extraction"] (set by GenericSpider when
+    SpiderConfig.progressive_extraction is true) must reach whichever
+    provider is selected, same as extraction_selectors' identical
+    contract."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    request = Request(
+        "https://example.com/",
+        meta={"antibot_needed": True, "progressive_extraction": True},
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_progressive_extraction is True
+
+
+def test_process_request_attaches_html_snapshots_when_the_provider_captured_them() -> None:
+    """The "parsed_html" progressive-collection half of entry 14: multiple
+    HTML snapshots a provider captured must reach GenericSpider's parse()
+    via response.meta, same passthrough shape as live_dom_items."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        html_snapshots=["<html>step1</html>", "<html>step2</html>"],
+        solved_at=datetime.now(tz=UTC),
+    )
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(solution=solution), thread_runner=_sync_thread_runner
+    )
+    request = Request("https://example.com/", meta={"antibot_needed": True})
+
+    result = middleware.process_request(request, spider=object())
+
+    assert isinstance(result, HtmlResponse)
+    assert result.meta["html_snapshots"] == ["<html>step1</html>", "<html>step2</html>"]
+
+
+def test_process_request_does_not_set_html_snapshots_when_none_were_captured() -> None:
+    """Failure-adjacent case: mirrors
+    test_process_request_does_not_set_live_dom_items_when_the_provider_did_not_extract's
+    identical reasoning, for html_snapshots instead."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(solution=solution), thread_runner=_sync_thread_runner
+    )
+    request = Request("https://example.com/", meta={"antibot_needed": True})
+
+    result = middleware.process_request(request, spider=object())
+
+    assert isinstance(result, HtmlResponse)
+    assert "html_snapshots" not in result.meta
 
 
 def test_process_request_routes_to_camoufox_when_selected() -> None:

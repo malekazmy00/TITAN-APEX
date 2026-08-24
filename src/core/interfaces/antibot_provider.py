@@ -53,6 +53,16 @@ class Solution(BaseModel):
     # real result -- the caller must use these items as-is, not also
     # re-parse `html` (docs/REQUIREMENTS.md section 9 entry 12).
     items: list[dict[str, Any]] | None = None
+    # docs/REQUIREMENTS.md section 9 entry 14: populated only when
+    # progressive_extraction=True *and* extraction_selectors was NOT set
+    # (the "parsed_html" progressive path -- extraction_selectors set at
+    # the same time means "live_dom" progressive instead, which populates
+    # `items`, not this). None means "not requested / not supported" (the
+    # single, final `html` snapshot is still what it always was); a list
+    # is every HTML snapshot captured across the provider's own scroll
+    # steps, in order -- the caller merges/dedupes them itself, since only
+    # the caller (GenericSpider) knows which field is the identity key.
+    html_snapshots: list[str] | None = None
 
 
 class AntibotProvider(ABC):
@@ -69,6 +79,7 @@ class AntibotProvider(ABC):
         url: str,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> Solution:
         """Solve whatever anti-bot challenge protects ``url``.
 
@@ -101,6 +112,24 @@ class AntibotProvider(ABC):
         -- log a clear warning and solve without it, leaving
         ``Solution.items`` as ``None`` so the caller falls back to parsing
         ``html`` itself.
+
+        ``progressive_extraction`` (docs/REQUIREMENTS.md section 9 entry
+        14, the real fix for a real, evidenced gap ``extraction_selectors``
+        alone does *not* close): reading the page once, after scrolling
+        finishes, cannot recover content a virtualized list (entry 13)
+        evicted along the way -- it is genuinely, unambiguously gone from
+        the DOM by then, not merely hidden or encapsulated, so neither
+        ``html`` nor live-DOM extraction helps if read only at the end.
+        When ``True``, a provider with a real, live browser page instead
+        extracts (or snapshots ``html``) after *every* scroll step, not
+        just the last, and merges the results (deduplicated by item
+        identity) -- via :attr:`Solution.items` when ``extraction_selectors``
+        is also set, or via :attr:`Solution.html_snapshots` (multiple raw
+        HTML strings, one per step, for the caller to parse and merge
+        itself) when it isn't. Same best-effort contract as the other two
+        parameters: a provider with no live page to query (``ByparrProvider``)
+        must not crash or silently drop it -- log a clear warning and solve
+        without it, leaving both fields as they'd be without this flag.
 
         Implementations must raise
         :class:`src.core.exceptions.AntibotError` (never a bare

@@ -25,6 +25,7 @@ def test_solve_returns_a_populated_solution() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         assert url == "https://example.com/"
         assert timeout_ms == 30_000
@@ -58,6 +59,7 @@ def test_post_load_wait_ms_reaches_the_solve_function() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         seen["post_load_wait_ms"] = post_load_wait_ms
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -93,6 +95,7 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         raise AntibotError(f"camoufox failed to solve {url}: browser launch failed")
 
@@ -114,6 +117,7 @@ def test_click_selector_reaches_the_solve_function() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         seen["click_selector"] = click_selector
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -135,6 +139,7 @@ def test_click_selector_defaults_to_none_when_not_given() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         assert click_selector is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -155,6 +160,7 @@ def test_zero_post_load_wait_ms_is_allowed() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -177,6 +183,7 @@ def test_extraction_selectors_reaches_the_solve_function() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         seen["extraction_selectors"] = extraction_selectors
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -198,6 +205,7 @@ def test_extraction_selectors_defaults_to_none_when_not_given() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         assert extraction_selectors is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -219,6 +227,7 @@ def test_solve_fn_items_reach_the_returned_solution() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         return _RawSolve(
             url=url,
@@ -245,6 +254,7 @@ def test_solve_fn_items_default_to_none_when_extraction_not_used() -> None:
         post_load_wait_ms: int,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 

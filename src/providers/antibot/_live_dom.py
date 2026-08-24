@@ -29,12 +29,55 @@ duck-typed live objects, but Patchright is a drop-in Playwright
 structurally identical but distinct classes) -- the same ``Any``
 tradeoff ``camoufox_provider.py``'s own module docstring already
 documents for these real, dynamically-duck-typed objects.
+
+:func:`collect_live_dom_items_progressively` is the ``"live_dom"`` half
+of docs/REQUIREMENTS.md section 9 entry 14's fix (the real fix for entry
+13's confirmed DOM Virtualization gap) -- :func:`extract_live_dom_items`
+itself stays the single-read primitive it always was.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any
+
+from src.providers.antibot._scroll import scroll_and_collect
+
+
+def collect_live_dom_items_progressively(
+    page: Any,
+    item_selector: str,
+    field_selectors: dict[str, str],
+    max_attempts: int,
+    pause_ms: int,
+    id_field: str = "post_id",
+) -> list[dict[str, Any]]:
+    """The ``"live_dom"`` half of docs/REQUIREMENTS.md section 9 entry
+    14's progressive-collection fix for entry 13's confirmed DOM
+    Virtualization gap: extracts via :func:`extract_live_dom_items` after
+    *every* scroll step (:func:`~src.providers.antibot._scroll.scroll_and_collect`),
+    not just the final one, merging the results deduplicated by
+    ``id_field`` -- so a post evicted from the DOM by a later step is
+    still captured, since it was already read on an earlier one.
+
+    ``id_field`` defaults to ``"post_id"`` -- a project-specific
+    convention (every one of this project's own ``.yaml`` configs names
+    its identity field that), not a generic requirement; an item whose
+    ``id_field`` value is ``None`` (missing from ``field_selectors``
+    entirely, or genuinely absent on that particular element) is dropped
+    from the merge rather than raising, since there's no way to
+    deduplicate what has no identity.
+    """
+    collected: dict[Any, dict[str, Any]] = {}
+
+    def _collect() -> None:
+        for item in extract_live_dom_items(page, item_selector, field_selectors):
+            key = item.get(id_field)
+            if key is not None and key not in collected:
+                collected[key] = item
+
+    scroll_and_collect(page, max_attempts, pause_ms, _collect)
+    return list(collected.values())
 
 
 def extract_live_dom_items(

@@ -1370,6 +1370,84 @@ scrolling). test-environment's own 101 unit test كمان PASSED. الفجوة
 items تدريجيًا أثناء كل دورة scroll بدل قراءة واحدة نهائية — خارج نطاق
 الجولة دي عن قصد).
 
+### 14. حل DOM Virtualization فعليًا عبر Progressive Scroll + Incremental Extraction (طلب المستخدم صراحة بعد بند 13 — التغيير المعماري اللي بند 13 قال إنه خارج نطاقه)
+
+**المحاولة الأولى (من أحدث الممارسات الموثّقة اللي المستخدم بحث فيها
+قبل الطلب): Progressive scroll + incremental extraction.** الفرق عن
+بند 13's القراءة الواحدة النهائية: بدل ما نستنى الـ scroll loop يخلص
+وبعدين نقرا الـ DOM مرة واحدة، بنستخرج/نلقّط snapshot بعد **كل** خطوة
+scroll لوحدها — قبل ما eviction يشيل اللي معروض دلوقتي. الـ
+deduplication بـ`post_id` كمفتاح (مش أي حقل تاني قابل للتكرار)، وبـ
+dict/set واحد شامل الـ crawl **كله** من أول التشغيل، مش بس داخل كل
+خطوة لوحدها — عشان بوست شافناه في نافذة مبكرة (قبل ما يتشال) يفضل
+موجود حتى لو اتشال بعد كده، وبوست لسه ظاهر في أكتر من قراءة ميتسجّلش
+مرتين.
+
+**البنية (مطبّقة على الاتنين extraction_mode، بدون أي تغيير في السلوك
+الافتراضي — `progressive_extraction: bool = False` جديد في
+`SpiderConfig`، الاتنين configs القديمة من بند 13 فضلوا زي ما هم بالظبط
+كـ regression sentinel):**
+- `src/providers/antibot/_scroll.py`: `scroll_and_collect` (نسخة من
+  `scroll_to_load_lazy_content` بتاخد `collect_fn` وتناديها بعد كل
+  قراءة، بما فيها القراءة الأولى قبل أي scroll) + `collect_html_snapshots`
+  (بتلقّط `page.content()` بعد كل خطوة، بترجع كل الـ snapshots كـ list).
+  `scroll_to_load_lazy_content` نفسها فضلت **من غير أي تعديل** — صفر
+  مخاطرة على الكولرز الحاليين المُثبّتين.
+- `src/providers/antibot/_live_dom.py`: `collect_live_dom_items_progressively`
+  — بتعيد query الـ live DOM بعد كل خطوة scroll (عبر `scroll_and_collect`)،
+  وبتجمّع النتايج في dict مفتاحه `post_id`، شامل الـ crawl كله.
+- `src/providers/antibot/parsed_html.py` (وحدة جديدة): `extract_parsed_html_items`
+  — بتاخد HTML string خام (مش Scrapy Response) وتستخرج منه العناصر عبر
+  `parsel.Selector` مباشرة (نفس محرك `response.css()` الداخلي بالظبط)،
+  لأن الـ provider layer معاه strings خام بس مش Response objects.
+  `generic_spider.py` هو اللي بيستدعيها لكل snapshot ويعمل merge/dedupe
+  بـ`post_id` بنفسه، لأنه هو بس اللي عارف إيه الحقل الحقيقي للـ identity.
+- `AntibotProvider.solve()` كسب parameter اختياري جديد
+  `progressive_extraction: bool = False`. Byparr (مالوش صفحة حية
+  يعمل عليها scroll، الـ `/v1` API بيرجّع HTML بس) بيتجاهله best-effort
+  مع warning log — نفس نمط `click_selector`/`extraction_selectors`
+  الموجود قبل كده. `SpiderConfig`'s validator بيمنع الكومبنيشن
+  المستحيلة (byparr + progressive_extraction) من الأساس، كـ
+  defense-in-depth.
+- **Bug حقيقي اتكشف واتصلح في الطريق:** أول تنفيذ inline جوه
+  `_default_camoufox_solve`/`_default_patchright_solve` (اللي مستحيل
+  تتعمله unit test مباشر — محتاج متصفح حقيقي) خلّى `camoufox_provider.py`
+  يهبط لـ 38% coverage و`patchright_provider.py` لـ 37% — كسر
+  `--cov-fail-under=85` فعليًا (84.23% total). الحل: استخراج المنطق
+  لدوال مستقلة قابلة للاختبار (`collect_live_dom_items_progressively`،
+  `collect_html_snapshots`) بـ fake Page/Locator objects (`_FakeVirtualizedPage`
+  جديدة في `test_live_dom.py` بتحاكي محتوى الـ DOM بيتغيّر بين قراءتين
+  — نفس فكرة eviction الحقيقية)، بدل ما تتسيب inline جوه دوال مش
+  مُختبَرة مباشرة. رجّع الـ coverage لـ86.07% (اتأكّد محليًا).
+
+**Configs جديدة للتجربة (بند 13's configs فضلوا زي ما هم، من غير أي
+تعديل):** `mock_target_feed_virtualized_progressive_parsed_html.yaml`
+و`mock_target_feed_virtualized_progressive_live_dom.yaml` — نفس
+target/selectors، `progressive_extraction: true` بس هو الفرق.
+
+**التوقع (مبني على قراءة الكود الفعلي، مش رقم عشوائي — التفاصيل في
+`tests/integration/test_mock_target_dom_virtualization_progressive_live.py`'s
+docstring): 10 items بالظبط، مش 5.** `FEED_PAGE_SIZE` (10) >
+`DOM_VIRTUALIZATION_WINDOW_SIZE` (5)، فأول batch لوحده بيتقص لـ5 قبل
+حتى أول قراءة progressive (بعد `post_load_wait_ms`). خطوة scroll واحدة
+بس بتحصل فعليًا (لأن حجم الـ DOM بيفضل شبه ثابت بعد أول trim، فـ
+`scrollHeight` بيوقف يكبر) — يعني نافذتين منفصلتين بـ5 بوستات لكل
+واحدة، **مش متداخلين** (post_ids مختلفة) = 10 اتنين مجمّعين.
+
+**اتّحقّق محليًا** قبل الدفع: `ruff check src/ tests/` نظيف، `mypy
+--strict src` نظيف (عبر `python -m mypy`، نفس بيئة CI الحقيقية —
+تفاصيل ليه `mypy` binary العام بيفشل محليًا بس `python -m mypy` بينجح
+موثّقة في الـ commit نفسه)، 268 unit+contract+integration test PASSED
+محليًا (86.56% coverage، الـ 7 فشل الوحيدين في نفس الـ run بتوع
+مواقع خارجية حقيقية زي quotes.toscrape.com — sandbox بلا إنترنت خارجي،
+مش علاقة بالتغيير)، test-environment's own suite 101 passed (100%
+coverage، بدون أي تعديل هناك أصلاً هذه الجولة). **الاختبارين الحاسمين
+(`test_progressive_parsed_html_recovers_both_virtualization_windows`،
+`test_progressive_live_dom_recovers_both_virtualization_windows`)
+بيتخطّوا محليًا** (مفيش `TITAN_BYPARR_URL` — مفيش live network stack
+محليًا)، **لسه محتاجين تأكيد CI حقيقي** — النتيجة الفعلية (مش
+الافتراض) هتتسجّل هنا بمجرد ما الـ run يخلص، زي كل جولة قبل كده.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

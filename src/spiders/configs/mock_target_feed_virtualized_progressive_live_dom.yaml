@@ -1,0 +1,41 @@
+# docs/REQUIREMENTS.md section 9 entry 14 (the real fix for entry 13's
+# confirmed DOM Virtualization gap): the `extraction_mode: live_dom`
+# half of a deliberate two-config experiment, same target/selectors as
+# `mock_target_feed_virtualized_live_dom.yaml` (entry 13, kept UNCHANGED
+# as a regression sentinel -- it still only recovers 5/10 items, proving
+# `live_dom`'s shadow-piercing capability alone does not help here, since
+# this is a timing + DOM-existence problem, not encapsulation) --
+# `mock_target_feed_virtualized_progressive_parsed_html.yaml` is this
+# config's own sibling, only `extraction_mode` differs.
+#
+# The one thing that changes here vs. entry 13's config:
+# `progressive_extraction: true`. Instead of a single `page.locator()`
+# read after scrolling finishes, `collect_live_dom_items_progressively()`
+# (src/providers/antibot/_live_dom.py) re-queries the live DOM after
+# EVERY scroll step and merges results into a dict keyed by `post_id`,
+# accumulated across the *entire* crawl -- not reset per step -- so a
+# post evicted by a later scroll step is still captured from the step
+# where it was visible, and a post that reappears (e.g. scroll forward
+# then back) is never double-counted.
+#
+# Expected (not assumed -- see docs/REQUIREMENTS.md for the real,
+# CI-confirmed result): all 10 `/feed` posts, not just the 5 that fit in
+# `DOM_VIRTUALIZATION_WINDOW_SIZE` at any one instant.
+name: mock_target_feed_virtualized_progressive_live_dom
+start_urls:
+  - "http://localhost:8080/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+extraction_mode: live_dom
+progressive_extraction: true
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

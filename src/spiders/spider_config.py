@@ -95,6 +95,18 @@ class SpiderConfig(BaseModel):
     # produced it. Reuses the exact same `selectors` block either way --
     # no second selector language for a target to learn.
     extraction_mode: Literal["parsed_html", "live_dom"] = "parsed_html"
+    # docs/REQUIREMENTS.md section 9 entry 14: the real fix for entry 13's
+    # confirmed DOM Virtualization gap -- reading the page once, after
+    # scrolling finishes (what both extraction_mode values do by default),
+    # cannot recover content a virtualized list evicted along the way; it
+    # is genuinely gone from the DOM by then. When True, the provider
+    # instead extracts (or snapshots html, for "parsed_html") after
+    # *every* scroll step and merges the results, deduplicated by post
+    # id. Independent of extraction_mode -- both "parsed_html" and
+    # "live_dom" can opt in, and get progressive collection each in their
+    # own way. Defaults False: every existing config's behavior stays
+    # exactly as entries 11-13 already established, zero regression risk.
+    progressive_extraction: bool = False
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:
@@ -128,6 +140,26 @@ class SpiderConfig(BaseModel):
         if self.antibot_provider not in ("camoufox", "patchright"):
             raise ValueError(
                 "extraction_mode 'live_dom' requires antibot_provider 'camoufox' or "
+                f"'patchright' (a real, live browser page) -- got {self.antibot_provider!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _progressive_extraction_requires_a_real_browser_provider(self) -> SpiderConfig:
+        if not self.progressive_extraction:
+            return self
+        # Same real structural requirements as extraction_mode: "live_dom"
+        # (only a real, live browser page can be scrolled and re-read
+        # step by step at all) -- independent of extraction_mode's own
+        # value, so checked here rather than folded into the validator
+        # above.
+        if self.response_format != "html":
+            raise ValueError("progressive_extraction requires response_format 'html'")
+        if not self.antibot_needed:
+            raise ValueError("progressive_extraction requires antibot_needed: true")
+        if self.antibot_provider not in ("camoufox", "patchright"):
+            raise ValueError(
+                "progressive_extraction requires antibot_provider 'camoufox' or "
                 f"'patchright' (a real, live browser page) -- got {self.antibot_provider!r}"
             )
         return self

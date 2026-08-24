@@ -63,7 +63,23 @@ class ByparrProvider(AntibotProvider):
         url: str,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> Solution:
+        if progressive_extraction:
+            # Same structural gap as extraction_selectors below (entry
+            # 14, the real fix for entry 13's DOM Virtualization gap):
+            # progressive collection needs a live browser page to scroll
+            # and re-read step by step -- Byparr's /v1 protocol has no
+            # such page. SpiderConfig's own validator should mean this
+            # branch is never actually reached in practice -- logged and
+            # skipped anyway, defense in depth.
+            self.logger.warning(
+                "byparr_provider.progressive_extraction_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API returns HTML only, no live page to scroll",
+                },
+            )
         if extraction_selectors is not None:
             # Real, structural gap (docs/REQUIREMENTS.md section 9 entry
             # 12): live-DOM extraction needs a live browser page to query

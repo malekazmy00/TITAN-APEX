@@ -1,0 +1,45 @@
+# docs/REQUIREMENTS.md section 9 entry 14 (the real fix for entry 13's
+# confirmed DOM Virtualization gap): the `extraction_mode: parsed_html`
+# half of a deliberate two-config experiment, same target/selectors as
+# `mock_target_feed_virtualized_parsed_html.yaml` (entry 13, kept
+# UNCHANGED as a regression sentinel -- it still only recovers 5/10
+# items, proving the gap was real and still exists on the old,
+# single-shot-read path) -- `mock_target_feed_virtualized_progressive_live_dom.yaml`
+# is this config's own sibling, only `extraction_mode` differs.
+#
+# The one thing that changes here vs. entry 13's config:
+# `progressive_extraction: true`. Entry 13 proved reading the DOM once,
+# after scrolling finishes, cannot recover posts
+# `structural/dom_virtualization.py`'s own eviction already removed by
+# then -- they are genuinely gone, not merely hidden. This config
+# exercises the fix instead: `collect_html_snapshots()`
+# (src/providers/antibot/_scroll.py) captures `page.content()` after
+# EVERY scroll step, before the next step's eviction has a chance to
+# remove what's rendered right now; `generic_spider.py` then parses
+# every snapshot (via
+# `src/providers/antibot/parsed_html.py::extract_parsed_html_items`) and
+# merges them, deduplicated by `post_id`, across the *entire* crawl --
+# not just within one snapshot -- so a post seen only in an earlier,
+# since-evicted window is still recovered.
+#
+# Expected (not assumed -- see docs/REQUIREMENTS.md for the real,
+# CI-confirmed result): all 10 `/feed` posts, not just the 5 that fit in
+# `DOM_VIRTUALIZATION_WINDOW_SIZE` at any one instant.
+name: mock_target_feed_virtualized_progressive_parsed_html
+start_urls:
+  - "http://localhost:8080/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+extraction_mode: parsed_html
+progressive_extraction: true
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

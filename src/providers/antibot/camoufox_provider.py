@@ -65,8 +65,11 @@ from typing import Any, NamedTuple
 from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.logging_config import get_logger
-from src.providers.antibot._live_dom import extract_live_dom_items
-from src.providers.antibot._scroll import scroll_to_load_lazy_content
+from src.providers.antibot._live_dom import (
+    collect_live_dom_items_progressively,
+    extract_live_dom_items,
+)
+from src.providers.antibot._scroll import collect_html_snapshots, scroll_to_load_lazy_content
 
 DEFAULT_TIMEOUT_MS = 30_000
 # How long to wait after the page's `load` event before reading content
@@ -97,12 +100,16 @@ class _RawSolve(NamedTuple):
     # actually ran -- see Solution.items' own comment for the full
     # None-vs-list contract this mirrors exactly.
     items: list[dict[str, Any]] | None = None
+    # None unless progressive_extraction was given without
+    # extraction_selectors -- see Solution.html_snapshots' own comment
+    # for the full contract this mirrors exactly.
+    html_snapshots: list[str] | None = None
 
 
-# (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors)
-# -> raw browser result
+# (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
+# progressive_extraction) -> raw browser result
 CamoufoxSolveFn = Callable[
-    [str, int, int, "str | None", "LiveDomSelectors | None"], _RawSolve
+    [str, int, int, "str | None", "LiveDomSelectors | None", bool], _RawSolve
 ]
 
 
@@ -112,6 +119,7 @@ def _default_camoufox_solve(
     post_load_wait_ms: int,
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
+    progressive_extraction: bool = False,
 ) -> _RawSolve:
     """Drive a real Camoufox browser: navigate, (optionally) click, wait
     past ``load``, read, close.
@@ -160,6 +168,20 @@ def _default_camoufox_solve(
     serialized string at all, regardless of which browser produced it
     (entry 11's real, confirmed gap). A no-op (``items`` stays ``None``)
     when not given, so every existing call site's behavior is unchanged.
+
+    ``progressive_extraction`` (docs/REQUIREMENTS.md section 9 entry 14,
+    the real fix for entry 13's confirmed DOM Virtualization gap): reading
+    the page once, after scrolling finishes (what happens above by
+    default), cannot recover content a virtualized list evicted along the
+    way -- it's genuinely gone from the DOM by then. When ``True``,
+    :func:`~src.providers.antibot._scroll.scroll_and_collect` extracts (or
+    snapshots ``html``) after *every* scroll step instead of just the
+    last, merging the results deduplicated by ``post_id`` -- via ``items``
+    when ``extraction_selectors`` is also given (the "live_dom" half), or
+    via ``html_snapshots`` when it isn't (the "parsed_html" half, left for
+    the caller to parse and merge itself, since the live-DOM extraction
+    path is the only one that needs selectors down here at all). A no-op
+    (behaves exactly like ``progressive_extraction=False``) when not given.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
@@ -223,9 +245,33 @@ def _default_camoufox_solve(
                     # infinite scroll at all (src.providers.antibot._scroll's
                     # own docstring) -- called unconditionally, same
                     # justification `render_with_playwright` already has.
-                    scroll_to_load_lazy_content(
-                        page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
-                    )
+                    #
+                    # entry 14: progressive_extraction branches to
+                    # scroll_and_collect instead, extracting/snapshotting
+                    # after every step rather than reading only once at
+                    # the end -- see this function's own docstring.
+                    items: list[dict[str, Any]] | None = None
+                    html_snapshots: list[str] | None = None
+                    if progressive_extraction and extraction_selectors is not None:
+                        items = collect_live_dom_items_progressively(
+                            page,
+                            extraction_selectors.item,
+                            extraction_selectors.fields,
+                            DEFAULT_MAX_SCROLL_ATTEMPTS,
+                            DEFAULT_SCROLL_PAUSE_MS,
+                        )
+                    elif progressive_extraction:
+                        html_snapshots = collect_html_snapshots(
+                            page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
+                        )
+                    else:
+                        scroll_to_load_lazy_content(
+                            page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
+                        )
+                        if extraction_selectors is not None:
+                            items = extract_live_dom_items(
+                                page, extraction_selectors.item, extraction_selectors.fields
+                            )
                     final_response = last_main_frame_response or initial_response
                     content_type = (
                         final_response.headers.get("content-type", "")
@@ -244,20 +290,14 @@ def _default_camoufox_solve(
                         )
                     else:
                         html = page.content()
+                    # entry 14: the last snapshot is the freshest read of
+                    # the page either way -- overrides the content-type
+                    # -based read above only when progressive parsed_html
+                    # collection actually ran.
+                    if html_snapshots:
+                        html = html_snapshots[-1]
                     status = final_response.status if final_response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
-                    # Must happen before `browser.close()` below (this
-                    # function's own `finally` blocks) -- `page` stops
-                    # being queryable at all once the browser tears down,
-                    # the same reason `html`/`status`/`cookies` are all
-                    # read here rather than after this try block.
-                    items = (
-                        extract_live_dom_items(
-                            page, extraction_selectors.item, extraction_selectors.fields
-                        )
-                        if extraction_selectors is not None
-                        else None
-                    )
                     # Always logged (not just on failure): the one piece of
                     # evidence that actually distinguishes "got real
                     # content" from "still stuck on a challenge/interstitial
@@ -281,10 +321,19 @@ def _default_camoufox_solve(
                             "used_raw_network_body": "application/json" in content_type,
                             "live_dom_extraction_used": items is not None,
                             "live_dom_item_count": len(items) if items is not None else None,
+                            "progressive_extraction": progressive_extraction,
+                            "html_snapshot_count": (
+                                len(html_snapshots) if html_snapshots is not None else None
+                            ),
                         },
                     )
                     return _RawSolve(
-                        url=page.url, html=html, status=status, cookies=cookies, items=items
+                        url=page.url,
+                        html=html,
+                        status=status,
+                        cookies=cookies,
+                        items=items,
+                        html_snapshots=html_snapshots,
                     )
                 finally:
                     page.close()
@@ -323,6 +372,7 @@ class CamoufoxProvider(AntibotProvider):
         url: str,
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
     ) -> Solution:
         try:
             raw = self._solve_fn(
@@ -331,6 +381,7 @@ class CamoufoxProvider(AntibotProvider):
                 self._post_load_wait_ms,
                 click_selector,
                 extraction_selectors,
+                progressive_extraction,
             )
         except AntibotError:
             self.logger.error("camoufox_provider.solve_failed", extra={"url": url})
@@ -342,5 +393,6 @@ class CamoufoxProvider(AntibotProvider):
             status_code=raw.status,
             cookies=raw.cookies,
             items=raw.items,
+            html_snapshots=raw.html_snapshots,
             solved_at=datetime.now(tz=UTC),
         )
