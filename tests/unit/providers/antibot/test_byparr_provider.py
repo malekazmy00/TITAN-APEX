@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from src.core.exceptions import AntibotError
+from src.core.interfaces.antibot_provider import LiveDomSelectors
 from src.providers.antibot.byparr_provider import ByparrProvider
 
 VALID_RESPONSE = json.dumps(
@@ -128,6 +129,39 @@ def test_click_selector_logs_a_warning_and_still_solves() -> None:
     message, extra = logged[0]
     assert message == "byparr_provider.click_selector_unsupported"
     assert extra["click_selector"] == "#accept-cookies"
+
+
+def test_extraction_selectors_logs_a_warning_and_still_solves() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 12: Byparr's /v1 API returns
+    HTML only, no live page for GenericSpider (or anything else) to query
+    -- passing extraction_selectors must not crash or silently drop it;
+    it must log clearly and still solve without live-DOM extraction."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    selectors = LiveDomSelectors(item='[data-role="post"]', fields={"author": "::text"})
+    solution = provider.solve("https://example.com/", extraction_selectors=selectors)
+
+    assert solution.status_code == 200  # still solves despite the unsupported extraction
+    assert solution.items is None  # no live-DOM extraction actually happened
+    message, extra = logged[0]
+    assert message == "byparr_provider.extraction_selectors_unsupported"
+    assert extra["url"] == "https://example.com/"
 
 
 def test_base_url_trailing_slash_is_normalized() -> None:

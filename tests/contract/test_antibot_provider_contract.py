@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, Solution
+from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.providers.antibot.byparr_provider import ByparrProvider
 from src.providers.antibot.camoufox_provider import CamoufoxProvider
 from src.providers.antibot.camoufox_provider import _RawSolve as _CamoufoxRawSolve
@@ -55,7 +55,11 @@ def _build_byparr_failing() -> AntibotProvider:
 
 
 def _camoufox_ok_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    url: str,
+    timeout_ms: int,
+    post_load_wait_ms: int,
+    click_selector: str | None = None,
+    extraction_selectors: LiveDomSelectors | None = None,
 ) -> _CamoufoxRawSolve:
     return _CamoufoxRawSolve(
         url="https://example.com/protected",
@@ -66,7 +70,11 @@ def _camoufox_ok_solve(
 
 
 def _camoufox_failing_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    url: str,
+    timeout_ms: int,
+    post_load_wait_ms: int,
+    click_selector: str | None = None,
+    extraction_selectors: LiveDomSelectors | None = None,
 ) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
@@ -80,7 +88,11 @@ def _build_camoufox_failing() -> AntibotProvider:
 
 
 def _patchright_ok_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    url: str,
+    timeout_ms: int,
+    post_load_wait_ms: int,
+    click_selector: str | None = None,
+    extraction_selectors: LiveDomSelectors | None = None,
 ) -> _PatchrightRawSolve:
     return _PatchrightRawSolve(
         url="https://example.com/protected",
@@ -91,7 +103,11 @@ def _patchright_ok_solve(
 
 
 def _patchright_failing_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    url: str,
+    timeout_ms: int,
+    post_load_wait_ms: int,
+    click_selector: str | None = None,
+    extraction_selectors: LiveDomSelectors | None = None,
 ) -> _PatchrightRawSolve:
     raise AntibotError(f"patchright failed to solve {url}: unsolvable")
 
@@ -154,5 +170,20 @@ def test_solve_accepts_an_optional_click_selector_without_crashing(
     even one (ByparrProvider) that cannot actually act on it and only logs
     a warning instead."""
     solution = provider.solve("https://example.com/protected", click_selector="#accept-cookies")
+
+    assert isinstance(solution, Solution)
+
+
+def test_solve_accepts_an_optional_extraction_selectors_without_crashing(
+    provider: AntibotProvider,
+) -> None:
+    """extraction_selectors (docs/REQUIREMENTS.md section 9 entry 12) is
+    best-effort, not part of the required contract (AntibotProvider.solve's
+    own docstring) -- every provider must still accept it and return a
+    Solution without crashing, even one (ByparrProvider) that cannot
+    actually act on it and only logs a warning instead."""
+    selectors = LiveDomSelectors(item='[data-role="post"]', fields={"author": "::text"})
+
+    solution = provider.solve("https://example.com/protected", extraction_selectors=selectors)
 
     assert isinstance(solution, Solution)

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from src.core.interfaces.antibot_provider import AntibotProvider, Solution
+from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 
 
 class _FakeAntibotProvider(AntibotProvider):
@@ -47,3 +47,38 @@ def test_solution_rejects_invalid_data() -> None:
             status_code="not-an-int",  # type: ignore[arg-type]
             solved_at=datetime.now(tz=UTC),
         )
+
+
+def test_solution_items_defaults_to_none() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 12: every existing call site
+    (every provider before this round) must keep constructing a Solution
+    with no `items` at all -- it must default to None, not an empty list,
+    since the two mean different things (see Solution.items' own comment)."""
+    solution = Solution(
+        url="https://example.com",
+        html="<html></html>",
+        status_code=200,
+        solved_at=datetime.now(tz=UTC),
+    )
+
+    assert solution.items is None
+
+
+def test_solution_accepts_a_populated_items_list() -> None:
+    solution = Solution(
+        url="https://example.com",
+        html="<html></html>",
+        status_code=200,
+        items=[{"author": "alice"}],
+        solved_at=datetime.now(tz=UTC),
+    )
+
+    assert solution.items == [{"author": "alice"}]
+
+
+def test_live_dom_selectors_rejects_empty_fields() -> None:
+    """Failure case 3: an item selector with no fields to extract is a
+    real misconfiguration, same reasoning SelectorsConfig's own
+    `fields: dict[str, str] = Field(min_length=1)` already enforces."""
+    with pytest.raises(ValidationError):
+        LiveDomSelectors(item='[data-role="post"]', fields={})

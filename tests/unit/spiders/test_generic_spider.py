@@ -66,6 +66,52 @@ def test_spider_extracts_items_from_fixture_page(config_path: str) -> None:
     assert first["source_url"] == "https://quotes.toscrape.com/"
 
 
+def test_parse_uses_live_dom_items_from_response_meta_when_present(config_path: str) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 12: when ByparrMiddleware
+    already attached live_dom_items to request.meta (a real-browser
+    provider's own live-DOM extraction), parse() must yield those directly
+    -- never re-parse response.text, which would silently miss whatever
+    was only reachable live (entry 11's confirmed Shadow DOM gap)."""
+    spider = GenericSpider(config_path=config_path)
+    request = Request(
+        "https://quotes.toscrape.com/",
+        meta={"live_dom_items": [{"author": "alice", "text": "hi"}]},
+    )
+    # A deliberately WRONG body -- if parse() ever fell back to parsing
+    # this instead of using live_dom_items, the assertions below would
+    # catch it (this fixture page's real content is completely different).
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/",
+        body=b"<html><body>this should never be parsed</body></html>",
+        request=request,
+    )
+
+    results = list(spider.parse(response))
+    items = [r for r in results if isinstance(r, dict)]
+
+    assert items == [
+        {"source_url": "https://quotes.toscrape.com/", "author": "alice", "text": "hi"}
+    ]
+
+
+def test_parse_logs_and_yields_nothing_when_live_dom_items_is_an_empty_list(
+    config_path: str,
+) -> None:
+    """Failure-adjacent case: a provider that genuinely performed live-DOM
+    extraction but found zero matches is a real "no items" result (same
+    warning as the parsed_html path's own empty-rows case), not silently
+    different behavior."""
+    spider = GenericSpider(config_path=config_path)
+    request = Request("https://quotes.toscrape.com/", meta={"live_dom_items": []})
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/", body=b"<html></html>", request=request
+    )
+
+    results = list(spider.parse(response))
+
+    assert results == []
+
+
 def test_from_crawler_wires_download_delay_and_storage_pipeline(config_path: str) -> None:
     """from_crawler must apply the per-target DOWNLOAD_DELAY, concurrency, the storage
     pipeline, and the Phase 1+2 downloader middlewares on crawler.settings — a plain
@@ -207,6 +253,33 @@ def test_start_sets_antibot_provider_meta_from_config(tmp_path: Path) -> None:
     requests = _run_async_start(spider)
 
     assert requests[0].meta["antibot_provider"] == "camoufox"
+
+
+def test_start_sets_extraction_selectors_meta_to_none_by_default(config_path: str) -> None:
+    """extraction_mode defaults to "parsed_html" -- every existing target
+    (and any new one that doesn't opt into live_dom) must see None, not a
+    crash or a surprising default (docs/REQUIREMENTS.md section 9 entry 12)."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["extraction_selectors"] is None
+
+
+def test_start_sets_extraction_selectors_meta_from_config_when_live_dom(tmp_path: Path) -> None:
+    config_file = tmp_path / "live_dom_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        "extraction_mode: live_dom\n",
+        encoding="utf-8",
+    )
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    extraction_selectors = requests[0].meta["extraction_selectors"]
+    assert extraction_selectors.item == "div.quote"
+    assert extraction_selectors.fields == spider.config.selectors.fields
 
 
 def test_parse_pagination_follow_carries_playwright_meta(tmp_path: Path) -> None:

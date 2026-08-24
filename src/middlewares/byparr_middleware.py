@@ -155,8 +155,13 @@ class ByparrMiddleware:
             return None
 
         click_selector = request.meta.get("click_selector")
+        extraction_selectors = request.meta.get("extraction_selectors")
         try:
-            solution = provider.solve(request.url, click_selector=click_selector)
+            solution = provider.solve(
+                request.url,
+                click_selector=click_selector,
+                extraction_selectors=extraction_selectors,
+            )
         except AntibotError as exc:
             self.logger.error(
                 "byparr_middleware.solve_failed_fallback",
@@ -167,6 +172,16 @@ class ByparrMiddleware:
         headers = Headers()
         for name, value in solution.cookies.items():
             headers.appendlist("Set-Cookie", f"{name}={value}")
+
+        if solution.items is not None:
+            # docs/REQUIREMENTS.md section 9 entry 12: the provider
+            # already extracted these directly from its own live browser
+            # page -- mutating `request.meta` here (not `response.meta`,
+            # which doesn't exist yet) reaches GenericSpider's parse()
+            # via `response.meta`, a plain passthrough property to
+            # `response.request.meta` for the *same* request object
+            # passed to HtmlResponse below.
+            request.meta["live_dom_items"] = solution.items
 
         return HtmlResponse(
             url=solution.url,

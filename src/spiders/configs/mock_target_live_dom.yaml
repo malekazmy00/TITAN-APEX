@@ -1,0 +1,38 @@
+# docs/REQUIREMENTS.md section 9 entry 12: the real fix for entry 11's
+# confirmed Shadow DOM gap. Identical target/challenge chain as
+# mock_target_camoufox.yaml (Anubis -> the cookie wall -> A/B variants ->
+# markup randomizer -> honeypots -> Shadow DOM, all active at once,
+# entries 10/11) -- the only difference is `extraction_mode: live_dom`
+# instead of the default `parsed_html`.
+#
+# mock_target_camoufox.yaml is deliberately left unmodified: it still
+# documents entry 11's real, confirmed gap (exactly 6 items -- 5 real
+# posts + 1 decoy, missing every post rendered only inside a shadow root)
+# for `page.content()` re-parsed with `selectors` after the fact. This
+# config instead has CamoufoxProvider extract items directly from its own
+# live browser page (Playwright's `page.locator()`, which auto-pierces
+# *open* shadow roots) before closing it -- `structural/shadow_dom.py`'s
+# own shadow roots are `mode: "open"` (test-environment/README.md section
+# 2.8), so this is the real, structural fix, not a workaround.
+#
+# Reuses the *exact same* `selectors` block mock_target_camoufox.yaml
+# already has -- extraction_mode changes *where* these selectors run
+# (live page vs. a re-parsed HTML string), never what they say.
+name: mock_target_live_dom
+start_urls:
+  - "http://localhost:8080/"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+extraction_mode: live_dom
+max_concurrency: 1
+click_selector: "#accept-cookies"
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

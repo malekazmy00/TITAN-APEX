@@ -43,6 +43,7 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert config.render_wait_ms is None
     assert config.click_selector is None
     assert config.antibot_provider == "byparr"
+    assert config.extraction_mode == "parsed_html"
 
 
 def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> None:
@@ -128,6 +129,92 @@ def test_unknown_antibot_provider_raises_config_error(tmp_path: Path) -> None:
     config_file.write_text(VALID_YAML + "\nantibot_provider: playwright\n", encoding="utf-8")
 
     with pytest.raises(ConfigError, match="failed schema validation"):
+        load_spider_config(str(config_file))
+
+
+# --- extraction_mode: "live_dom" (docs/REQUIREMENTS.md section 9 entry
+# 12 -- the real fix for entry 11's confirmed Shadow DOM gap) ------------
+
+
+def test_live_dom_extraction_mode_is_read_from_yaml(tmp_path: Path) -> None:
+    """Happy path: a valid live_dom config (html format, antibot_needed,
+    a real-browser provider) loads with extraction_mode populated."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        "extraction_mode: live_dom\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.extraction_mode == "live_dom"
+
+
+def test_live_dom_extraction_mode_works_with_patchright_too(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: patchright\n"
+        "extraction_mode: live_dom\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.extraction_mode == "live_dom"
+
+
+def test_unknown_extraction_mode_raises_config_error(tmp_path: Path) -> None:
+    """Failure case 9: a typo'd/unsupported extraction_mode value must be
+    rejected at config-load time."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "\nextraction_mode: raw_dom\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="failed schema validation"):
+        load_spider_config(str(config_file))
+
+
+def test_live_dom_extraction_mode_requires_antibot_needed(tmp_path: Path) -> None:
+    """Failure case 10: no antibot_needed means no provider ever drives a
+    live browser page at all -- live_dom would have nothing to extract from."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_provider: camoufox\nextraction_mode: live_dom\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_needed"):
+        load_spider_config(str(config_file))
+
+
+def test_live_dom_extraction_mode_requires_a_real_browser_provider(tmp_path: Path) -> None:
+    """Failure case 11: byparr (the default antibot_provider) has no live
+    browser page to query -- ByparrProvider.solve() only logs a warning and
+    ignores extraction_selectors, so this must be rejected at config-load
+    time instead of silently degrading to parsed_html at request time."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nextraction_mode: live_dom\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_provider"):
+        load_spider_config(str(config_file))
+
+
+def test_live_dom_extraction_mode_requires_html_response_format(tmp_path: Path) -> None:
+    """Failure case 12: live_dom extraction reuses `selectors`, not
+    `json_selectors` -- combining it with response_format: json is a real
+    misconfiguration, not something to silently resolve."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        'name: x\nstart_urls: ["http://x/"]\nrate_limit: 1.0\n'
+        "response_format: json\njson_selectors:\n  items_path: a\n  fields:\n    x: b\n"
+        "antibot_needed: true\nantibot_provider: camoufox\nextraction_mode: live_dom\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires response_format"):
         load_spider_config(str(config_file))
 
 

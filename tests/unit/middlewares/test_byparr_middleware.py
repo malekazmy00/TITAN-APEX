@@ -15,7 +15,7 @@ import pytest
 from scrapy.http import HtmlResponse, Request
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, Solution
+from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.middlewares.byparr_middleware import ByparrMiddleware
 
 
@@ -29,9 +29,16 @@ class _FakeProvider(AntibotProvider):
         self._solution = solution
         self._error = error
         self.last_click_selector: str | None = None
+        self.last_extraction_selectors: LiveDomSelectors | None = None
 
-    def solve(self, url: str, click_selector: str | None = None) -> Solution:
+    def solve(
+        self,
+        url: str,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> Solution:
         self.last_click_selector = click_selector
+        self.last_extraction_selectors = extraction_selectors
         if self._error is not None:
             raise self._error
         assert self._solution is not None
@@ -143,6 +150,81 @@ def test_process_request_passes_click_selector_from_meta_to_the_provider() -> No
     middleware.process_request(request, spider=object())
 
     assert fake_provider.last_click_selector == "#accept-cookies"
+
+
+def test_process_request_passes_extraction_selectors_from_meta_to_the_provider() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 12:
+    request.meta["extraction_selectors"] (set by GenericSpider when
+    extraction_mode: "live_dom") must reach whichever provider is
+    selected, same as click_selector's identical contract."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    selectors = LiveDomSelectors(item='[data-role="post"]', fields={"author": "::text"})
+    request = Request(
+        "https://example.com/",
+        meta={"antibot_needed": True, "extraction_selectors": selectors},
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_extraction_selectors == selectors
+
+
+def test_process_request_attaches_live_dom_items_when_the_provider_extracted_them() -> None:
+    """The whole point of entry 12: items a provider extracted live must
+    reach GenericSpider's parse() via response.meta -- a plain passthrough
+    to the same request object mutated here."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        items=[{"author": "alice"}, {"author": "bob"}],
+        solved_at=datetime.now(tz=UTC),
+    )
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(solution=solution), thread_runner=_sync_thread_runner
+    )
+    request = Request("https://example.com/", meta={"antibot_needed": True})
+
+    result = middleware.process_request(request, spider=object())
+
+    assert isinstance(result, HtmlResponse)
+    assert result.meta["live_dom_items"] == [{"author": "alice"}, {"author": "bob"}]
+
+
+def test_process_request_does_not_set_live_dom_items_when_the_provider_did_not_extract() -> None:
+    """Failure-adjacent case: a provider that never performed live-DOM
+    extraction (Solution.items is None, e.g. Byparr, or a real-browser
+    provider used without extraction_mode: "live_dom") must leave
+    request.meta untouched -- generic_spider.py's own
+    `response.meta.get("live_dom_items")` relies on the key being genuinely
+    absent, not present-but-None, to fall back to parsing html correctly
+    either way, but this confirms the middleware itself never sets it
+    needlessly."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    middleware = ByparrMiddleware(
+        byparr_provider=_FakeProvider(solution=solution), thread_runner=_sync_thread_runner
+    )
+    request = Request("https://example.com/", meta={"antibot_needed": True})
+
+    result = middleware.process_request(request, spider=object())
+
+    assert isinstance(result, HtmlResponse)
+    assert "live_dom_items" not in result.meta
 
 
 def test_process_request_routes_to_camoufox_when_selected() -> None:

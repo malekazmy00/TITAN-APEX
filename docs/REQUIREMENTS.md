@@ -1206,6 +1206,72 @@ own 92 unit tests كمان PASSED (رقم منفصل عن الـ 26 اللي ف�
 JSON API، الجولة المركّبة من بند 10، Test Targets التانية) كلهم PASSED
 برضه — regression check كامل، الطبقة الجديدة مبوّظتش أي حاجة شغالة.
 
+### 12. حل Shadow DOM فعليًا — تعديل معماري في الـ pipeline، من غير أي مكتبة خارجية (طلب المستخدم صراحة، بند 11)
+
+**الفكرة:** بدل ما `GenericSpider` يعتمد بالكامل على `page.content()` +
+CSS selectors على الـ HTML الخام، `SpiderConfig` كسب حقل جديد
+`extraction_mode: "parsed_html" | "live_dom"` (افتراضي `parsed_html` —
+سلوك كل config قديم من غير تغيير). لما `extraction_mode: live_dom`،
+الـ provider نفسه (`CamoufoxProvider`/`PatchrightProvider`) بيستخرج
+الـ items مباشرة من الصفحة الحية (`page.locator()`) **قبل** ما المتصفح
+يتقفل — ده بيستغل خاصية Playwright's المدمجة: locators بتخترق
+(pierce) shadow roots المفتوحة (`open`) تلقائيًا، بعكس أي parser
+بيشتغل على string (زي Scrapy/parsel) اللي أصلاً مايشوفش محتوى الـ
+shadow root خالص لأنه مش موجود في الـ serialized `outerHTML` أساسًا
+(بند 11).
+
+**التغييرات (كل واحدة باختبارات جديدة، مفيش تعديل بدون اختبار):**
+- `SpiderConfig.extraction_mode` + validator بيرفض التركيبة لو
+  `response_format != "html"` أو `antibot_needed=false` أو
+  `antibot_provider` مش `camoufox`/`patchright` — رفض عند تحميل الـ
+  config، مش تدهور صامت وقت الطلب.
+- `AntibotProvider.solve()` كسب باراميتر تالت اختياري
+  `extraction_selectors` (best-effort زي `click_selector` بالظبط —
+  `ByparrProvider` بيسجّل تحذير واضح ويتجاهله، مش يعطل أو يسقط بصمت،
+  لأن `/v1` API مالوش صفحة حية يستعلم منها خالص).
+- `Solution.items: list[dict] | None` — `None` يعني "زي ما كان، حلّل
+  الـ html بنفسك"؛ list (حتى لو فاضية) يعني "دي النتيجة الحقيقية،
+  متعملش parsing تاني".
+- وحدة مشتركة جديدة `src/providers/antibot/_live_dom.py`
+  (`extract_live_dom_items`) — بتعيد استخدام نفس صيغة الـ field
+  selectors القديمة (`::text`/`::attr(name)`) بالظبط، مفيش لغة selectors
+  تانية للتارجت يتعلمها. استخدمنا `text_content()` (زي parsel's
+  `::text` بالظبط) مش `inner_text()` — الفرق مهم: `inner_text()`
+  بيرجع `""` لأي عنصر `display:none` (زي decoy twin's الهيكل،
+  `structural/decoy_data.py`) في متصفح حقيقي، حتى لو النص موجود فعليًا؛
+  `text_content()` بيرجع النص الحقيقي بغض النظر عن الظهور — نفس سلوك
+  الـ parsing القديم بالظبط، عشان قيم الحقول تفضل واحدة بين الوضعين،
+  والفرق الوحيد يكون *الوصول* لمحتوى shadow root، مش تغيير في القيم.
+- `ByparrMiddleware` بيمرّر `extraction_selectors` للـ provider، وبيحط
+  `solution.items` في `request.meta["live_dom_items"]` (لو موجودة) —
+  `response.meta` بيكون passthrough لنفس الـ dict.
+- `GenericSpider._parse_html` بيتحقق من `response.meta.get("live_dom_items")`
+  الأول — لو موجودة (مش None)، بيستخدمها مباشرة بدل ما يعمل
+  `response.css()` تاني.
+- Config جديد `src/spiders/configs/mock_target_live_dom.yaml` — نفس
+  الـ target/selectors بتاعة `mock_target_camoufox.yaml` بالظبط، الفرق
+  الوحيد `extraction_mode: live_dom`. **`mock_target_camoufox.yaml`
+  اتسيب من غير تغيير عمدًا** — لسه بيوثّق فجوة بند 11 الحقيقية
+  (parsed_html بيرجع 6 items بس).
+
+**تصحيح حقيقي لتوقّع الطلب الأصلي (مش تجاهل، توضيح بالدليل):** الطلب
+افترض "10 items مش 6" لو الاختراق نجح. بعد تتبّع الـ pipeline بدقة:
+`decoy_data.py`'s decoy twin (post index 0's حية، دايمًا light DOM)
+بيحمل نفس `data-role="post"` attribute برضه، فأي locator بيخترق shadow
+DOM هيلقطه هو كمان — يعني العدد الحتمي الصح هو **11** (10 بوست حقيقي
+[5 light + 5 اترجعوا من جوه shadow root] + decoy واحد)، مش 10 — بالظبط
+نفس الـ baseline قبل ما Shadow DOM يتضاف أصلاً
+(`test_index_renders_posts_decoy_and_honeypots`'s `== 11`). الاختبار
+الجديد (`tests/integration/test_mock_target_live_dom_live.py`) بيتحقق
+من الـ 11 دي بالظبط، مش من رقم المستخدم التقريبي.
+
+**اتّحقّق محليًا** (ruff/mypy --strict على `src` — نفس مشكلة
+`patchright.sync_api` المحلية القديمة غير المرتبطة بالتعديل ده، 224
+unit+contract test PASSED، 88.52% coverage؛ test-environment's own 92
+unit test PASSED، 100% coverage — الطبقة الجديدة كسبت unit tests لـ
+`_live_dom.py` نفسها + كل provider/middleware/config/spider اتلمس).
+**النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما يخلص، مش قبل كده.**
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

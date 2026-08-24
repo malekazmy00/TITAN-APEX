@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from src.core.exceptions import AntibotError
+from src.core.interfaces.antibot_provider import LiveDomSelectors
 from src.providers.antibot.camoufox_provider import (
     CamoufoxProvider,
     _RawSolve,
@@ -19,7 +20,11 @@ def test_solve_returns_a_populated_solution() -> None:
     """Happy path: a successful browser-driving call yields a full Solution."""
 
     def fake_solve(
-        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
     ) -> _RawSolve:
         assert url == "https://example.com/"
         assert timeout_ms == 30_000
@@ -48,7 +53,11 @@ def test_post_load_wait_ms_reaches_the_solve_function() -> None:
     seen: dict[str, int] = {}
 
     def fake_solve(
-        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
     ) -> _RawSolve:
         seen["post_load_wait_ms"] = post_load_wait_ms
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -79,7 +88,11 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
     mistranslate whatever AntibotError it's given."""
 
     def failing_solve(
-        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
     ) -> _RawSolve:
         raise AntibotError(f"camoufox failed to solve {url}: browser launch failed")
 
@@ -96,7 +109,11 @@ def test_click_selector_reaches_the_solve_function() -> None:
     seen: dict[str, str | None] = {}
 
     def fake_solve(
-        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
     ) -> _RawSolve:
         seen["click_selector"] = click_selector
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -113,7 +130,11 @@ def test_click_selector_defaults_to_none_when_not_given() -> None:
     above already exercises this, this just makes the default explicit."""
 
     def fake_solve(
-        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
     ) -> _RawSolve:
         assert click_selector is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -129,7 +150,11 @@ def test_zero_post_load_wait_ms_is_allowed() -> None:
     not an error, unlike a negative value."""
 
     def fake_solve(
-        url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -137,3 +162,93 @@ def test_zero_post_load_wait_ms_is_allowed() -> None:
     solution = provider.solve("https://example.com/")
 
     assert solution.status_code == 200
+
+
+def test_extraction_selectors_reaches_the_solve_function() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 12's whole point for this
+    provider: extraction_selectors actually reaches the browser-driving
+    call, unlike ByparrProvider (which can only log that it's unsupported,
+    no live page to query)."""
+    seen: dict[str, LiveDomSelectors | None] = {}
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> _RawSolve:
+        seen["extraction_selectors"] = extraction_selectors
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    selectors = LiveDomSelectors(item='[data-role="post"]', fields={"author": "::text"})
+    provider.solve("https://example.com/", extraction_selectors=selectors)
+
+    assert seen["extraction_selectors"] == selectors
+
+
+def test_extraction_selectors_defaults_to_none_when_not_given() -> None:
+    """Backward compatible: solve(url) alone must still work exactly as
+    before this round."""
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> _RawSolve:
+        assert extraction_selectors is None
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    solution = provider.solve("https://example.com/")
+
+    assert solution.status_code == 200
+
+
+def test_solve_fn_items_reach_the_returned_solution() -> None:
+    """The whole point of extraction_selectors: items the browser-driving
+    call extracted live must reach Solution.items unchanged, not be
+    dropped or re-derived from html."""
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> _RawSolve:
+        return _RawSolve(
+            url=url,
+            html="<html></html>",
+            status=200,
+            cookies={},
+            items=[{"author": "alice"}, {"author": "bob"}],
+        )
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    solution = provider.solve("https://example.com/")
+
+    assert solution.items == [{"author": "alice"}, {"author": "bob"}]
+
+
+def test_solve_fn_items_default_to_none_when_extraction_not_used() -> None:
+    """A provider that never performed live-DOM extraction (the default
+    _RawSolve.items) must surface Solution.items as None, not an empty
+    list -- callers use None to mean "fall back to parsing html yourself"."""
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> _RawSolve:
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    solution = provider.solve("https://example.com/")
+
+    assert solution.items is None

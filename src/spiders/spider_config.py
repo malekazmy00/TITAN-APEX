@@ -84,6 +84,17 @@ class SpiderConfig(BaseModel):
     # Both are no-ops unless set.
     render_wait_ms: int | None = Field(default=None, gt=0)
     click_selector: str | None = None
+    # docs/REQUIREMENTS.md section 9 entry 12: the real fix for entry 11's
+    # confirmed Shadow DOM gap -- "parsed_html" (default, every existing
+    # config's unchanged behavior) re-parses the provider's returned HTML
+    # string with `selectors` after the fact; "live_dom" instead has the
+    # provider itself extract items directly from the live browser page
+    # (via Playwright's page.locator(), which auto-pierces *open* shadow
+    # roots) before closing it, since a serialized HTML string never
+    # carries shadow-root content at all regardless of which browser
+    # produced it. Reuses the exact same `selectors` block either way --
+    # no second selector language for a target to learn.
+    extraction_mode: Literal["parsed_html", "live_dom"] = "parsed_html"
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:
@@ -97,6 +108,28 @@ class SpiderConfig(BaseModel):
                 raise ValueError("json_selectors is required when response_format is 'json'")
             if self.selectors is not None:
                 raise ValueError("selectors must not be set when response_format is 'json'")
+        return self
+
+    @model_validator(mode="after")
+    def _live_dom_requires_a_real_browser_provider(self) -> SpiderConfig:
+        if self.extraction_mode != "live_dom":
+            return self
+        # Every one of these is a real structural requirement, not a
+        # style preference -- see extraction_mode's own field comment for
+        # why: only a provider with a real, live browser page to query
+        # (camoufox/patchright) can extract from a live DOM at all, that
+        # page only exists behind antibot_needed's own solving path, and
+        # response_format must be "html" since live DOM extraction reuses
+        # `selectors`, not `json_selectors`.
+        if self.response_format != "html":
+            raise ValueError("extraction_mode 'live_dom' requires response_format 'html'")
+        if not self.antibot_needed:
+            raise ValueError("extraction_mode 'live_dom' requires antibot_needed: true")
+        if self.antibot_provider not in ("camoufox", "patchright"):
+            raise ValueError(
+                "extraction_mode 'live_dom' requires antibot_provider 'camoufox' or "
+                f"'patchright' (a real, live browser page) -- got {self.antibot_provider!r}"
+            )
         return self
 
 

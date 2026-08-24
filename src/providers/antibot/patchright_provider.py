@@ -35,11 +35,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging import Logger
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, Solution
+from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.logging_config import get_logger
+from src.providers.antibot._live_dom import extract_live_dom_items
 
 DEFAULT_TIMEOUT_MS = 30_000
 # Same reasoning and same default as CamoufoxProvider's
@@ -56,14 +57,25 @@ class _RawSolve(NamedTuple):
     html: str
     status: int
     cookies: dict[str, str]
+    # None unless extraction_selectors was given and live-DOM extraction
+    # actually ran -- see Solution.items' own comment for the full
+    # None-vs-list contract this mirrors exactly.
+    items: list[dict[str, Any]] | None = None
 
 
-# (url, timeout_ms, post_load_wait_ms, click_selector) -> raw browser result
-PatchrightSolveFn = Callable[[str, int, int, "str | None"], _RawSolve]
+# (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors)
+# -> raw browser result
+PatchrightSolveFn = Callable[
+    [str, int, int, "str | None", "LiveDomSelectors | None"], _RawSolve
+]
 
 
 def _default_patchright_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    url: str,
+    timeout_ms: int,
+    post_load_wait_ms: int,
+    click_selector: str | None = None,
+    extraction_selectors: LiveDomSelectors | None = None,
 ) -> _RawSolve:
     """Drive a real Patchright-stealthed Chromium: navigate, (optionally)
     click, wait past ``load``, read, close.
@@ -89,6 +101,14 @@ def _default_patchright_solve(
     in this stack at all, entry 7's Anubis deny), applied here on the
     same principle rather than left inconsistent between the two
     real-browser providers.
+
+    ``extraction_selectors``: same reasoning and same
+    :func:`~src.providers.antibot._live_dom.extract_live_dom_items` call
+    as ``_default_camoufox_solve``'s identical parameter
+    (docs/REQUIREMENTS.md section 9 entry 12) -- extracted from the live
+    ``page`` before it closes below, since a shadow root is never
+    included in ``page.content()``'s serialized string regardless of
+    which browser (Chromium here, Firefox there) produced it.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, or read
@@ -167,6 +187,17 @@ def _default_patchright_solve(
                     status = final_response.status if final_response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
                     # Same reasoning as camoufox_provider.py's identical
+                    # comment: must happen before `browser.close()` below
+                    # -- `page` stops being queryable at all once the
+                    # browser tears down.
+                    items = (
+                        extract_live_dom_items(
+                            page, extraction_selectors.item, extraction_selectors.fields
+                        )
+                        if extraction_selectors is not None
+                        else None
+                    )
+                    # Same reasoning as camoufox_provider.py's identical
                     # log line: status 200 alone means nothing for a
                     # provider that solves anti-bot challenges (a
                     # challenge/deny page is routinely served as a normal
@@ -184,9 +215,13 @@ def _default_patchright_solve(
                             "click_selector": click_selector,
                             "content_type": content_type,
                             "used_raw_network_body": "application/json" in content_type,
+                            "live_dom_extraction_used": items is not None,
+                            "live_dom_item_count": len(items) if items is not None else None,
                         },
                     )
-                    return _RawSolve(url=page.url, html=html, status=status, cookies=cookies)
+                    return _RawSolve(
+                        url=page.url, html=html, status=status, cookies=cookies, items=items
+                    )
                 except PatchrightError as exc:
                     raise AntibotError(f"patchright failed to solve {url}: {exc}") from exc
             finally:
@@ -215,10 +250,19 @@ class PatchrightProvider(AntibotProvider):
         self._solve_fn = solve_fn or _default_patchright_solve
         self.logger = logger or get_logger(__name__)
 
-    def solve(self, url: str, click_selector: str | None = None) -> Solution:
+    def solve(
+        self,
+        url: str,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> Solution:
         try:
             raw = self._solve_fn(
-                url, self._timeout_ms, self._post_load_wait_ms, click_selector
+                url,
+                self._timeout_ms,
+                self._post_load_wait_ms,
+                click_selector,
+                extraction_selectors,
             )
         except AntibotError:
             self.logger.error("patchright_provider.solve_failed", extra={"url": url})
@@ -229,5 +273,6 @@ class PatchrightProvider(AntibotProvider):
             html=raw.html,
             status_code=raw.status,
             cookies=raw.cookies,
+            items=raw.items,
             solved_at=datetime.now(tz=UTC),
         )

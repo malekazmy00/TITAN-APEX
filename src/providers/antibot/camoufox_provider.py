@@ -45,11 +45,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging import Logger
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, Solution
+from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.logging_config import get_logger
+from src.providers.antibot._live_dom import extract_live_dom_items
 
 DEFAULT_TIMEOUT_MS = 30_000
 # How long to wait after the page's `load` event before reading content
@@ -67,14 +68,25 @@ class _RawSolve(NamedTuple):
     html: str
     status: int
     cookies: dict[str, str]
+    # None unless extraction_selectors was given and live-DOM extraction
+    # actually ran -- see Solution.items' own comment for the full
+    # None-vs-list contract this mirrors exactly.
+    items: list[dict[str, Any]] | None = None
 
 
-# (url, timeout_ms, post_load_wait_ms, click_selector) -> raw browser result
-CamoufoxSolveFn = Callable[[str, int, int, "str | None"], _RawSolve]
+# (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors)
+# -> raw browser result
+CamoufoxSolveFn = Callable[
+    [str, int, int, "str | None", "LiveDomSelectors | None"], _RawSolve
+]
 
 
 def _default_camoufox_solve(
-    url: str, timeout_ms: int, post_load_wait_ms: int, click_selector: str | None = None
+    url: str,
+    timeout_ms: int,
+    post_load_wait_ms: int,
+    click_selector: str | None = None,
+    extraction_selectors: LiveDomSelectors | None = None,
 ) -> _RawSolve:
     """Drive a real Camoufox browser: navigate, (optionally) click, wait
     past ``load``, read, close.
@@ -113,6 +125,16 @@ def _default_camoufox_solve(
     back. Every non-JSON response keeps using ``page.content()`` exactly
     as before -- this only changes behavior for the one content-type
     that gets wrapped.
+
+    ``extraction_selectors`` (docs/REQUIREMENTS.md section 9 entry 12):
+    when given, items are extracted directly from the live ``page`` (via
+    :func:`~src.providers.antibot._live_dom.extract_live_dom_items`)
+    *before* the browser closes below -- this is the one thing reading
+    ``page.content()`` after the fact structurally cannot do, since a
+    shadow root attached via ``attachShadow()`` is never included in that
+    serialized string at all, regardless of which browser produced it
+    (entry 11's real, confirmed gap). A no-op (``items`` stays ``None``)
+    when not given, so every existing call site's behavior is unchanged.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
@@ -188,6 +210,18 @@ def _default_camoufox_solve(
                         html = page.content()
                     status = final_response.status if final_response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
+                    # Must happen before `browser.close()` below (this
+                    # function's own `finally` blocks) -- `page` stops
+                    # being queryable at all once the browser tears down,
+                    # the same reason `html`/`status`/`cookies` are all
+                    # read here rather than after this try block.
+                    items = (
+                        extract_live_dom_items(
+                            page, extraction_selectors.item, extraction_selectors.fields
+                        )
+                        if extraction_selectors is not None
+                        else None
+                    )
                     # Always logged (not just on failure): the one piece of
                     # evidence that actually distinguishes "got real
                     # content" from "still stuck on a challenge/interstitial
@@ -209,9 +243,13 @@ def _default_camoufox_solve(
                             "click_selector": click_selector,
                             "content_type": content_type,
                             "used_raw_network_body": "application/json" in content_type,
+                            "live_dom_extraction_used": items is not None,
+                            "live_dom_item_count": len(items) if items is not None else None,
                         },
                     )
-                    return _RawSolve(url=page.url, html=html, status=status, cookies=cookies)
+                    return _RawSolve(
+                        url=page.url, html=html, status=status, cookies=cookies, items=items
+                    )
                 finally:
                     page.close()
             finally:
@@ -244,10 +282,19 @@ class CamoufoxProvider(AntibotProvider):
         self._solve_fn = solve_fn or _default_camoufox_solve
         self.logger = logger or get_logger(__name__)
 
-    def solve(self, url: str, click_selector: str | None = None) -> Solution:
+    def solve(
+        self,
+        url: str,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> Solution:
         try:
             raw = self._solve_fn(
-                url, self._timeout_ms, self._post_load_wait_ms, click_selector
+                url,
+                self._timeout_ms,
+                self._post_load_wait_ms,
+                click_selector,
+                extraction_selectors,
             )
         except AntibotError:
             self.logger.error("camoufox_provider.solve_failed", extra={"url": url})
@@ -258,5 +305,6 @@ class CamoufoxProvider(AntibotProvider):
             html=raw.html,
             status_code=raw.status,
             cookies=raw.cookies,
+            items=raw.items,
             solved_at=datetime.now(tz=UTC),
         )

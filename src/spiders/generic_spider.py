@@ -19,6 +19,7 @@ import scrapy
 from scrapy.http import Response
 
 from src.core.exceptions import ConfigError
+from src.core.interfaces.antibot_provider import LiveDomSelectors
 from src.logging_config import get_logger
 from src.spiders.spider_config import load_spider_config
 
@@ -103,12 +104,22 @@ class GenericSpider(scrapy.Spider):
         return spider
 
     def _request_meta(self) -> dict[str, Any]:
+        extraction_selectors: LiveDomSelectors | None = None
+        if self.config.extraction_mode == "live_dom":
+            # SpiderConfig's own validator guarantees `selectors` is set
+            # whenever extraction_mode is "live_dom" (it requires
+            # response_format "html", which itself requires `selectors`).
+            assert self.config.selectors is not None
+            extraction_selectors = LiveDomSelectors(
+                item=self.config.selectors.item, fields=self.config.selectors.fields
+            )
         return {
             "playwright": self.config.render_js,
             "antibot_needed": self.config.antibot_needed,
             "antibot_provider": self.config.antibot_provider,
             "render_wait_ms": self.config.render_wait_ms,
             "click_selector": self.config.click_selector,
+            "extraction_selectors": extraction_selectors,
         }
 
     def _build_start_requests(self) -> Iterator[scrapy.Request]:
@@ -143,25 +154,45 @@ class GenericSpider(scrapy.Spider):
     ) -> Iterator[dict[str, Any] | scrapy.Request]:
         selectors = self.config.selectors
         assert selectors is not None  # SpiderConfig guarantees this for response_format="html"
-        rows = response.css(selectors.item)
 
-        if not rows:
-            self.json_logger.warning(
-                "generic_spider.no_items_found",
-                extra={"url": response.url, "item_selector": selectors.item},
-            )
+        # docs/REQUIREMENTS.md section 9 entry 12: when a real, live
+        # browser page already extracted items directly (extraction_mode:
+        # "live_dom" -- ByparrMiddleware attaches them to request.meta,
+        # visible here via response.meta's passthrough to the same
+        # request object), those items ARE the real result -- re-parsing
+        # `response.text` here would silently miss whatever was only ever
+        # reachable live (a Shadow DOM's content, entry 11's confirmed
+        # gap), since it was never in that serialized string to begin
+        # with, and would also just be redundant work for everything else.
+        live_dom_items = response.meta.get("live_dom_items")
+        if live_dom_items is not None:
+            if not live_dom_items:
+                self.json_logger.warning(
+                    "generic_spider.no_items_found",
+                    extra={"url": response.url, "item_selector": selectors.item},
+                )
+            for raw_item in live_dom_items:
+                yield {"source_url": response.url, **raw_item}
+        else:
+            rows = response.css(selectors.item)
 
-        for row in rows:
-            item: dict[str, Any] = {"source_url": response.url}
-            for field_name, css_expr in selectors.fields.items():
-                values = row.css(css_expr).getall()
-                if len(values) == 0:
-                    item[field_name] = None
-                elif len(values) == 1:
-                    item[field_name] = values[0]
-                else:
-                    item[field_name] = values
-            yield item
+            if not rows:
+                self.json_logger.warning(
+                    "generic_spider.no_items_found",
+                    extra={"url": response.url, "item_selector": selectors.item},
+                )
+
+            for row in rows:
+                item: dict[str, Any] = {"source_url": response.url}
+                for field_name, css_expr in selectors.fields.items():
+                    values = row.css(css_expr).getall()
+                    if len(values) == 0:
+                        item[field_name] = None
+                    elif len(values) == 1:
+                        item[field_name] = values[0]
+                    else:
+                        item[field_name] = values
+                yield item
 
         if self.config.next_page:
             next_href = response.css(self.config.next_page).get()

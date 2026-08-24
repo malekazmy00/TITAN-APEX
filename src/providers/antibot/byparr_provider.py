@@ -22,7 +22,7 @@ from logging import Logger
 from typing import Any
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, Solution
+from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.logging_config import get_logger
 
 DEFAULT_TIMEOUT_MS = 60_000
@@ -58,7 +58,31 @@ class ByparrProvider(AntibotProvider):
         self._http_post = http_post or _default_http_post
         self.logger = logger or get_logger(__name__)
 
-    def solve(self, url: str, click_selector: str | None = None) -> Solution:
+    def solve(
+        self,
+        url: str,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+    ) -> Solution:
+        if extraction_selectors is not None:
+            # Real, structural gap (docs/REQUIREMENTS.md section 9 entry
+            # 12): live-DOM extraction needs a live browser page to query
+            # -- Byparr's `/v1` protocol is a stateless "fetch and return
+            # HTML" HTTP call with no page handle this process ever sees,
+            # the same structural shape as click_selector's own gap right
+            # below. SpiderConfig's own validator (extraction_mode:
+            # "live_dom" requires antibot_provider camoufox/patchright)
+            # should mean this branch is never actually reached in
+            # practice -- logged and skipped anyway, not silently dropped
+            # or crashed on, as defense in depth against that assumption
+            # ever being bypassed.
+            self.logger.warning(
+                "byparr_provider.extraction_selectors_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API returns HTML only, no live page to query",
+                },
+            )
         if click_selector:
             # Real, evidenced gap (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md,
             # cookie-consent-wall round): Byparr's `/v1` protocol
