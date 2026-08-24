@@ -425,3 +425,87 @@ def test_json_format_with_selectors_also_set_raises_config_error(tmp_path: Path)
 
     with pytest.raises(ConfigError, match="failed schema validation"):
         load_spider_config(str(config_file))
+
+
+LOGIN_YAML_BLOCK = (
+    "\nlogin:\n"
+    "  login_url: http://localhost:8080/login\n"
+    "  username: titan_test_user\n"
+    "  password: titan_test_pass\n"
+    "  username_field: '#username'\n"
+    "  password_field: '#password'\n"
+    "  submit_selector: '#login-submit'\n"
+)
+
+
+def test_login_defaults_to_none(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.login is None
+
+
+def test_login_is_read_from_yaml(tmp_path: Path) -> None:
+    """Happy path: a full login block, with a real browser provider."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n" + LOGIN_YAML_BLOCK,
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.login is not None
+    assert config.login.login_url == "http://localhost:8080/login"
+    assert config.login.username == "titan_test_user"
+    assert config.login.password == "titan_test_pass"
+    assert config.login.username_field == "#username"
+    assert config.login.password_field == "#password"
+    assert config.login.submit_selector == "#login-submit"
+    assert config.login.session_expiry_probe_url is None
+
+
+def test_login_session_expiry_probe_url_is_read_from_yaml(tmp_path: Path) -> None:
+    """The test-only knob (docs/REQUIREMENTS.md section 9 entry 15) also
+    round-trips through YAML."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML
+        + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        + LOGIN_YAML_BLOCK
+        + "  session_expiry_probe_url: http://localhost:8080/test-expire-session\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.login is not None
+    assert config.login.session_expiry_probe_url == "http://localhost:8080/test-expire-session"
+
+
+def test_login_requires_antibot_needed(tmp_path: Path) -> None:
+    """Failure case: no antibot_needed means no provider ever drives a
+    live browser page to fill/submit a real login form at all."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_provider: camoufox\n" + LOGIN_YAML_BLOCK,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_needed"):
+        load_spider_config(str(config_file))
+
+
+def test_login_requires_a_real_browser_provider(tmp_path: Path) -> None:
+    """Failure case: byparr (the default antibot_provider) has no live
+    browser page to fill/submit a real login form."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\n" + LOGIN_YAML_BLOCK,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_provider"):
+        load_spider_config(str(config_file))

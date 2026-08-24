@@ -1,0 +1,24 @@
+# docs/REQUIREMENTS.md section 9 entry 15 -- the negative-path sibling
+# of mock_target_login_protected.yaml: identical target/selectors, no
+# `login` block at all. `/feed-protected` (test-environment/mock-target)
+# genuinely requires a valid session cookie, so this is expected (not
+# assumed -- see the real, CI-confirmed result in docs/REQUIREMENTS.md)
+# to yield exactly 0 items, with `generic_spider.protected_target_rejected`
+# logged for the resulting real 401 -- not a crash, not a silent/empty
+# result with no explanation.
+name: mock_target_feed_protected_no_login
+start_urls:
+  - "http://localhost:8080/feed-protected"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

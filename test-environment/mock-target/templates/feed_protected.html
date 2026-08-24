@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target - Protected Feed</title>
+</head>
+<body>
+  <main>
+    <h1 class="page-title">Protected Feed</h1>
+    <!--
+      docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Known Limitation #1
+      (login/session): deliberately plain, fully server-rendered, no
+      client-side JS at all -- every post is genuinely present in this
+      one response body already, same post-role markup /feed and / use
+      (same selectors, no new selector language for a target to learn).
+      This keeps the challenge isolated to
+      login/session mechanics alone, not entangled with any other
+      layer (Shadow DOM, DOM Virtualization, placeholder content, A/B
+      variants, cookie wall, honeypots, markup randomizer -- none of
+      those apply here on purpose).
+    -->
+    <div data-role="feed">
+      {% for post in posts %}
+      <article data-role="post" data-post-id="{{ post.post_id }}">
+        <span data-role="post-author">{{ post.author }}</span>
+        <p data-role="post-text">{{ post.text }}</p>
+        <span data-role="post-likes">{{ post.likes }}</span>
+      </article>
+      {% endfor %}
+    </div>
+    {% if next_page %}
+    <a id="next-page" data-role="next-page" href="{{ next_page }}">Next</a>
+    {% endif %}
+  </main>
+</body>
+</html>

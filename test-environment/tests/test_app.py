@@ -14,6 +14,8 @@ import pytest
 from app import create_app
 from config import MockTargetConfig
 from flask.testing import FlaskClient
+from parsel import Selector
+from security.auth import TEST_PASSWORD, TEST_USERNAME
 
 
 @pytest.fixture
@@ -456,3 +458,200 @@ def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> 
     assert "<mock-shadow-post" not in body
     assert "attachShadow" not in body
     assert body.count('data-role="post"') == 11  # 10 real posts + 1 decoy
+
+
+# --- Login/session (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Known
+# Limitation #1, activated ahead of Interstitials per explicit user
+# request) --------------------------------------------------------------
+
+
+def _auth_client(
+    tmp_path: Path, *, protected_feed_total_pages: int = 2, protected_feed_page_size: int = 3
+) -> FlaskClient:
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False  # isolate the login/session layer alone
+    cfg.enable_shadow_dom = False
+    cfg.protected_feed_total_pages = protected_feed_total_pages
+    cfg.protected_feed_page_size = protected_feed_page_size
+    app = create_app(cfg)
+    app.testing = True
+    return app.test_client()
+
+
+def _extract_csrf_token(login_page_body: str) -> str:
+    token = Selector(text=login_page_body).css('input[name="csrf_token"]::attr(value)').get()
+    assert token, f"no csrf_token hidden field found in: {login_page_body!r}"
+    return token
+
+
+def _log_in(client: FlaskClient) -> None:
+    """Performs a real GET /login -> parse csrf -> POST login sequence,
+    the same steps a real crawler must take -- used as setup by tests
+    below that only care about what happens *after* a successful login."""
+    login_body = client.get("/login").get_data(as_text=True)
+    token = _extract_csrf_token(login_body)
+    response = client.post(
+        "/login",
+        data={"csrf_token": token, "username": TEST_USERNAME, "password": TEST_PASSWORD},
+    )
+    assert response.status_code == 302, f"setup login failed: {response.get_data(as_text=True)}"
+
+
+def test_login_page_serves_a_fresh_csrf_token_every_load(tmp_path: Path) -> None:
+    """The real requirement this whole layer exists for: the token
+    changes on every GET /login, never fixed/hardcodable."""
+    client = _auth_client(tmp_path)
+
+    first_token = _extract_csrf_token(client.get("/login").get_data(as_text=True))
+    second_token = _extract_csrf_token(client.get("/login").get_data(as_text=True))
+
+    assert first_token != second_token
+
+
+def test_login_succeeds_with_valid_credentials_and_token_sets_session_cookie(
+    tmp_path: Path,
+) -> None:
+    """Happy path: a real GET -> parse -> POST sequence with the right
+    credentials and the token that page actually issued succeeds,
+    redirects to /feed-protected, and sets the auth session cookie."""
+    client = _auth_client(tmp_path)
+    login_body = client.get("/login").get_data(as_text=True)
+    token = _extract_csrf_token(login_body)
+
+    response = client.post(
+        "/login",
+        data={"csrf_token": token, "username": TEST_USERNAME, "password": TEST_PASSWORD},
+    )
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/feed-protected"
+    assert "mocktarget_auth_session=" in response.headers.get("Set-Cookie", "")
+
+
+def test_login_rejects_wrong_credentials_with_a_valid_token(tmp_path: Path) -> None:
+    """Failure-adjacent case 1: a correct, freshly-issued CSRF token does
+    not bypass a real credentials check."""
+    client = _auth_client(tmp_path)
+    token = _extract_csrf_token(client.get("/login").get_data(as_text=True))
+
+    response = client.post(
+        "/login", data={"csrf_token": token, "username": TEST_USERNAME, "password": "wrong"}
+    )
+
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "invalid_credentials"}
+
+
+def test_login_rejects_a_missing_csrf_token(tmp_path: Path) -> None:
+    """Failure-adjacent case 2: correct credentials alone are not enough
+    without a real token."""
+    client = _auth_client(tmp_path)
+
+    response = client.post("/login", data={"username": TEST_USERNAME, "password": TEST_PASSWORD})
+
+    assert response.status_code == 403
+    assert response.get_json() == {"error": "invalid_csrf_token"}
+
+
+def test_login_rejects_a_reused_csrf_token(tmp_path: Path) -> None:
+    """Failure-adjacent case 3: real replay protection -- a token already
+    consumed by one successful POST cannot be used again, even with the
+    exact same (correct) credentials."""
+    client = _auth_client(tmp_path)
+    token = _extract_csrf_token(client.get("/login").get_data(as_text=True))
+    first = client.post(
+        "/login",
+        data={"csrf_token": token, "username": TEST_USERNAME, "password": TEST_PASSWORD},
+    )
+    assert first.status_code == 302  # sanity: the first use really did succeed
+
+    second = client.post(
+        "/login",
+        data={"csrf_token": token, "username": TEST_USERNAME, "password": TEST_PASSWORD},
+    )
+
+    assert second.status_code == 403
+    assert second.get_json() == {"error": "invalid_csrf_token"}
+
+
+def test_feed_protected_rejects_without_a_session_cookie(tmp_path: Path) -> None:
+    """The user's own explicit choice: a real, explicit 401 -- not a
+    redirect to /login -- for an unauthenticated request."""
+    client = _auth_client(tmp_path)
+
+    response = client.get("/feed-protected")
+
+    assert response.status_code == 401
+    assert response.get_json() == {"error": "unauthorized"}
+
+
+def test_feed_protected_returns_real_posts_once_logged_in(tmp_path: Path) -> None:
+    """Happy path: the exact same data /feed would show, gated behind a
+    real session this time."""
+    client = _auth_client(tmp_path, protected_feed_page_size=3)
+    _log_in(client)
+
+    body = client.get("/feed-protected").get_data(as_text=True)
+
+    assert body.count('data-role="post"') == 3
+
+
+def test_feed_protected_exposes_a_next_page_link_when_more_pages_remain(tmp_path: Path) -> None:
+    client = _auth_client(tmp_path, protected_feed_total_pages=2)
+    _log_in(client)
+
+    body = client.get("/feed-protected").get_data(as_text=True)
+
+    assert 'data-role="next-page"' in body
+    assert 'href="/feed-protected?page=1"' in body
+
+
+def test_feed_protected_has_no_next_page_link_on_the_last_page(tmp_path: Path) -> None:
+    client = _auth_client(tmp_path, protected_feed_total_pages=2)
+    _log_in(client)
+
+    body = client.get("/feed-protected?page=1").get_data(as_text=True)
+
+    assert 'data-role="next-page"' not in body
+
+
+def test_feed_protected_rejects_a_non_integer_page(tmp_path: Path) -> None:
+    client = _auth_client(tmp_path)
+    _log_in(client)
+
+    response = client.get("/feed-protected?page=abc")
+
+    assert response.status_code == 400
+
+
+def test_feed_protected_rejects_a_negative_page(tmp_path: Path) -> None:
+    client = _auth_client(tmp_path)
+    _log_in(client)
+
+    response = client.get("/feed-protected?page=-1")
+
+    assert response.status_code == 400
+
+
+def test_test_expire_session_invalidates_the_callers_own_session(tmp_path: Path) -> None:
+    """The deterministic, non-time-based hook a live test uses to trigger
+    session-expiry *detection* -- see security/auth.py's
+    SessionStore.force_expire docstring for why this exists at all."""
+    client = _auth_client(tmp_path)
+    _log_in(client)
+    assert client.get("/feed-protected").status_code == 200  # sanity: really was valid
+
+    expire_response = client.get("/test-expire-session")
+    assert expire_response.get_json() == {"status": "expired"}
+
+    assert client.get("/feed-protected").status_code == 401
+
+
+def test_test_expire_session_without_a_session_reports_no_session(tmp_path: Path) -> None:
+    client = _auth_client(tmp_path)
+
+    response = client.get("/test-expire-session")
+
+    assert response.get_json() == {"status": "no_session"}

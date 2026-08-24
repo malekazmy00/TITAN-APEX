@@ -12,6 +12,15 @@ from typing import Any
 from config import MockTargetConfig, get_config
 from content_generator import generate_feed_page
 from flask import Flask, Response, jsonify, redirect, render_template, request
+from security.auth import (
+    AUTH_SESSION_COOKIE_NAME,
+    CSRF_FIELD_NAME,
+    PASSWORD_FIELD_NAME,
+    USERNAME_FIELD_NAME,
+    CsrfTokenStore,
+    SessionStore,
+    check_credentials,
+)
 from security.botd_integration import VENDORED_SCRIPT_PATH, log_botd_report
 from security.file_logger import get_file_logger
 from security.honeypot_logger import log_honeypot_trigger
@@ -77,6 +86,8 @@ def create_app(
     )
     honeypot_logger = get_file_logger("mock_target.honeypot", cfg.honeypot_log_path)
     botd_logger = get_file_logger("mock_target.botd", cfg.botd_log_path)
+    app.config["CSRF_TOKEN_STORE"] = CsrfTokenStore()
+    app.config["AUTH_SESSION_STORE"] = SessionStore(ttl_seconds=cfg.session_ttl_seconds)
 
     def _classes() -> dict[str, str]:
         randomizer: MarkupRandomizer = app.config["MARKUP_RANDOMIZER"]
@@ -203,6 +214,74 @@ def create_app(
                 },
             }
         )
+
+    @app.get("/login")
+    def login_page() -> Response:
+        csrf_store: CsrfTokenStore = app.config["CSRF_TOKEN_STORE"]
+        # Fresh every load, never fixed -- see security/auth.py's
+        # CsrfTokenStore docstring.
+        token = csrf_store.issue()
+        return Response(render_template("login.html", csrf_token=token))
+
+    @app.post("/login")
+    def login_submit() -> Response | tuple[Response, int]:
+        csrf_store: CsrfTokenStore = app.config["CSRF_TOKEN_STORE"]
+        session_store: SessionStore = app.config["AUTH_SESSION_STORE"]
+        token = request.form.get(CSRF_FIELD_NAME)
+        if not csrf_store.consume(token):
+            return jsonify({"error": "invalid_csrf_token"}), 403
+        username = request.form.get(USERNAME_FIELD_NAME, "")
+        password = request.form.get(PASSWORD_FIELD_NAME, "")
+        if not check_credentials(username, password):
+            return jsonify({"error": "invalid_credentials"}), 401
+        session_token = session_store.issue(username)
+        response = redirect("/feed-protected")
+        response.set_cookie(AUTH_SESSION_COOKIE_NAME, session_token, httponly=True)
+        return response
+
+    @app.get("/feed-protected")
+    def feed_protected() -> Response | tuple[Response, int]:
+        session_store: SessionStore = app.config["AUTH_SESSION_STORE"]
+        if not session_store.is_valid(request.cookies.get(AUTH_SESSION_COOKIE_NAME)):
+            # A real, explicit 401 -- not a redirect to /login -- per the
+            # user's own explicit choice: clearer for testing, and a
+            # common shape real APIs actually have.
+            return jsonify({"error": "unauthorized"}), 401
+
+        try:
+            page = int(request.args.get("page", "0"))
+        except ValueError:
+            return jsonify({"error": "invalid_page"}), 400
+        if page < 0:
+            return jsonify({"error": "invalid_page"}), 400
+
+        seed = _session_seed()
+        posts = generate_feed_page(seed, page=page, page_size=cfg.protected_feed_page_size)
+        next_page = (
+            f"/feed-protected?page={page + 1}"
+            if page + 1 < cfg.protected_feed_total_pages
+            else None
+        )
+        response = Response(
+            render_template("feed_protected.html", posts=posts, next_page=next_page)
+        )
+        response.set_cookie(SESSION_COOKIE_NAME, seed)
+        return response
+
+    @app.get("/test-expire-session")
+    def test_expire_session() -> Response:
+        """Test-only instrumentation -- never part of any real login flow,
+        same shape as ``/honeypot-trap/<token>``/``/botd-report``: a real
+        route that exists purely to make otherwise-unobservable behavior
+        (a live crawl reacting to a session expiring *mid-crawl*)
+        deterministically testable, instead of depending on a real,
+        flaky multi-second TTL wait. Deliberately expires the *caller's
+        own* current session immediately -- see
+        security/auth.py's SessionStore.force_expire docstring."""
+        session_store: SessionStore = app.config["AUTH_SESSION_STORE"]
+        token = request.cookies.get(AUTH_SESSION_COOKIE_NAME)
+        expired = session_store.force_expire(token)
+        return jsonify({"status": "expired" if expired else "no_session"})
 
     @app.post("/botd-report")
     def botd_report() -> Response:

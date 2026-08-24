@@ -1,0 +1,43 @@
+# docs/REQUIREMENTS.md section 9 entry 15 (Known Limitation #1:
+# login/session, activated ahead of Interstitials per explicit user
+# request): a real target requiring a real POST-based login with a
+# per-load CSRF token before its actual content is reachable at all.
+#
+# `/feed-protected` (test-environment/mock-target/app.py) is a
+# deliberately isolated route -- same target/selectors shape as
+# mock_target_camoufox.yaml's `/`, but returns a real, explicit 401
+# without a valid session, and requires GET /login -> parse the fresh
+# CSRF token -> POST credentials+token -> hold the resulting session
+# cookie for the rest of this browser session before it ever returns
+# real posts. `/feed` and `/` themselves are left completely unchanged
+# by this round (no shared code path was touched to add this).
+#
+# Like every other camoufox/patchright config here, every route on this
+# stack (including /login and /feed-protected) sits behind Anubis's own
+# real proof-of-work challenge first -- a plain, non-browser HTTP POST
+# structurally cannot reach /login at all, which is why `login` (below)
+# is only supported by a real, live-browser-driving provider
+# (SpiderConfig's own validator enforces this).
+name: mock_target_login_protected
+start_urls:
+  - "http://localhost:8080/feed-protected"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+login:
+  login_url: "http://localhost:8080/login"
+  username: "titan_test_user"
+  password: "titan_test_pass"
+  username_field: "#username"
+  password_field: "#password"
+  submit_selector: "#login-submit"
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

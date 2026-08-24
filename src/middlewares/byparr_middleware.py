@@ -46,6 +46,8 @@ provider is selected -- best-effort per
 :meth:`~src.core.interfaces.antibot_provider.AntibotProvider.solve`'s own
 contract: a real-browser-driving provider (Camoufox, Patchright) can
 click; ByparrProvider cannot and only logs why.
+``request.meta["login_flow"]`` (docs/REQUIREMENTS.md section 9 entry 15)
+is passed through the exact same way, same best-effort contract.
 """
 
 from __future__ import annotations
@@ -157,12 +159,14 @@ class ByparrMiddleware:
         click_selector = request.meta.get("click_selector")
         extraction_selectors = request.meta.get("extraction_selectors")
         progressive_extraction = bool(request.meta.get("progressive_extraction"))
+        login_flow = request.meta.get("login_flow")
         try:
             solution = provider.solve(
                 request.url,
                 click_selector=click_selector,
                 extraction_selectors=extraction_selectors,
                 progressive_extraction=progressive_extraction,
+                login_flow=login_flow,
             )
         except AntibotError as exc:
             self.logger.error(

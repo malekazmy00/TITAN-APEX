@@ -36,6 +36,56 @@ class LiveDomSelectors(BaseModel):
     fields: dict[str, str] = Field(min_length=1)
 
 
+class LoginFlow(BaseModel):
+    """Best-effort login-flow instructions for :meth:`AntibotProvider.solve`
+    -- docs/REQUIREMENTS.md section 9 entry 15 (Known Limitation #1:
+    login/session, activated ahead of Interstitials per explicit user
+    request).
+
+    Only a provider with a real, live browser page (Camoufox/Patchright)
+    can fill a real DOM form and follow the real navigation a POST
+    triggers; ``ByparrProvider``'s ``/v1`` API has no interaction
+    capability at all -- same best-effort contract as
+    ``click_selector``/``extraction_selectors``: a provider that can't
+    support this must not crash or silently drop it, only log a clear
+    warning and solve without it.
+
+    A real, discovered architectural constraint this shape works around
+    rather than assumes away: each :meth:`AntibotProvider.solve` call
+    launches (and tears down) its own fresh browser -- cookies never
+    persist *across* separate ``solve()`` calls. So "session persistence"
+    is demonstrated *within* one browser session across multiple
+    in-browser navigations (login, then the actual target URL, then
+    optionally a next-page link) inside a single ``solve()`` call, not
+    across separate Scrapy-level requests reusing a shared cookie jar --
+    a real, live cookie jar shared *across* requests would need a
+    persistent browser context, a materially bigger architecture change
+    out of scope for this round.
+
+    ``username_field``/``password_field``/``submit_selector`` are CSS
+    selectors for the real DOM form's own input/button elements. The
+    CSRF token itself is never read or reconstructed by this layer at
+    all -- it's a real hidden form field the browser submits
+    automatically along with everything else, the same way a genuine
+    user's browser would.
+    """
+
+    login_url: str
+    username: str
+    password: str
+    username_field: str
+    password_field: str
+    submit_selector: str
+    # Test-only (see test-environment/mock-target/app.py's own
+    # /test-expire-session route docstring for why this exists at all):
+    # when set, visited once immediately after a successful login --
+    # before the real target URL -- to deterministically force this
+    # session to be treated as already-expired, so a live test can
+    # trigger session-expiry *detection* without a real, flaky
+    # multi-second TTL wait. None (the default) in every real config.
+    session_expiry_probe_url: str | None = None
+
+
 class Solution(BaseModel):
     """Result of successfully solving an anti-bot challenge for a URL."""
 
@@ -80,6 +130,7 @@ class AntibotProvider(ABC):
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
     ) -> Solution:
         """Solve whatever anti-bot challenge protects ``url``.
 
@@ -130,6 +181,18 @@ class AntibotProvider(ABC):
         parameters: a provider with no live page to query (``ByparrProvider``)
         must not crash or silently drop it -- log a clear warning and solve
         without it, leaving both fields as they'd be without this flag.
+
+        ``login_flow`` (docs/REQUIREMENTS.md section 9 entry 15, Known
+        Limitation #1: login/session): same best-effort contract as the
+        other three parameters -- when given, a provider with a real,
+        live browser page fills and submits the real login form
+        (:class:`LoginFlow`'s own docstring has the full rationale,
+        including why session persistence is demonstrated within one
+        ``solve()`` call rather than across separate ones) before
+        navigating to ``url`` itself; a provider that cannot support it
+        (``ByparrProvider``) must not crash or silently drop it -- log a
+        clear warning and solve ``url`` directly, unauthenticated, same
+        as if ``login_flow`` had not been given at all.
 
         Implementations must raise
         :class:`src.core.exceptions.AntibotError` (never a bare

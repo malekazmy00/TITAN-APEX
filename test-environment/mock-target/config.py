@@ -66,6 +66,17 @@ class MockTargetConfig:
         self.feed_rate_limit_threshold: int = _env_int("FEED_RATE_LIMIT_THRESHOLD", 20)
         self.feed_rate_limit_window_seconds: int = _env_int("FEED_RATE_LIMIT_WINDOW_SECONDS", 60)
         self.feed_page_size: int = _env_int("FEED_PAGE_SIZE", 10)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Known Limitation
+        # #1 (login/session, activated ahead of Interstitials per
+        # explicit user request): real server-side session TTL -- see
+        # security/auth.py's SessionStore.
+        self.session_ttl_seconds: int = _env_int("SESSION_TTL_SECONDS", 300)
+        # /feed-protected's own page size/total-pages -- deliberately
+        # small and fixed (unlike /feed's DOM-virtualized version), since
+        # this round is about login/session mechanics, not about
+        # re-testing lazy-loading/virtualization on top of them.
+        self.protected_feed_page_size: int = _env_int("PROTECTED_FEED_PAGE_SIZE", 5)
+        self.protected_feed_total_pages: int = _env_int("PROTECTED_FEED_TOTAL_PAGES", 2)
         self.honeypot_log_path: str = os.environ.get(
             "HONEYPOT_LOG_PATH", "test-environment/mock-target/security/honeypot_triggers.log"
         )

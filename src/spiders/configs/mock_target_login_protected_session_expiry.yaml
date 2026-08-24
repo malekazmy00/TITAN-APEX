@@ -1,0 +1,39 @@
+# docs/REQUIREMENTS.md section 9 entry 15 -- the deterministic
+# session-expiry-detection sibling of mock_target_login_protected.yaml.
+# Identical target/selectors/credentials; the only difference is
+# `login.session_expiry_probe_url`, a test-only knob (see
+# src.core.interfaces.antibot_provider.LoginFlow's own docstring, and
+# test-environment/mock-target/app.py's `/test-expire-session` route)
+# that deterministically forces this crawl's own session to be treated
+# as already-expired right after a real, successful login -- so the
+# resulting fetch of `/feed-protected` is expected to come back a real
+# 401, and `generic_spider.protected_target_rejected` is expected to be
+# logged, not a crash and not a silent empty result.
+#
+# Deliberately its own separate config, not a flag on the main one: this
+# is a test-only scenario that should never be mistaken for a real
+# target's normal behavior.
+name: mock_target_login_protected_session_expiry
+start_urls:
+  - "http://localhost:8080/feed-protected"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+login:
+  login_url: "http://localhost:8080/login"
+  username: "titan_test_user"
+  password: "titan_test_pass"
+  username_field: "#username"
+  password_field: "#password"
+  submit_selector: "#login-submit"
+  session_expiry_probe_url: "http://localhost:8080/test-expire-session"
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

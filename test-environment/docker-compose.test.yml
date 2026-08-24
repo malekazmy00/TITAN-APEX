@@ -77,6 +77,13 @@ services:
       FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
       FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}
       FEED_PAGE_SIZE: ${FEED_PAGE_SIZE:-10}
+      # docs/REQUIREMENTS.md section 9 entry 15 (Known Limitation #1:
+      # login/session): real server-side session TTL
+      # (security/auth.py's SessionStore) and /feed-protected's own
+      # page size/total-pages.
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-300}
+      PROTECTED_FEED_PAGE_SIZE: ${PROTECTED_FEED_PAGE_SIZE:-5}
+      PROTECTED_FEED_TOTAL_PAGES: ${PROTECTED_FEED_TOTAL_PAGES:-2}
       HONEYPOT_LOG_PATH: /logs/honeypot_triggers.log
       BOTD_LOG_PATH: /logs/botd_flags.log
     volumes:

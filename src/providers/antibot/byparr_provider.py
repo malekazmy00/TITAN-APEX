@@ -22,7 +22,12 @@ from logging import Logger
 from typing import Any
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
+from src.core.interfaces.antibot_provider import (
+    AntibotProvider,
+    LiveDomSelectors,
+    LoginFlow,
+    Solution,
+)
 from src.logging_config import get_logger
 
 DEFAULT_TIMEOUT_MS = 60_000
@@ -64,7 +69,25 @@ class ByparrProvider(AntibotProvider):
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
     ) -> Solution:
+        if login_flow is not None:
+            # Same structural gap as extraction_selectors/click_selector
+            # below (docs/REQUIREMENTS.md section 9 entry 15): filling
+            # and submitting a real login form needs a live browser page
+            # -- Byparr's /v1 protocol is a stateless "fetch and return
+            # HTML" HTTP call with no page handle this process ever sees.
+            # SpiderConfig's own validator (login requires antibot_provider
+            # camoufox/patchright) should mean this branch is never
+            # actually reached in practice -- logged and skipped anyway,
+            # defense in depth.
+            self.logger.warning(
+                "byparr_provider.login_flow_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API has no form-fill/interact capability at all",
+                },
+            )
         if progressive_extraction:
             # Same structural gap as extraction_selectors below (entry
             # 14, the real fix for entry 13's DOM Virtualization gap):

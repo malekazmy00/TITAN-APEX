@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target - Login</title>
+</head>
+<body>
+  <main>
+    <h1 class="page-title">Log In</h1>
+    <!--
+      docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Known Limitation #1
+      (login/session): csrf_token is a fresh value every GET /login load
+      (security/auth.py's CsrfTokenStore.issue(), single-use), submitted
+      as a real hidden form field -- a genuine browser POST includes it
+      automatically, the same way any other form field would be. There is
+      deliberately no client-side JS on this page at all.
+    -->
+    <form method="post" action="/login" data-role="login-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label for="username">Username</label>
+      <input type="text" name="username" id="username" data-role="login-username">
+      <label for="password">Password</label>
+      <input type="password" name="password" id="password" data-role="login-password">
+      <button type="submit" id="login-submit" data-role="login-submit">Log In</button>
+    </form>
+  </main>
+</body>
+</html>

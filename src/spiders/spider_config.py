@@ -43,6 +43,31 @@ class JsonSelectorsConfig(BaseModel):
     has_next_page_path: str | None = None
 
 
+class LoginConfig(BaseModel):
+    """POST + CSRF + session login-flow instructions for a target that
+    requires it (docs/REQUIREMENTS.md section 9 entry 15, Known
+    Limitation #1: login/session, activated ahead of Interstitials per
+    explicit user request).
+
+    ``username_field``/``password_field``/``submit_selector`` are CSS
+    selectors for the real login form's own input/button elements --
+    the CSRF token itself is never named here at all: it's a real hidden
+    form field a real browser submits automatically, not something this
+    layer reads or reconstructs.
+    """
+
+    login_url: str
+    username: str
+    password: str
+    username_field: str
+    password_field: str
+    submit_selector: str
+    # Test-only -- see src.core.interfaces.antibot_provider.LoginFlow's
+    # own field of the same name for the full rationale. None (the
+    # default) in every real target config.
+    session_expiry_probe_url: str | None = None
+
+
 class SpiderConfig(BaseModel):
     """Validated, fully-typed representation of a target's YAML config."""
 
@@ -107,6 +132,12 @@ class SpiderConfig(BaseModel):
     # own way. Defaults False: every existing config's behavior stays
     # exactly as entries 11-13 already established, zero regression risk.
     progressive_extraction: bool = False
+    # docs/REQUIREMENTS.md section 9 entry 15: Known Limitation #1
+    # (login/session), activated ahead of Interstitials per explicit
+    # user request. None (the default) in every existing config's
+    # unchanged behavior -- unauthenticated, exactly as before this
+    # entry existed.
+    login: LoginConfig | None = None
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:
@@ -161,6 +192,23 @@ class SpiderConfig(BaseModel):
             raise ValueError(
                 "progressive_extraction requires antibot_provider 'camoufox' or "
                 f"'patchright' (a real, live browser page) -- got {self.antibot_provider!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _login_requires_a_real_browser_provider(self) -> SpiderConfig:
+        if self.login is None:
+            return self
+        # Same real structural requirement as extraction_mode/
+        # progressive_extraction: only a provider with a real, live
+        # browser page (camoufox/patchright) can fill and submit a real
+        # login form at all (docs/REQUIREMENTS.md section 9 entry 15).
+        if not self.antibot_needed:
+            raise ValueError("login requires antibot_needed: true")
+        if self.antibot_provider not in ("camoufox", "patchright"):
+            raise ValueError(
+                "login requires antibot_provider 'camoufox' or 'patchright' "
+                f"(a real, live browser page) -- got {self.antibot_provider!r}"
             )
         return self
 

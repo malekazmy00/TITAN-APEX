@@ -63,12 +63,18 @@ from logging import Logger
 from typing import Any, NamedTuple
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
+from src.core.interfaces.antibot_provider import (
+    AntibotProvider,
+    LiveDomSelectors,
+    LoginFlow,
+    Solution,
+)
 from src.logging_config import get_logger
 from src.providers.antibot._live_dom import (
     collect_live_dom_items_progressively,
     extract_live_dom_items,
 )
+from src.providers.antibot._login import perform_login_and_navigate
 from src.providers.antibot._scroll import collect_html_snapshots, scroll_to_load_lazy_content
 
 DEFAULT_TIMEOUT_MS = 30_000
@@ -127,9 +133,9 @@ class _RawSolve(NamedTuple):
 
 
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
-# progressive_extraction) -> raw browser result
+# progressive_extraction, login_flow) -> raw browser result
 CamoufoxSolveFn = Callable[
-    [str, int, int, "str | None", "LiveDomSelectors | None", bool], _RawSolve
+    [str, int, int, "str | None", "LiveDomSelectors | None", bool, "LoginFlow | None"], _RawSolve
 ]
 
 
@@ -140,6 +146,7 @@ def _default_camoufox_solve(
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
+    login_flow: LoginFlow | None = None,
 ) -> _RawSolve:
     """Drive a real Camoufox browser: navigate, (optionally) click, wait
     past ``load``, read, close.
@@ -203,6 +210,23 @@ def _default_camoufox_solve(
     path is the only one that needs selectors down here at all). A no-op
     (behaves exactly like ``progressive_extraction=False``) when not given.
 
+    ``login_flow`` (docs/REQUIREMENTS.md section 9 entry 15, Known
+    Limitation #1: login/session): when given,
+    :func:`~src.providers.antibot._login.submit_login_form` runs *first*
+    -- before the ``url`` navigation below -- filling and submitting the
+    real login form. The same main-frame-response tracking
+    this function already needs for every other navigation reveals what
+    the submit led to: a redirect that returns a non-``4xx``/``5xx``
+    status is treated as success (``url`` is navigated to next, with the
+    now-authenticated browser's own cookies already attached); a
+    ``4xx``/``5xx`` result (wrong credentials, a stale/replayed CSRF
+    token, or any other real login failure) is logged clearly and ``url``
+    is *not* navigated to separately -- the login page's own failure
+    response becomes what this call returns, the same "let the real
+    response speak" approach the JSON/plaintext-viewer handling above
+    already has. A no-op (behaves exactly like ``login_flow=None``) when
+    not given.
+
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
             read the page -- wraps Camoufox's own pre-launch exceptions
@@ -246,7 +270,53 @@ def _default_camoufox_solve(
                             last_main_frame_response = resp
 
                     page.on("response", _track_main_frame_response)
-                    initial_response = page.goto(url, timeout=timeout_ms)
+                    # entry 15: login runs first -- see this function's
+                    # own docstring for the full success/failure
+                    # decision. `login_flow` is a no-op branch when not
+                    # given, same shape as every other optional
+                    # capability here.
+                    if login_flow is not None:
+                        login_ok = perform_login_and_navigate(
+                            page,
+                            login_flow.login_url,
+                            login_flow.username,
+                            login_flow.password,
+                            login_flow.username_field,
+                            login_flow.password_field,
+                            login_flow.submit_selector,
+                            timeout_ms,
+                            post_load_wait_ms,
+                            lambda: (
+                                last_main_frame_response.status
+                                if last_main_frame_response is not None
+                                else None
+                            ),
+                            url,
+                            login_flow.session_expiry_probe_url,
+                        )
+                        final_status = (
+                            last_main_frame_response.status
+                            if last_main_frame_response is not None
+                            else None
+                        )
+                        if login_ok:
+                            logger.info(
+                                "camoufox_provider.login_succeeded",
+                                extra={"login_url": login_flow.login_url},
+                            )
+                            if final_status is not None and final_status >= 400:
+                                logger.warning(
+                                    "camoufox_provider.session_expired_mid_crawl",
+                                    extra={"url": url, "status": final_status},
+                                )
+                        else:
+                            logger.warning(
+                                "camoufox_provider.login_failed",
+                                extra={"login_url": login_flow.login_url, "status": final_status},
+                            )
+                        initial_response = last_main_frame_response
+                    else:
+                        initial_response = page.goto(url, timeout=timeout_ms)
                     if click_selector:
                         page.click(click_selector, timeout=timeout_ms)
                     # The one thing ByparrProvider structurally cannot
@@ -347,6 +417,7 @@ def _default_camoufox_solve(
                             "html_snapshot_count": (
                                 len(html_snapshots) if html_snapshots is not None else None
                             ),
+                            "login_flow_used": login_flow is not None,
                         },
                     )
                     return _RawSolve(
@@ -395,6 +466,7 @@ class CamoufoxProvider(AntibotProvider):
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
     ) -> Solution:
         try:
             raw = self._solve_fn(
@@ -404,6 +476,7 @@ class CamoufoxProvider(AntibotProvider):
                 click_selector,
                 extraction_selectors,
                 progressive_extraction,
+                login_flow,
             )
         except AntibotError:
             self.logger.error("camoufox_provider.solve_failed", extra={"url": url})

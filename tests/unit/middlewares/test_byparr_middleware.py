@@ -15,7 +15,12 @@ import pytest
 from scrapy.http import HtmlResponse, Request
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
+from src.core.interfaces.antibot_provider import (
+    AntibotProvider,
+    LiveDomSelectors,
+    LoginFlow,
+    Solution,
+)
 from src.middlewares.byparr_middleware import ByparrMiddleware
 
 
@@ -31,6 +36,7 @@ class _FakeProvider(AntibotProvider):
         self.last_click_selector: str | None = None
         self.last_extraction_selectors: LiveDomSelectors | None = None
         self.last_progressive_extraction: bool = False
+        self.last_login_flow: LoginFlow | None = None
 
     def solve(
         self,
@@ -38,10 +44,12 @@ class _FakeProvider(AntibotProvider):
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
     ) -> Solution:
         self.last_click_selector = click_selector
         self.last_extraction_selectors = extraction_selectors
         self.last_progressive_extraction = progressive_extraction
+        self.last_login_flow = login_flow
         if self._error is not None:
             raise self._error
         assert self._solution is not None
@@ -253,6 +261,39 @@ def test_process_request_passes_progressive_extraction_from_meta_to_the_provider
     middleware.process_request(request, spider=object())
 
     assert fake_provider.last_progressive_extraction is True
+
+
+def test_process_request_passes_login_flow_from_meta_to_the_provider() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 15:
+    request.meta["login_flow"] (set by GenericSpider when
+    SpiderConfig.login is set) must reach whichever provider is
+    selected, same passthrough contract as every other optional
+    capability here."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    login_flow = LoginFlow(
+        login_url="https://example.com/login",
+        username="titan_test_user",
+        password="titan_test_pass",
+        username_field="#username",
+        password_field="#password",
+        submit_selector="#login-submit",
+    )
+    request = Request(
+        "https://example.com/",
+        meta={"antibot_needed": True, "login_flow": login_flow},
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_login_flow == login_flow
 
 
 def test_process_request_attaches_html_snapshots_when_the_provider_captured_them() -> None:

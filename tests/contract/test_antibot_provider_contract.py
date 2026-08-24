@@ -18,7 +18,12 @@ from typing import Any
 import pytest
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
+from src.core.interfaces.antibot_provider import (
+    AntibotProvider,
+    LiveDomSelectors,
+    LoginFlow,
+    Solution,
+)
 from src.providers.antibot.byparr_provider import ByparrProvider
 from src.providers.antibot.camoufox_provider import CamoufoxProvider
 from src.providers.antibot.camoufox_provider import _RawSolve as _CamoufoxRawSolve
@@ -61,6 +66,7 @@ def _camoufox_ok_solve(
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
+    login_flow: LoginFlow | None = None,
 ) -> _CamoufoxRawSolve:
     return _CamoufoxRawSolve(
         url="https://example.com/protected",
@@ -77,6 +83,7 @@ def _camoufox_failing_solve(
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
+    login_flow: LoginFlow | None = None,
 ) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
@@ -96,6 +103,7 @@ def _patchright_ok_solve(
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
+    login_flow: LoginFlow | None = None,
 ) -> _PatchrightRawSolve:
     return _PatchrightRawSolve(
         url="https://example.com/protected",
@@ -112,6 +120,7 @@ def _patchright_failing_solve(
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
+    login_flow: LoginFlow | None = None,
 ) -> _PatchrightRawSolve:
     raise AntibotError(f"patchright failed to solve {url}: unsolvable")
 
@@ -202,5 +211,27 @@ def test_solve_accepts_an_optional_progressive_extraction_without_crashing(
     Solution without crashing, even one (ByparrProvider) that cannot
     actually act on it and only logs a warning instead."""
     solution = provider.solve("https://example.com/protected", progressive_extraction=True)
+
+    assert isinstance(solution, Solution)
+
+
+def test_solve_accepts_an_optional_login_flow_without_crashing(
+    provider: AntibotProvider,
+) -> None:
+    """login_flow (docs/REQUIREMENTS.md section 9 entry 15) is
+    best-effort, not part of the required contract (AntibotProvider.solve's
+    own docstring) -- every provider must still accept it and return a
+    Solution without crashing, even one (ByparrProvider) that cannot
+    actually act on it and only logs a warning instead."""
+    login_flow = LoginFlow(
+        login_url="https://example.com/login",
+        username="titan_test_user",
+        password="titan_test_pass",
+        username_field="#username",
+        password_field="#password",
+        submit_selector="#login-submit",
+    )
+
+    solution = provider.solve("https://example.com/protected", login_flow=login_flow)
 
     assert isinstance(solution, Solution)

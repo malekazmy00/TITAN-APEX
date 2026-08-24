@@ -45,12 +45,18 @@ from logging import Logger
 from typing import Any, NamedTuple
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
+from src.core.interfaces.antibot_provider import (
+    AntibotProvider,
+    LiveDomSelectors,
+    LoginFlow,
+    Solution,
+)
 from src.logging_config import get_logger
 from src.providers.antibot._live_dom import (
     collect_live_dom_items_progressively,
     extract_live_dom_items,
 )
+from src.providers.antibot._login import perform_login_and_navigate
 from src.providers.antibot._scroll import collect_html_snapshots, scroll_to_load_lazy_content
 
 DEFAULT_TIMEOUT_MS = 30_000
@@ -88,9 +94,9 @@ class _RawSolve(NamedTuple):
 
 
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
-# progressive_extraction) -> raw browser result
+# progressive_extraction, login_flow) -> raw browser result
 PatchrightSolveFn = Callable[
-    [str, int, int, "str | None", "LiveDomSelectors | None", bool], _RawSolve
+    [str, int, int, "str | None", "LiveDomSelectors | None", bool, "LoginFlow | None"], _RawSolve
 ]
 
 
@@ -101,6 +107,7 @@ def _default_patchright_solve(
     click_selector: str | None = None,
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
+    login_flow: LoginFlow | None = None,
 ) -> _RawSolve:
     """Drive a real Patchright-stealthed Chromium: navigate, (optionally)
     click, wait past ``load``, read, close.
@@ -139,6 +146,12 @@ def _default_patchright_solve(
     ``post_id`` behavior as
     :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
     identical parameter (docs/REQUIREMENTS.md section 9 entry 14) -- see
+    that function's own docstring for the full explanation.
+
+    ``login_flow``: same reasoning, order, and success/failure decision
+    (real-response-status-driven, not assumed) as
+    :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
+    identical parameter (docs/REQUIREMENTS.md section 9 entry 15) -- see
     that function's own docstring for the full explanation.
 
     Raises:
@@ -185,7 +198,51 @@ def _default_patchright_solve(
                             last_main_frame_response = resp
 
                     page.on("response", _track_main_frame_response)
-                    initial_response = page.goto(url, timeout=timeout_ms)
+                    # entry 15: login runs first -- see this function's
+                    # own docstring / camoufox_provider.py's identical
+                    # block for the full success/failure decision.
+                    if login_flow is not None:
+                        login_ok = perform_login_and_navigate(
+                            page,
+                            login_flow.login_url,
+                            login_flow.username,
+                            login_flow.password,
+                            login_flow.username_field,
+                            login_flow.password_field,
+                            login_flow.submit_selector,
+                            timeout_ms,
+                            post_load_wait_ms,
+                            lambda: (
+                                last_main_frame_response.status
+                                if last_main_frame_response is not None
+                                else None
+                            ),
+                            url,
+                            login_flow.session_expiry_probe_url,
+                        )
+                        final_status = (
+                            last_main_frame_response.status
+                            if last_main_frame_response is not None
+                            else None
+                        )
+                        if login_ok:
+                            logger.info(
+                                "patchright_provider.login_succeeded",
+                                extra={"login_url": login_flow.login_url},
+                            )
+                            if final_status is not None and final_status >= 400:
+                                logger.warning(
+                                    "patchright_provider.session_expired_mid_crawl",
+                                    extra={"url": url, "status": final_status},
+                                )
+                        else:
+                            logger.warning(
+                                "patchright_provider.login_failed",
+                                extra={"login_url": login_flow.login_url, "status": final_status},
+                            )
+                        initial_response = last_main_frame_response
+                    else:
+                        initial_response = page.goto(url, timeout=timeout_ms)
                     if click_selector:
                         page.click(click_selector, timeout=timeout_ms)
                     # The same capability CamoufoxProvider's own
@@ -276,6 +333,7 @@ def _default_patchright_solve(
                             "html_snapshot_count": (
                                 len(html_snapshots) if html_snapshots is not None else None
                             ),
+                            "login_flow_used": login_flow is not None,
                         },
                     )
                     return _RawSolve(
@@ -320,6 +378,7 @@ class PatchrightProvider(AntibotProvider):
         click_selector: str | None = None,
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
     ) -> Solution:
         try:
             raw = self._solve_fn(
@@ -329,6 +388,7 @@ class PatchrightProvider(AntibotProvider):
                 click_selector,
                 extraction_selectors,
                 progressive_extraction,
+                login_flow,
             )
         except AntibotError:
             self.logger.error("patchright_provider.solve_failed", extra={"url": url})

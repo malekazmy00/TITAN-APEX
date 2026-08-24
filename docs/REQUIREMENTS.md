@@ -1586,6 +1586,88 @@ extraction، مؤكدة بدليل CI حقيقي لـ**الاتنين** extracti
 دائم يوضّح الفرق بين القراءة النهائية الواحدة والتجميع التدريجي.
 `docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md` اتحدّث ليعكس الحل.
 
+### 15. Login/Session — POST + CSRF + session persistence + session-expiry detection (محور 5، Known Limitation #1، طلب المستخدم صراحة قبل أي بند تاني من الجدول)
+
+**الفكرة:** صفحة `/login` حقيقية على mock-target (username/password
+ثابتين للاختبار)، فورم فيه CSRF token عشوائي بيتغيّر كل تحميل (single-use
+— أي محاولة إعادة استخدامه بترفض)، وPOST بيرجّع session cookie حقيقي
+(TTL حقيقي، `security/auth.py`'s `SessionStore`) لو البيانات والتوكن
+صح. مسار جديد منفصل تمامًا `/feed-protected` (نفس بيانات `/feed`، عبر
+`content_generator.generate_feed_page` نفسها) — `/` و`/feed` الأصليين
+اتسابوا من غير أي تعديل (regression sentinel زي كل مرة). من غير session
+صالح: 401 صريح (مش redirect لـ `/login`، طلب المستخدم صراحة).
+
+**فجوة معمارية حقيقية اتكشفت في الطريق، قبل حتى كتابة أول سطر كود
+تنفيذي:** كل route على mock-target (بما فيها `/login` و`/feed-protected`
+الجديدين) وراء Anubis — اتأكّد مباشرة من `anubis/botPolicy.yaml` نفسه
+إن مفيش أي استثناء بناءً على الـ path. يعني مستحيل معماريًا POST مباشر
+(HTTP عادي، من غير متصفح) يوصل لـ `/login` أصلاً — لازم متصفح حقيقي
+(camoufox/patchright) يعدّي تحدي Anubis الأول. **فجوة معمارية تانية
+أعمق:** كل نداء `AntibotProvider.solve()` بيشغّل متصفح جديد تمامًا
+ويقفله بعد ما يخلص (اتأكّد من قراءة الكود نفسه: `with Camoufox(...) as
+browser` جوّه `_default_camoufox_solve`) — يعني الكوكيز **مبتفضلش**
+بين نداءين solve() منفصلين. الحل: كل رحلة login + (اختباري) session
+expiry probe + الوصول للـ target الحقيقي بتحصل **جوّه نداء solve()
+واحد بس**، نفس براوزر واحد — مش عبر Scrapy requests منفصلة بتشارك
+cookie jar (ده كان محتاج تغيير معماري أكبر بكتير، خارج نطاق الجولة دي
+عن قصد).
+
+**الكود المُضاف:**
+- `test-environment/mock-target/security/auth.py`: `CsrfTokenStore`
+  (single-use)، `SessionStore` (TTL حقيقي + injectable clock زي
+  `FeedRateLimiter` بالظبط، + `force_expire` اختباري بس)،
+  `check_credentials` (`hmac.compare_digest`، مش `==`).
+- 3 routes جديدة في `app.py`: `GET/POST /login`، `GET /feed-protected`
+  (401 صريح من غير session، pagination بسيطة `?page=N`)،
+  `GET /test-expire-session` (instrumentation اختباري بس، زي
+  `/honeypot-trap/<token>` بالظبط — بيخلّي اختبار session expiry
+  حتمي من غير أي انتظار حقيقي فيه flakiness).
+- `src/core/interfaces/antibot_provider.py`: `LoginFlow` model جديد +
+  `solve()` كسب `login_flow` (best-effort، نفس نمط `click_selector`).
+- `src/providers/antibot/_login.py` (وحدة جديدة): `submit_login_form`
+  (fill+click حقيقي — الـ CSRF token بيتبعت تلقائيًا كـ hidden field
+  عادي، من غير أي parsing/إعادة بناء يدوي من طرفنا) و
+  `perform_login_and_navigate` (orchestration قابل للاختبار منفصل —
+  استخراج ضروري عشان الـ coverage gate، زي بند 14's بالظبط).
+- `camoufox_provider.py`/`patchright_provider.py`: login بيحصل **قبل**
+  أي navigation تاني، بالاعتماد على نفس آلية تتبّع
+  `last_main_frame_response` الموجودة أصلاً — نجاح/فشل بيتحدد من
+  status code الاستجابة الحقيقية، مش افتراض.
+- `byparr_provider.py`: best-effort warning + تجاهل (مفيش قدرة
+  form-fill/interact خالص في `/v1` API).
+- `GenericSpider`: `_request_meta()` بيمرّر `login_flow`، و**بيفعّل
+  `handle_httpstatus_list: [401, 403]` بشكل غير مشروط** (مش بس لما
+  `login` متظبط) — فجوة حقيقية اتكشفت: Scrapy's `HttpErrorMiddleware`
+  (spider middleware افتراضي) بيرمي أي استجابة non-2xx **قبل** ما
+  توصل لـ `parse()` خالص من غير الـ opt-in ده — يعني لو سبنا الشرط
+  مربوط بـ `login` بس، سيناريو "target محمي من غير login متظبط خالص"
+  (الاختبار السلبي المطلوب) كان هيفشل بصمت تام، مش هيتسجّل أي حاجة.
+  التفعيل غير المشروط آمن لكل target تاني بردو: Anubis نفسه بيرجّع
+  200 دايمًا لصفحات التحدي/الرفض (`botPolicy.yaml`'s
+  `status_codes: CHALLENGE: 200, DENY: 200`) فمفيش تقاطع خالص.
+  `_parse_html()` كسب فحص مبكر: `response.status in (401, 403)` →
+  log واضح (`generic_spider.protected_target_rejected`) + return،
+  مش crash ومش فشل صامت.
+- `SpiderConfig.login: LoginConfig | None` + validator (نفس نمط
+  `extraction_mode`/`progressive_extraction`: `antibot_needed: true` +
+  provider حقيقي بس).
+
+**3 configs جديدة:** `mock_target_login_protected.yaml` (المسار
+الناجح كامل)، `mock_target_login_protected_session_expiry.yaml` (نفسه
++ `session_expiry_probe_url` — سيناريو اختباري حتمي، مش انتظار حقيقي
+فيه flakiness)، `mock_target_feed_protected_no_login.yaml` (السيناريو
+السلبي: بدون `login` خالص).
+
+**اتّحقّق محليًا** قبل الدفع: ruff/mypy --strict نظيفين، 289
+unit+contract test PASSED (85.25% coverage، مش بعيد عن الحد لكن فوقه
+بأمان)، test-environment's own suite 137 test PASSED (100% coverage —
+23 اختبار جديد لـ`security/auth.py` + 13 اختبار route-level في
+`test_app.py`). **لسه محتاجين تأكيد CI حقيقي** للاختبارات الحية الـ3
+الجديدة (`test_login_flow_reaches_protected_data_after_a_real_post_and_csrf_token`،
+`test_feed_protected_without_any_login_yields_nothing_not_a_crash`،
+`test_session_expired_mid_crawl_after_a_real_login_yields_nothing_not_a_crash`)
+— النتيجة الفعلية هتتسجّل هنا بمجرد ما الـ run يخلص.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

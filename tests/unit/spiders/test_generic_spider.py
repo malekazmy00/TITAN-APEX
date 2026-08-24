@@ -448,3 +448,120 @@ def test_parse_json_missing_field_path_resolves_to_none(json_config_path: str) -
 
     assert items[0]["text"] is None
     assert items[0]["likes"] is None
+
+
+# --- login/session (docs/REQUIREMENTS.md section 9 entry 15, Known
+# Limitation #1, activated ahead of Interstitials per explicit user
+# request) --------------------------------------------------------------
+
+LOGIN_CONFIG_YAML = (
+    CONFIG_YAML
+    + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+    "login:\n"
+    "  login_url: http://localhost:8080/login\n"
+    "  username: titan_test_user\n"
+    "  password: titan_test_pass\n"
+    "  username_field: '#username'\n"
+    "  password_field: '#password'\n"
+    "  submit_selector: '#login-submit'\n"
+)
+
+
+def test_start_sets_login_flow_meta_to_none_by_default(config_path: str) -> None:
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["login_flow"] is None
+
+
+def test_start_sets_login_flow_meta_from_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "login_target.yaml"
+    config_file.write_text(LOGIN_CONFIG_YAML, encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    login_flow = requests[0].meta["login_flow"]
+    assert login_flow.login_url == "http://localhost:8080/login"
+    assert login_flow.username == "titan_test_user"
+    assert login_flow.password == "titan_test_pass"
+    assert login_flow.username_field == "#username"
+    assert login_flow.password_field == "#password"
+    assert login_flow.submit_selector == "#login-submit"
+    assert login_flow.session_expiry_probe_url is None
+
+
+def test_start_sets_handle_httpstatus_list_even_without_login_configured(config_path: str) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 15: set unconditionally, not
+    just for a `login`-configured target -- a target that requires a
+    session but has no login configured at all must still surface a real
+    401/403 (the user's own explicit requirement), not have Scrapy's own
+    HttpErrorMiddleware silently drop it before parse() ever sees it.
+    Harmless for every other target too (this module's own comment on
+    why: Anubis's challenge/deny pages always return 200 by design)."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["handle_httpstatus_list"] == [401, 403]
+
+
+def test_start_sets_handle_httpstatus_list_when_login_configured_too(tmp_path: Path) -> None:
+    """Same value, same reasoning, for a `login`-configured target --
+    included for parity/regression coverage, not because the behavior
+    actually differs from the unconditional case above."""
+    config_file = tmp_path / "login_target.yaml"
+    config_file.write_text(LOGIN_CONFIG_YAML, encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["handle_httpstatus_list"] == [401, 403]
+
+
+def test_parse_logs_and_yields_nothing_on_401(config_path: str) -> None:
+    """Happy path for the detection logic itself: a real 401 (no valid
+    session, a failed login, or one that expired mid-crawl) is logged
+    clearly and explicitly, not a silent drop and not a crash."""
+    spider = GenericSpider(config_path=config_path)
+    request = Request("https://quotes.toscrape.com/")
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/",
+        body=b'{"error": "unauthorized"}',
+        request=request,
+        status=401,
+    )
+
+    results = list(spider.parse(response))
+
+    assert results == []
+
+
+def test_parse_logs_and_yields_nothing_on_403(config_path: str) -> None:
+    """Failure-adjacent case: same handling for 403 (e.g. an invalid/
+    replayed CSRF token) as for 401."""
+    spider = GenericSpider(config_path=config_path)
+    request = Request("https://quotes.toscrape.com/")
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/",
+        body=b'{"error": "invalid_csrf_token"}',
+        request=request,
+        status=403,
+    )
+
+    results = list(spider.parse(response))
+
+    assert results == []
+
+
+def test_parse_does_not_treat_a_normal_200_as_rejected(config_path: str) -> None:
+    """Sanity/regression check: the new 401/403 branch must not somehow
+    swallow an ordinary successful response too."""
+    spider = GenericSpider(config_path=config_path)
+    response = _fixture_response()
+
+    results = list(spider.parse(response))
+    items = [r for r in results if isinstance(r, dict)]
+
+    assert len(items) == 10

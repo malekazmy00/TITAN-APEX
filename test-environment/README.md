@@ -444,6 +444,52 @@ it should stay at (or very near) `DOM_VIRTUALIZATION_WINDOW_SIZE`
 regardless of how far you've scrolled, never growing unbounded the way
 2.4's own plain lazy-loading description alone would suggest.
 
+### 2.10 Login/session (`/login`, `/feed-protected`)
+
+`security/auth.py` + three routes in `app.py`: a real, POST-based login
+gate in front of a real, otherwise-unreachable protected feed —
+docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Known Limitation #1,
+activated ahead of Interstitials per explicit user request. Deliberately
+isolated: `/` and `/feed` are completely unchanged, and `/feed-protected`
+shares none of their client-side JS/DOM-virtualization/Shadow-DOM
+machinery — this layer is only about login/session mechanics.
+
+- **`GET /login`** renders a real HTML form with a hidden CSRF token
+  (`security/auth.py`'s `CsrfTokenStore`) that is genuinely different on
+  every load and single-use (consumed the moment a `POST` uses it
+  successfully — a captured token cannot be replayed).
+- **`POST /login`** validates the token first (`403` if missing/reused),
+  then the fixed test credentials (`titan_test_user` /
+  `titan_test_pass` — `403`/`401` respectively use `hmac.compare_digest`,
+  not a toy `==`), then issues a real, TTL-based server-side session
+  (`SessionStore`, default `SESSION_TTL_SECONDS=300`) and redirects to
+  `/feed-protected`.
+- **`GET /feed-protected`** returns a real, explicit `401` (not a
+  redirect to `/login`) without a valid session cookie; with one, it
+  returns the same underlying post data `/feed` uses
+  (`content_generator.generate_feed_page`), fully server-rendered — no
+  client-side JS at all — paginated (`PROTECTED_FEED_PAGE_SIZE`,
+  `PROTECTED_FEED_TOTAL_PAGES`) via a plain `?page=N` query param and a
+  `data-role="next-page"` link.
+- **`GET /test-expire-session`** is test-only instrumentation (same
+  shape as `/honeypot-trap/<token>`/`/botd-report`): deterministically
+  forces the *caller's own* current session to be treated as expired,
+  so a live test can trigger session-expiry *detection* without a real,
+  flaky multi-second TTL wait (`SessionStore.force_expire`'s own
+  docstring has the full rationale). Never part of any real login flow.
+
+**Same Anubis challenge as every other route** — checked directly
+against this stack's own `anubis/botPolicy.yaml`: there is no
+path-based exemption, so `/login` and `/feed-protected` require exactly
+the same real proof-of-work pass as `/` or `/feed` do, on top of the
+login mechanics above.
+
+**Verify it's active:** `curl http://localhost:8080/feed-protected`
+(past Anubis) returns `401 {"error": "unauthorized"}`; a real
+`GET /login` → parse the `csrf_token` hidden field → `POST` the fixed
+credentials + token → follow the `302` → `GET /feed-protected` with the
+resulting cookie returns real posts instead.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently

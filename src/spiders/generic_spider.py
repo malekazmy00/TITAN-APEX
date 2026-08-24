@@ -19,7 +19,7 @@ import scrapy
 from scrapy.http import Response
 
 from src.core.exceptions import ConfigError
-from src.core.interfaces.antibot_provider import LiveDomSelectors
+from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
 from src.logging_config import get_logger
 from src.providers.antibot.parsed_html import extract_parsed_html_items
 from src.spiders.spider_config import load_spider_config
@@ -114,7 +114,7 @@ class GenericSpider(scrapy.Spider):
             extraction_selectors = LiveDomSelectors(
                 item=self.config.selectors.item, fields=self.config.selectors.fields
             )
-        return {
+        meta: dict[str, Any] = {
             "playwright": self.config.render_js,
             "antibot_needed": self.config.antibot_needed,
             "antibot_provider": self.config.antibot_provider,
@@ -122,7 +122,36 @@ class GenericSpider(scrapy.Spider):
             "click_selector": self.config.click_selector,
             "extraction_selectors": extraction_selectors,
             "progressive_extraction": self.config.progressive_extraction,
+            "login_flow": None,
+            # docs/REQUIREMENTS.md section 9 entry 15: a real, discovered
+            # prerequisite gap, not incidental -- Scrapy's own
+            # HttpErrorMiddleware (spider middleware, enabled by default)
+            # silently drops any non-2xx response before it ever reaches
+            # parse() at all, unless a request explicitly opts in via
+            # handle_httpstatus_list. Set unconditionally (not just for a
+            # `login`-configured target): a target that requires a
+            # session but has *no* login configured at all must still
+            # log a real, explicit 401/403 (the user's own explicit
+            # requirement), not have it silently vanish -- and this is
+            # harmless for every other target too, since Anubis's own
+            # challenge/deny pages always return 200 by design (this
+            # stack's own botPolicy.yaml, `status_codes: CHALLENGE: 200,
+            # DENY: 200`), so nothing here ever intersects with an
+            # antibot rejection.
+            "handle_httpstatus_list": [401, 403],
         }
+        if self.config.login is not None:
+            login_flow = LoginFlow(
+                login_url=self.config.login.login_url,
+                username=self.config.login.username,
+                password=self.config.login.password,
+                username_field=self.config.login.username_field,
+                password_field=self.config.login.password_field,
+                submit_selector=self.config.login.submit_selector,
+                session_expiry_probe_url=self.config.login.session_expiry_probe_url,
+            )
+            meta["login_flow"] = login_flow
+        return meta
 
     def _build_start_requests(self) -> Iterator[scrapy.Request]:
         for url in self.start_urls:
@@ -156,6 +185,24 @@ class GenericSpider(scrapy.Spider):
     ) -> Iterator[dict[str, Any] | scrapy.Request]:
         selectors = self.config.selectors
         assert selectors is not None  # SpiderConfig guarantees this for response_format="html"
+
+        # docs/REQUIREMENTS.md section 9 entry 15: a real 401/403 reaches
+        # here at all because of _request_meta's own unconditional
+        # handle_httpstatus_list opt-in -- covers every real cause the
+        # user's own requirement calls out (no valid session configured
+        # at all, no login attempted, a failed login, or a session that
+        # expired mid-crawl): logged clearly and explicitly, not a
+        # silent drop and not a crash. Provider-level logs
+        # (camoufox_provider.login_failed / .session_expired_mid_crawl)
+        # carry the finer-grained "which of these happened" detail when
+        # login was actually attempted this call; this is the
+        # crawl-level safety net either way.
+        if response.status in (401, 403):
+            self.json_logger.warning(
+                "generic_spider.protected_target_rejected",
+                extra={"url": response.url, "status": response.status},
+            )
+            return
 
         # docs/REQUIREMENTS.md section 9 entry 14: when the provider
         # captured multiple HTML snapshots during progressive scrolling
