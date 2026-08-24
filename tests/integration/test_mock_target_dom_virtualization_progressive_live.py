@@ -55,11 +55,33 @@ of the 5 pages ever contributes its own last 5 posts to any window a
 read can catch, never the full 10 -- 5 pages x 5 posts = 25 unique
 ``post_id``\\ s total, not 50 and not 10. ``page.has_next_page`` goes
 ``False`` after page 4 loads (``page < MAX_FEED_PAGES - 1``), so
-whichever of ``DEFAULT_MAX_SCROLL_ATTEMPTS`` (8) scroll attempts remain
-after that just re-observe the same, final window -- harmless no-ops,
-already deduplicated by ``post_id``. ``FEED_RATE_LIMIT_THRESHOLD``
-(20 requests per 60s) has ample headroom over the 5 ``/api/feed`` calls
-one crawl actually makes.
+whichever scroll attempts remain after that just re-observe the same,
+final window -- harmless no-ops, already deduplicated by ``post_id``.
+``FEED_RATE_LIMIT_THRESHOLD`` (20 requests per 60s) has ample headroom
+over the 5 ``/api/feed`` calls one crawl actually makes.
+
+*Attempt 1, revision 2 -- real CI result (CI run 32733064348, second
+attempt after an unrelated infra flake on the first): 25 confirmed for
+``live_dom``, but ``parsed_html`` got 20, not 25 -- one page's window
+short.* ``camoufox_provider.solved``'s own log line showed
+``html_snapshot_count: 9`` (all 8 scroll attempts ran, no early exit --
+the revision 1 fix held), so this wasn't the same bug again. Root cause:
+a genuine async race, not a collection-logic bug --
+``templates/feed.html``'s own ``loading`` flag silently drops a
+scroll-triggered ``loadMore()`` call if the *previous* one's fetch is
+still in flight, and the shared ``DEFAULT_SCROLL_PAUSE_MS`` (700ms,
+tuned for a plain lazy-load target's simpler DOM-append cost) doesn't
+reliably leave margin for one full fetch+trim round trip under real,
+sometimes-loaded CI network conditions -- costing one page's worth of
+window when it happens. Fix (revision 3, this version): dedicated,
+more generous constants for the progressive path specifically
+(``DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS`` = 10,
+``DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS`` = 1500ms) in both
+``camoufox_provider.py`` and ``patchright_provider.py`` -- the shared
+``DEFAULT_MAX_SCROLL_ATTEMPTS``/``DEFAULT_SCROLL_PAUSE_MS`` used by
+``scroll_to_load_lazy_content`` (every other already-proven caller) are
+untouched. 25 is still the expected, deterministic total -- only the
+timing margin around getting there changed.
 
 Requires the same TITAN_BYPARR_URL-gated live-CI signal every other test
 in this package uses.

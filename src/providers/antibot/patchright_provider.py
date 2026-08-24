@@ -63,6 +63,11 @@ DEFAULT_POST_LOAD_WAIT_MS = 5_000
 # constants (docs/REQUIREMENTS.md section 9 entry 13).
 DEFAULT_MAX_SCROLL_ATTEMPTS = 8
 DEFAULT_SCROLL_PAUSE_MS = 700
+# Same values and same reasoning (a real, CI-confirmed async-race
+# shortfall, not a guess) as CamoufoxProvider's identical constants --
+# see camoufox_provider.py's own comment for the full explanation.
+DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS = 10
+DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
 
 
 class _RawSolve(NamedTuple):
@@ -206,12 +211,14 @@ def _default_patchright_solve(
                             page,
                             extraction_selectors.item,
                             extraction_selectors.fields,
-                            DEFAULT_MAX_SCROLL_ATTEMPTS,
-                            DEFAULT_SCROLL_PAUSE_MS,
+                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                         )
                     elif progressive_extraction:
                         html_snapshots = collect_html_snapshots(
-                            page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
+                            page,
+                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                         )
                     else:
                         scroll_to_load_lazy_content(

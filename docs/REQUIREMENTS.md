@@ -1508,6 +1508,50 @@ waiting for locator("#accept-cookies")`. الـ diff بتاع الجولة دي 
 جديدين للـ run نفسه)، بس مش مؤكد فعليًا لسه. هيتراقب في الـ run الجاي؛
 لو اتكرر، هيتحقق فيه بجدية كـ regression حقيقي مش flake.
 
+**❌ push المراجعة نفسه (commit 98c725b) فشل في أول محاولة — CI run
+[32733064348](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32733064348)،
+بس السبب مختلف تمامًا هذه المرة، مش في الكود خالص:** `python -m
+camoufox fetch` (خطوة تجهيز المتصفح في الـ workflow نفسه) فشلت بـ`504
+Server Error: Gateway Timeout` من `api.github.com` (3 مرات متتالية)،
+والخطوة كمّلت بصمت من غير متصفح متثبّت — كل اختبار بيستخدم Camoufox فشل
+بـ0 items، **بما فيها اختبارات بند 13 القديمة اللي شغّالة وناجحة من كذا
+جولة** (9 failed, 22 passed) — دليل واضح إنها infra flake حقيقية، مش
+regression. عملت `rerun_failed_jobs` (مش push جديد) على نفس الـ run
+عشان أتأكد.
+
+**المحاولة التانية لنفس الـ run** (`run_attempt=2`) أثبتت إن خطوة
+تجهيز Camoufox نجحت هذه المرة (مفيش 504 تاني)، ورجّعت نتيجة حقيقية
+جديدة تمامًا: `2 failed, 29 passed`.
+- `test_progressive_live_dom_recovers_every_virtualization_window`
+  **PASSED فعليًا بـ25 بالظبط** — التوقع المُعاد اشتقاقه اتأكّد!
+- `test_mock_target_live_dom_recovers_every_shadow_dom_wrapped_post`
+  (بند 12) **PASSED** — يعني الفشل بتاعه في الـ run الأول كان فعلاً
+  flake مش regression، زي ما اتوقعنا.
+- `test_progressive_parsed_html_recovers_every_virtualization_window`
+  **فشل بـ20 بدل 25** — قريب جدًا، مش صفر. `html_snapshot_count: 9`
+  (كل الـ8 محاولات اشتغلت، مفيش early exit — إصلاح المراجعة التانية
+  فضل شغّال صح). السبب الجذري الحقيقي: race condition حقيقي —
+  `templates/feed.html`'s الـ `loading` flag بيسقط نداء `loadMore()`
+  لو الـ fetch اللي قبله لسه شغّال، و`DEFAULT_SCROLL_PAUSE_MS` (700ms،
+  متظبّط لهدف lazy-load عادي أخف) مش دايمًا كافي لجولة fetch+trim كاملة
+  تحت ظروف شبكة CI حقيقية أحيانًا مزدحمة.
+- `test_live_dom_also_only_recovers_the_final_virtualization_window`
+  (بند 13 القديم) فشل بـ0 بسبب `Page.wait_for_timeout: Target page,
+  context or browser has been closed` — عطل متصفح حقيقي مختلف تمامًا
+  عن أي فشل سابق لنفس الاختبار (3 أسباب مختلفة عبر 3 runs: click
+  timeout، binary مش متثبّت، متصفح اتقفل) — نمط بيرجّح ضغط موارد CI،
+  مش regression حقيقي، خصوصًا إن الـ diff مالوش أي علاقة بالكود ده.
+
+**الحل (مراجعة تالتة، لسه نفس المحاولة الأولى):** ثوابت مخصّصة أسخى
+للـ progressive path بس (`DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS=10`،
+`DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS=1500ms`) في الاتنين
+camoufox/patchright providers — الثوابت المشتركة القديمة
+(`DEFAULT_MAX_SCROLL_ATTEMPTS`/`DEFAULT_SCROLL_PAUSE_MS`) اللي بيستخدمها
+`scroll_to_load_lazy_content` (كل الـ callers التانية المُثبّتة) فضلت
+**من غير أي تعديل**. اتحقّق محليًا: ruff/mypy نظيفين، 262 test PASSED
+(86.05% coverage). **لسه محتاجين تأكيد CI حقيقي تالت** للرقم 25 مع
+الثوابت الجديدة — النتيجة الفعلية هتتسجّل هنا بمجرد ما الـ run يخلص.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

@@ -87,6 +87,26 @@ DEFAULT_POST_LOAD_WAIT_MS = 5_000
 # post_load_wait_ms itself was originally added under.
 DEFAULT_MAX_SCROLL_ATTEMPTS = 8
 DEFAULT_SCROLL_PAUSE_MS = 700
+# docs/REQUIREMENTS.md section 9 entry 14 (a real, CI-confirmed gap, not
+# a guess): a live CI run of the progressive-extraction path
+# (progressive_extraction: true) got 20 of the expected 25 items for
+# extraction_mode: parsed_html in the same run where extraction_mode:
+# live_dom got the full 25 -- both use the exact same
+# collect_fn/max_attempts/pause_ms contract, so the shortfall isn't a
+# dedup or collection-logic bug (html_snapshot_count: 9 that run proved
+# every attempt ran, no early exit). It's a real async race:
+# templates/feed.html's own `loading` flag means a scroll-triggered
+# `loadMore()` call is silently dropped if the *previous* one's fetch is
+# still in flight when it fires -- and DEFAULT_SCROLL_PAUSE_MS (700ms,
+# tuned for a plain lazy-load target's simpler DOM-append cost) doesn't
+# reliably leave enough margin for one full fetch + trim round trip
+# under real, sometimes-loaded CI network conditions. Progressive
+# extraction is already a heavier, opt-in-only path
+# (progressive_extraction: true) -- worth its own, more generous
+# constants rather than tuning the shared ones and risking every other
+# already-proven scroll_to_load_lazy_content caller's timing.
+DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS = 10
+DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
 
 
 class _RawSolve(NamedTuple):
@@ -257,12 +277,14 @@ def _default_camoufox_solve(
                             page,
                             extraction_selectors.item,
                             extraction_selectors.fields,
-                            DEFAULT_MAX_SCROLL_ATTEMPTS,
-                            DEFAULT_SCROLL_PAUSE_MS,
+                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                         )
                     elif progressive_extraction:
                         html_snapshots = collect_html_snapshots(
-                            page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
+                            page,
+                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                         )
                     else:
                         scroll_to_load_lazy_content(
