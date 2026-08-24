@@ -1552,6 +1552,40 @@ camoufox/patchright providers — الثوابت المشتركة القديمة
 (86.05% coverage). **لسه محتاجين تأكيد CI حقيقي تالت** للرقم 25 مع
 الثوابت الجديدة — النتيجة الفعلية هتتسجّل هنا بمجرد ما الـ run يخلص.
 
+**✅✅✅ اتأكّدت فعليًا (CI run
+[32735734451](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32735734451))
+— دليل حقيقي من الـ job logs، مش افتراض:** `31 passed, 0 failed` في
+`392.62s (0:06:32)`، صفر FAILED. الاختبارين الحاسمين اتأكّدوا PASSED
+صراحة في نفس الـ run:
+```
+tests/integration/test_mock_target_dom_virtualization_progressive_live.py::test_progressive_parsed_html_recovers_every_virtualization_window PASSED
+tests/integration/test_mock_target_dom_virtualization_progressive_live.py::test_progressive_live_dom_recovers_every_virtualization_window PASSED
+```
+يعني الرقم الحتمي المُعاد اشتقاقه (25 بالظبط) اتأكّد فعليًا من
+**الاتنين** extraction_mode. بند 13's sentinels القديمة (نفس الـ run)
+لسه PASSED برضه بالرقم القديم (5 بالظبط، من غير أي تغيير)، و
+`test_mock_target_live_dom_recovers_every_shadow_dom_wrapped_post`
+(بند 12) PASSED برضه — يعني فشله في الـ 3 runs السابقة كان فعلاً
+CI-resource-contention flake، مش regression حقيقي، زي ما اتوقعنا.
+
+**الخلاصة الصادقة الكاملة لبند 14 (3 محاولات موثّقة، زي نمط JSON
+parsing بالظبط — مفيش حاجة اتمسحت):**
+1. المحاولة الأولى (توقع 10) فشلت فعليًا (CI run 32730994089).
+2. المراجعة الأولى (شيل heuristic الـ scrollHeight الغلط + dispatch
+   event صريح، توقع مُعاد اشتقاقه 25) نجحت جزئيًا فقط (CI run
+   32733064348: `live_dom`=25 ✅، `parsed_html`=20 ❌) بعد ما نفس الـ
+   run نفسه اتأكّد فيه infra flake غير متعلقة تمامًا (504 من GitHub
+   API لـ camoufox fetch) في المحاولة الأولى لنفس الـ commit.
+3. المراجعة التانية (ثوابت أسخى مخصّصة للـ progressive path بس)
+   نجحت بالكامل (CI run 32735734451: 25/25 للاتنين).
+
+**النتيجة النهائية:** DOM Virtualization (بند 13 obstacle map، محور 3)
+محلولة معماريًا بالكامل عبر progressive scroll + incremental
+extraction، مؤكدة بدليل CI حقيقي لـ**الاتنين** extraction_mode. الفجوة
+الأصلية (بند 13's configs) لسه موثّقة ومش ممسوحة — regression sentinel
+دائم يوضّح الفرق بين القراءة النهائية الواحدة والتجميع التدريجي.
+`docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md` اتحدّث ليعكس الحل.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
