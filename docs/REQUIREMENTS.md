@@ -958,7 +958,7 @@ selector-based مش بيتحقق من الـ visibility). الـ 3 configs
 نتيجتهم مع cookie wall فضلت **غير قابلة للتمييز** عن فجوة Anubis
 الأسبق بتاعتهم — موثّق صراحة، مش مخفي.
 
-### 9. JSON/API parsing support في GenericSpider — قيد الحل (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
+### 9. JSON/API parsing support في GenericSpider — ✅✅✅ اتحل فعليًا (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، بند 4)
 
 **الإضافة:** `SpiderConfig` كسب `response_format: "html" | "json"` +
 `json_selectors` (dotted-key paths زي `"post.author"` بدل CSS selectors،
@@ -1060,8 +1060,22 @@ Anubis's الحقيقي لـ `pass-challenge` API، اللي بيرجّع JSON) 
 مش أي طلب فرعي بتعمله JS الصفحة. اتّحقّق محليًا (ruff/mypy --strict/189
 unit+contract test PASSED، 87.82% coverage) قبل الدفع.
 
-**النتيجة الحقيقية من محاولة الحل التالتة هتتحدّث هنا بمجرد ما CI
-يخلص، مش قبل كده.**
+**✅✅✅ اتأكّد فعليًا (CI run [32664864782](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32664864782)) — مش افتراض، دليل حقيقي من الـ job logs:**
+`24 passed, 2 warnings in 276.88s (0:04:36)` — صفر FAILED في اللوج
+كله. الاختبارين اللي كانوا في قلب الموضوع اتأكّدوا صراحة PASSED في
+نفس الـ run:
+```
+tests/integration/test_mock_target_camoufox_live.py::test_mock_target_camoufox_gets_past_anubis_and_yields_real_posts PASSED
+tests/integration/test_mock_target_feed_live.py::test_mock_target_feed_yields_real_posts_from_the_json_api PASSED
+```
+يعني: (1) اختبار الـ JSON API نفسه بيرجع بيانات حقيقية من `/api/feed`
+دلوقتي (الفجوة الأصلية اتقفلت فعليًا)، و(2) اختبار الـ cookie wall
+اللي كان اترجّع في المحاولة التانية (regression) رجع PASSED — يعني
+`is_navigation_request()` صلّح المشكلتين مع بعض من غير ما يكسر حاجة
+تانية. باقي الـ 22 اختبار في نفس الـ run (Byparr/Patchright/باقي
+mock targets) كلهم PASSED برضه — regression check كامل، مش بس
+الاختبار الجديد. الفجوة دي (بند 4 في obstacle map) مقفولة فعليًا،
+بدليل CI حقيقي، مش نظري.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
