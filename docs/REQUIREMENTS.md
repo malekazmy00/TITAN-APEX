@@ -1270,7 +1270,25 @@ DOM هيلقطه هو كمان — يعني العدد الحتمي الصح ه�
 unit+contract test PASSED، 88.52% coverage؛ test-environment's own 92
 unit test PASSED، 100% coverage — الطبقة الجديدة كسبت unit tests لـ
 `_live_dom.py` نفسها + كل provider/middleware/config/spider اتلمس).
-**النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما يخلص، مش قبل كده.**
+
+**✅✅✅ اتأكّد فعليًا (CI run [32680454673](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32680454673)) — دليل حقيقي من الـ job logs، مش افتراض:**
+`27 passed, 2 warnings in 300.75s (0:05:00)`، صفر FAILED في اللوج كله.
+الاختبارين الحرجين اتأكّدوا PASSED صراحة في نفس الـ run:
+```
+tests/integration/test_mock_target_live_dom_live.py::test_mock_target_live_dom_recovers_every_shadow_dom_wrapped_post PASSED
+tests/integration/test_mock_target_shadow_dom_live.py::test_mock_target_camoufox_misses_every_shadow_dom_wrapped_post PASSED
+```
+يعني: (1) `extraction_mode: live_dom` فعليًا استرجع الـ 11 item الحتمية
+(10 بوست حقيقي + decoy، مش 6) — الرقم اللي اتصحّح فوق (11 مش 10) اتأكّد
+بالظبط، مش تخمين؛ و(2) نفس اللحظة، `mock_target_camoufox.yaml` (اللي
+اتسيب من غير تعديل عمدًا) لسه بيرجّع 6 بالظبط — يعني الفجوة الموثّقة في
+بند 11 لسه موجودة ومؤكدة لمين مايستخدمش `live_dom`، والحل الجديد
+مايمسحش الدليل التاريخي، بيضيف عليه. test-environment's own 92 unit
+test كمان PASSED. باقي الـ 25 اختبار تاني (byparr/patchright sentinels،
+JSON API، الجولة المركّبة من بند 10، Test Targets التانية) كلهم PASSED
+برضه — regression check كامل، التعديل المعماري ده مبوّظش أي حاجة
+شغالة. Shadow DOM بقى محلول فعليًا (مش بس موثّق كـ Known Limitation) —
+لمين يختار `extraction_mode: live_dom` صراحة.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

@@ -37,7 +37,7 @@
 | العقبة | الوصف | حالتنا |
 |---|---|---|
 | Markup randomization | class names بتتغيّر دوريًا | ✅ Round 1 |
-| Shadow DOM | محتوى معزول عن `document` العادي | ✅ مُختبر - **Known Limitation حقيقية مؤكدة بدليل CI** (docs/REQUIREMENTS.md قسم 9 بند 11، CI run 32678444498) - GenericSpider مايوصلش لمحتوى shadow root حتى عبر متصفح حقيقي كامل، معماريًا مش توقيتيًا |
+| Shadow DOM | محتوى معزول عن `document` العادي | ✅✅ **مُختبر ومحلول فعليًا بدليل CI** (docs/REQUIREMENTS.md قسم 9: بند 11 وثّق الفجوة الحقيقية عبر `page.content()`، بند 12 حلّها معماريًا بـ `extraction_mode: live_dom` — `page.locator()` بيخترق shadow roots المفتوحة تلقائيًا، مؤكد فعليًا CI run 32680454673: 11/11 items اترجعوا) — الفجوة الأصلية لسه موثّقة ومش ممسوحة (`mock_target_camoufox.yaml` لسه بيوضّحها لمين مايستخدمش `live_dom`) |
 | Web Components مخصصة | عناصر بتتصرف زي widgets مش HTML عادي | ⬜ غير مُختبر |
 | DOM Virtualization (قوائم افتراضية) | مش كل العناصر موجودة في الـ DOM في نفس اللحظة، حتى لو ظاهرة على الشاشة | ⬜ غير مُختبر - **فجوة مهمة لمنصات social feed** |
 | CSS-in-JS (hashed classes) | زي `styled-components` | ✅ اتسجل كـ Known Limitation #5 |
