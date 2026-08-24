@@ -34,6 +34,40 @@ itself is deliberately untouched (no callback, same exact function body
 as before) -- zero risk of changing behavior for its own already-proven
 callers; this is the version any progressive/incremental strategy builds
 on instead.
+
+**Revision (same entry 14, after a real, CI-confirmed failed first
+attempt):** :func:`scroll_and_collect` originally copied
+:func:`scroll_to_load_lazy_content`'s own "stop once
+``document.body.scrollHeight`` stops growing" heuristic -- a real bug
+for a *virtualized* target specifically, confirmed via a live CI run
+(``html_snapshot_count: 2`` in that run's own structured log line, for
+a config that should have kept scrolling): a bounded-window virtualized
+list's rendered height never meaningfully grows between scroll steps
+(eviction keeps it capped at roughly ``window_size`` posts' worth,
+regardless of how much *total* content has loaded) -- so the old
+height-growth check always looked like "nothing new happened" after
+just one scroll step, even when a later ``loadMore()`` call really did
+swap in a genuinely new window of content. This function no longer
+reads or compares ``scrollHeight`` at all -- it always performs exactly
+``max_attempts`` scroll+collect cycles, relying on ``max_attempts``
+itself (already a required, positive, bounded parameter) as the only
+stopping condition. It also now dispatches a synthetic ``'scroll'``
+``Event`` explicitly, not just ``window.scrollTo(...)`` -- a real,
+separate finding from the same investigation: once a virtualized list's
+rendered content is short enough to fit within the viewport (which
+happens as soon as eviction has trimmed it down at all), calling
+``scrollTo()`` with a target position that doesn't actually change
+``window.scrollY`` (there's nothing further to scroll *to*) does not
+reliably dispatch a real browser ``'scroll'`` event -- and
+``templates/feed.html``'s own ``loadMore()`` trigger is bound to that
+event, so it would otherwise never fire again after the very first,
+automatic (on-page-load) batch. A dispatched event is delivered to the
+same listener regardless of whether it's "trusted" (browser-generated)
+or synthetic, so this reliably re-triggers the page's own loading logic
+on every attempt. :func:`scroll_to_load_lazy_content` is, again,
+completely unaffected by any of this -- every other, already
+CI-confirmed lazy-load target that relies on it keeps its exact prior
+behavior.
 """
 
 from __future__ import annotations
@@ -76,14 +110,26 @@ def scroll_to_load_lazy_content(page: Any, max_attempts: int, pause_ms: int) -> 
         previous_height = current_height
 
 
+_SCROLL_AND_DISPATCH_SCRIPT = (
+    "window.scrollTo(0, document.body.scrollHeight);"
+    "window.dispatchEvent(new Event('scroll'));"
+)
+
+
 def scroll_and_collect(
     page: Any, max_attempts: int, pause_ms: int, collect_fn: Callable[[], None]
 ) -> None:
-    """Same scroll-to-stable loop as :func:`scroll_to_load_lazy_content`,
-    but calls ``collect_fn()`` after *every* read of the page -- including
+    """Calls ``collect_fn()`` after *every* read of the page -- including
     the very first, pre-scroll one -- so a caller can capture or extract
     that moment's content before a later step (e.g. DOM Virtualization's
-    own eviction) potentially removes it.
+    own eviction) potentially removes it. Always performs exactly
+    ``max_attempts`` scroll+collect cycles -- see this module's own
+    docstring's "Revision" paragraph for why, unlike
+    :func:`scroll_to_load_lazy_content`, this does *not* stop early when
+    ``document.body.scrollHeight`` stops growing: that signal is
+    meaningless for a bounded-window virtualized target, where rendered
+    height never grows much regardless of how much *total* content has
+    loaded.
 
     ``collect_fn`` takes no arguments and returns nothing -- it's expected
     to close over ``page`` itself and accumulate into a caller-owned
@@ -104,15 +150,10 @@ def scroll_and_collect(
         raise ValueError(f"pause_ms must be >= 0, got {pause_ms}")
 
     collect_fn()
-    previous_height = page.evaluate("document.body.scrollHeight")
     for _ in range(max_attempts):
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.evaluate(_SCROLL_AND_DISPATCH_SCRIPT)
         page.wait_for_timeout(pause_ms)
         collect_fn()
-        current_height = page.evaluate("document.body.scrollHeight")
-        if current_height <= previous_height:
-            break
-        previous_height = current_height
 
 
 def collect_html_snapshots(page: Any, max_attempts: int, pause_ms: int) -> list[str]:

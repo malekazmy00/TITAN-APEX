@@ -1448,6 +1448,66 @@ coverage، بدون أي تعديل هناك أصلاً هذه الجولة). **
 محليًا)، **لسه محتاجين تأكيد CI حقيقي** — النتيجة الفعلية (مش
 الافتراض) هتتسجّل هنا بمجرد ما الـ run يخلص، زي كل جولة قبل كده.
 
+**❌ المحاولة الأولى (توقع 10) فشلت فعليًا (CI run
+[32730994089](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32730994089))
+— دليل حقيقي من الـ job logs، مش افتراض:** `3 failed, 28 passed`.
+الاختبارين الحاسمين فشلوا الاتنين بنفس القيمة:
+```
+FAILED tests/integration/test_mock_target_dom_virtualization_progressive_live.py::test_progressive_parsed_html_recovers_both_virtualization_windows - AssertionError: expected exactly 10 items ... got 5
+FAILED tests/integration/test_mock_target_dom_virtualization_progressive_live.py::test_progressive_live_dom_recovers_both_virtualization_windows - AssertionError: expected exactly 10 items ... got 5
+```
+**السبب الجذري اتأكّد من نفس الـ run's structured logs، مش تخمين:**
+`camoufox_provider.solved`'s own log line أظهر `html_snapshot_count: 2`
+(parsed_html) و`live_dom_item_count: 5` (live_dom) — يعني آلية الجمع
+نفسها اشتغلت بالظبط زي ما اتصممت (قرايتين حصلوا فعليًا، مش قرايه
+واحدة)، بس القرايتين الاتنين لقطوا **نفس** الـ 5-post window، مش
+نافذتين مختلفتين. السبب: `scroll_and_collect` كان لسه وارث نفس
+heuristic بتاع `scroll_to_load_lazy_content` ("قف لو `scrollHeight`
+بطل يكبر") — heuristic **غلط** لهدف virtualized: الارتفاع المُصيّر
+بيفضل شبه ثابت بين كل خطوة (الـ eviction بيحافظ عليه عند حجم الـ
+window تقريبًا)، بغض النظر عن قد ايه محتوى جديد فعلاً اتحمّل — فالـ
+loop كان بيوقف بعد أول محاولة scroll واحدة بس، دايمًا، مهما كان
+`max_attempts`.
+
+**الحل (نفس المحاولة الأولى، مراجعة — مش تحول لمحاولة تانية):**
+`scroll_and_collect` (`_scroll.py`) اتعدّل عشان (1) يشيل الاعتماد على
+`scrollHeight` خالص — يعمل بالظبط `max_attempts` دورة scroll+collect،
+من غير أي early exit، و(2) يبعت `window.dispatchEvent(new
+Event('scroll'))` صراحة جنب `scrollTo()` — اكتشاف حقيقي تاني من نفس
+التحقيق: `scrollTo()` لوحدها مش بتبعت 'scroll' event حقيقي لو المحتوى
+المُصيّر بقى قصير كفاية إنه يتلم في الـ viewport (وده بالظبط اللي
+بيحصل بعد أول trim)، و`templates/feed.html`'s الـ `loadMore()` trigger
+مربوط بـ'scroll' event ده تحديدًا — فمن غيره ما كانش هيتنادى تاني
+خالص. `scroll_to_load_lazy_content` نفسها فضلت **من غير أي تعديل**.
+
+**التوقع اتراجع فعليًا بعد إعادة اشتقاق كاملة (25 مش 10):** بتتبّع
+`templates/feed.html`'s trim rule عبر كل الـ 5 صفحات (`MAX_FEED_PAGES`)
+— كل batch جديد (10 بوست) بيتحط فوق الـ 5 remainder المتبقي من قبل
+(5+10=15)، والـ trim بيشيل الـ remainder القديم كله + أول 5 من الـ
+batch الجديد، فمايفضلش غير آخر 5 بتوع كل صفحة. يعني كل صفحة من الـ 5
+بتساهم بـ5 بوست بس (مش 10) — 5×5 = 25 بوست فريد بالظبط، مش 50 ومش 10.
+التفاصيل الكاملة والاشتقاق موثّق في
+`tests/integration/test_mock_target_dom_virtualization_progressive_live.py`'s
+docstring نفسه (بما فيه الغلطة الأولى، موثّقة برضه مش ماسوحة).
+
+**اتّحقّق محليًا** بعد المراجعة: `ruff check` نظيف، `mypy --strict`
+نظيف، unit tests جديدة بتأكّد الـ contract الجديد (`max_attempts` هو
+الشرط الوحيد للتوقف، الـ dispatch الاصطناعي بيتبعت كل مرة) — بما فيها
+اختبار جديد بيثبّت إن الجمع بيستمر عبر أكتر من محاولتين، مش بس اتنين،
+عشان بالظبط الـ bug القديم كان بيوقف بعد واحدة بس. 262 unit+contract
+test PASSED (86.02% coverage، لسه فوق الـ gate). **لسه محتاجين تأكيد CI
+حقيقي تاني** للرقم الجديد (25) — النتيجة الفعلية هتتسجّل هنا بمجرد ما
+الـ run التاني يخلص.
+
+**ملاحظة صادقة، مش متجاهلة:** نفس run 32730994089 فيه فشل تالت مش
+متعلق — `test_mock_target_live_dom_recovers_every_shadow_dom_wrapped_post`
+(بند 12، مستهدف `/`) فشل بـ`Page.click: Timeout 30000ms exceeded ...
+waiting for locator("#accept-cookies")`. الـ diff بتاع الجولة دي ملموش
+أي حاجة في click_selector handling ولا cookie wall ولا shadow_dom.py —
+محتمل يكون infra flake (ضغط موارد حقيقي من إضافة 2 اختبار browser تقيل
+جديدين للـ run نفسه)، بس مش مؤكد فعليًا لسه. هيتراقب في الـ run الجاي؛
+لو اتكرر، هيتحقق فيه بجدية كـ regression حقيقي مش flake.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

@@ -15,24 +15,51 @@ instead of reading the DOM only once after scrolling finishes, actually
 recover the posts entry 13 proved were unrecoverable? Not assumed either
 way -- see docs/REQUIREMENTS.md for the real, CI-confirmed result.
 
-**Why 10, not 5 -- a real prediction from reading the actual code paths
-involved, not a round number:**
-``test-environment/mock-target/config.py``'s ``FEED_PAGE_SIZE`` (10) and
-``DOM_VIRTUALIZATION_WINDOW_SIZE`` (5) mean the *first* ``/api/feed``
-batch (10 posts) is immediately trimmed down to its own last 5 before
-``CamoufoxProvider``'s ``post_load_wait_ms`` (5s, run well before any
-scrolling starts) even elapses -- so the very first (pre-scroll)
-snapshot ``scroll_and_collect`` captures already only has 5 posts in it,
-same as entry 13's own single read would have. The one scroll step that
-follows triggers exactly one more ``/api/feed`` batch (another 10
-posts, trimmed to its own last 5) -- and because a virtualized window's
-rendered size stays roughly constant once trimming has kicked in even
-once, ``document.body.scrollHeight`` stops growing after that one step,
-so ``scroll_to_load_lazy_content``'s own growth check ends the loop
-there (identical reasoning to entry 13's own "deterministic regardless
-of scroll-cycle count" argument for why exactly 5 survive on the old
-path). Two disjoint 5-post windows, captured before either evicts the
-other -- 10 unique ``post_id``\\ s, not 5.
+**Revision history for this test's own expected count -- both real, not
+hypothetical:**
+
+*Attempt 1, first version (wrong, CI-confirmed failed -- CI run
+32730994089): expected 10.* Reasoning at the time: the first
+``/api/feed`` batch trims to 5, one more scroll-triggered batch trims to
+a second, disjoint 5. **What actually happened:** both extraction modes
+got exactly 5, not 10 -- ``camoufox_provider.solved``'s own structured
+log line showed ``html_snapshot_count: 2`` (parsed_html) and
+``live_dom_item_count: 5`` (live_dom): the collection machinery ran
+exactly as designed (2 reads happened), but both reads captured the
+*same* 5-post window. Root cause, confirmed from that same evidence, not
+guessed: ``scroll_and_collect`` copied ``scroll_to_load_lazy_content``'s
+"stop once ``document.body.scrollHeight`` stops growing" heuristic --
+invalid for a bounded-window virtualized target, whose rendered height
+never meaningfully grows between steps regardless of how much new
+content actually loaded, so the loop always gave up after exactly one
+scroll attempt. See ``src/providers/antibot/_scroll.py``'s own
+"Revision" docstring for the fix (no early exit; always run every
+``max_attempts`` cycle; also dispatch a synthetic ``'scroll'`` ``Event``
+explicitly, since ``scrollTo()`` alone doesn't reliably fire one once
+rendered content is short enough to fit the viewport, which
+``templates/feed.html``'s own ``loadMore()`` trigger depends on).
+
+*Attempt 1, revision 2 (this version) -- expected 25, re-derived from
+the same code, now accounting for both bugs above being fixed:*
+``test-environment/mock-target/structural/feed.py``'s ``MAX_FEED_PAGES``
+(5) and ``content_generator.py``'s ``generate_feed_page`` (globally
+unique ``{seed}-post-{index}`` ids, no collisions across pages) mean
+there are 5 total pages, each 10 posts. Tracing ``templates/feed.html``'s
+own trim rule (``container.children.length - windowSize``, oldest-first
+eviction) through all 5 loads: page 0 alone trims 10 down to its own
+last 5 (ids 5-9). Each subsequent page's 10-post batch lands on top of
+the *already-trimmed* 5-post remainder (5 + 10 = 15), and trimming that
+down to 5 always evicts the entire old remainder plus that new page's
+own first 5 -- leaving only that new page's own *last* 5. So every one
+of the 5 pages ever contributes its own last 5 posts to any window a
+read can catch, never the full 10 -- 5 pages x 5 posts = 25 unique
+``post_id``\\ s total, not 50 and not 10. ``page.has_next_page`` goes
+``False`` after page 4 loads (``page < MAX_FEED_PAGES - 1``), so
+whichever of ``DEFAULT_MAX_SCROLL_ATTEMPTS`` (8) scroll attempts remain
+after that just re-observe the same, final window -- harmless no-ops,
+already deduplicated by ``post_id``. ``FEED_RATE_LIMIT_THRESHOLD``
+(20 requests per 60s) has ample headroom over the 5 ``/api/feed`` calls
+one crawl actually makes.
 
 Requires the same TITAN_BYPARR_URL-gated live-CI signal every other test
 in this package uses.
@@ -48,19 +75,19 @@ from tests.integration._live_helpers import run_spider_live
 
 BYPARR_URL = os.environ.get("TITAN_BYPARR_URL")
 
-# Two disjoint DOM_VIRTUALIZATION_WINDOW_SIZE (5) windows -- see this
-# module's own docstring for why exactly two snapshots, not more or
-# fewer, are expected to be captured before scrolling stabilizes.
-EXPECTED_TOTAL_POSTS = 10
+# 5 pages x 5 posts/page (each page's own trimmed-down-to-window_size
+# remainder) -- see this module's own docstring for the full, re-derived
+# reasoning after attempt 1's first (wrong) prediction of 10.
+EXPECTED_TOTAL_POSTS = 25
 
 
-def _assert_all_posts_recovered_across_both_windows(items: list[dict[str, object]]) -> None:
+def _assert_all_posts_recovered_across_every_window(items: list[dict[str, object]]) -> None:
     assert len(items) == EXPECTED_TOTAL_POSTS, (
-        f"expected exactly {EXPECTED_TOTAL_POSTS} items (both virtualization windows' "
-        f"worth, merged -- see this module's docstring for why exactly two, disjoint "
-        f"5-post windows are expected) -- got {len(items)}: progressive collection should "
-        f"recover every post that was ever rendered, not just whatever survives in the "
-        f"DOM at the single moment a single, final read would have happened"
+        f"expected exactly {EXPECTED_TOTAL_POSTS} items (all 5 virtualization windows' "
+        f"worth, merged -- see this module's docstring for the full derivation) -- got "
+        f"{len(items)}: progressive collection should recover every post that was ever "
+        f"rendered, not just whatever survives in the DOM at the single moment a single, "
+        f"final read would have happened"
     )
     for item in items:
         assert item["post_id"], f"post_id should not be empty: {item}"
@@ -77,7 +104,7 @@ def _assert_all_posts_recovered_across_both_windows(items: list[dict[str, object
 @pytest.mark.skipif(
     not BYPARR_URL, reason="TITAN_BYPARR_URL not set (no live-network CI stack running)"
 )
-def test_progressive_parsed_html_recovers_both_virtualization_windows(tmp_path: Path) -> None:
+def test_progressive_parsed_html_recovers_every_virtualization_window(tmp_path: Path) -> None:
     """The real fix, ``extraction_mode: parsed_html`` half: every
     ``page.content()`` snapshot ``collect_html_snapshots`` captures (one
     per scroll step, before the next step's eviction) is parsed and
@@ -91,13 +118,13 @@ def test_progressive_parsed_html_recovers_both_virtualization_windows(tmp_path: 
         "mock_target_feed_virtualized_progressive_parsed_html.yaml", output_path, timeout=180
     )
 
-    _assert_all_posts_recovered_across_both_windows(items)
+    _assert_all_posts_recovered_across_every_window(items)
 
 
 @pytest.mark.skipif(
     not BYPARR_URL, reason="TITAN_BYPARR_URL not set (no live-network CI stack running)"
 )
-def test_progressive_live_dom_recovers_both_virtualization_windows(tmp_path: Path) -> None:
+def test_progressive_live_dom_recovers_every_virtualization_window(tmp_path: Path) -> None:
     """The real fix, ``extraction_mode: live_dom`` half:
     ``collect_live_dom_items_progressively`` re-queries the live DOM
     after every scroll step (not just once, at the end) and merges
@@ -112,4 +139,4 @@ def test_progressive_live_dom_recovers_both_virtualization_windows(tmp_path: Pat
         "mock_target_feed_virtualized_progressive_live_dom.yaml", output_path, timeout=180
     )
 
-    _assert_all_posts_recovered_across_both_windows(items)
+    _assert_all_posts_recovered_across_every_window(items)

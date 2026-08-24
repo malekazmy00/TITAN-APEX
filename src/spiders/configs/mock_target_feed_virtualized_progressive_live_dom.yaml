@@ -18,8 +18,12 @@
 # where it was visible, and a post that reappears (e.g. scroll forward
 # then back) is never double-counted.
 #
-# Expected (not assumed -- see docs/REQUIREMENTS.md for the real,
-# CI-confirmed result): all 10 `/feed` posts, not just the 5 that fit in
+# Expected (not assumed, and already revised once after a real,
+# CI-confirmed failure -- see
+# tests/integration/test_mock_target_dom_virtualization_progressive_live.py's
+# own docstring for the full derivation, and docs/REQUIREMENTS.md for the
+# real, CI-confirmed result): 25 `/feed` posts (5 pages x 5 posts/page's
+# own trimmed remainder), not just the 5 that fit in
 # `DOM_VIRTUALIZATION_WINDOW_SIZE` at any one instant.
 name: mock_target_feed_virtualized_progressive_live_dom
 start_urls:
