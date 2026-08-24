@@ -1,0 +1,36 @@
+# docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Interstitials round
+# (محور 6, activated after Login/Session per explicit user request): a
+# real full-screen overlay on `/feed-interstitial`
+# (test-environment/mock-target/app.py) that appears `INTERSTITIAL_DELAY_MS`
+# after page load and genuinely blocks further loading (not just the
+# view -- structural/interstitial.py's own docstring) until a real
+# `[data-role="interstitial-close"]` button is clicked. `/` and `/feed`
+# themselves are left completely unchanged by this round; `/feed-interstitial`
+# is a deliberately isolated route with its own content generator, not
+# wired into `/feed`'s DOM-virtualization/rate-limiting machinery at all.
+#
+# This config is the "before" half, run *unmodified* (no click_selector)
+# to confirm exactly what the real obstacle is before reaching for a
+# fix: the overlay appears well before any scroll attempt happens
+# (INTERSTITIAL_DELAY_MS=1000 vs. this provider's own
+# post_load_wait_ms=5000 default), so only the very first, automatic
+# batch (INTERSTITIAL_FEED_PAGE_SIZE items, loaded unconditionally on
+# page load) is ever captured -- exactly the same "gets *something*,
+# not a crash, but not everything either" shape a real, un-adapted
+# scraper hitting a real interstitial would see.
+name: mock_target_interstitial_camoufox_unhandled
+start_urls:
+  - "http://localhost:8080/feed-interstitial"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

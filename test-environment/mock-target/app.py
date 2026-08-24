@@ -34,6 +34,7 @@ from structural.cookie_wall import (
 from structural.decoy_data import generate_decoy_twin
 from structural.feed import FeedRateLimiter, build_feed_page
 from structural.honeypots import generate_honeypot_links
+from structural.interstitial import build_interstitial_feed_page, render_interstitial_script
 from structural.markup_randomizer import MarkupRandomizer
 from structural.placeholder_content import PLACEHOLDER_TEXT, render_swap_script
 from structural.shadow_dom import SHADOW_ATTACH_SCRIPT, encode_shadow_payload, is_shadow_wrapped
@@ -267,6 +268,56 @@ def create_app(
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)
         return response
+
+    @app.get("/feed-interstitial")
+    def feed_interstitial() -> Response:
+        seed = _session_seed()
+        response = Response(
+            render_template(
+                "feed_interstitial.html",
+                interstitial_script=render_interstitial_script(
+                    cfg.interstitial_trigger,
+                    cfg.interstitial_delay_ms,
+                    cfg.interstitial_scroll_percent,
+                ),
+            )
+        )
+        response.set_cookie(SESSION_COOKIE_NAME, seed)
+        return response
+
+    @app.get("/api/feed-interstitial")
+    def api_feed_interstitial() -> Response | tuple[Response, int]:
+        seed = _session_seed()
+        after_cursor = request.args.get("after")
+        try:
+            page = build_interstitial_feed_page(
+                seed,
+                after_cursor,
+                cfg.interstitial_feed_page_size,
+                cfg.interstitial_feed_total_batches,
+            )
+        except ValueError as exc:
+            return jsonify({"error": "invalid_cursor", "detail": str(exc)}), 400
+
+        return jsonify(
+            {
+                "edges": [
+                    {
+                        "post": {
+                            "id": post.post_id,
+                            "author": post.author,
+                            "text": post.text,
+                            "likes": post.likes,
+                        }
+                    }
+                    for post in page.posts
+                ],
+                "page_info": {
+                    "end_cursor": page.end_cursor,
+                    "has_next_page": page.has_next_page,
+                },
+            }
+        )
 
     @app.get("/test-expire-session")
     def test_expire_session() -> Response:

@@ -655,3 +655,103 @@ def test_test_expire_session_without_a_session_reports_no_session(tmp_path: Path
     response = client.get("/test-expire-session")
 
     assert response.get_json() == {"status": "no_session"}
+
+
+# --- Interstitials (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's محور
+# 6) -----------------------------------------------------------------
+
+
+def _interstitial_client(
+    tmp_path: Path,
+    *,
+    trigger: str = "time",
+    delay_ms: int = 1000,
+    scroll_percent: int = 30,
+    page_size: int = 3,
+    total_batches: int = 2,
+) -> FlaskClient:
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False  # isolate the interstitial layer alone
+    cfg.enable_shadow_dom = False
+    cfg.interstitial_trigger = trigger
+    cfg.interstitial_delay_ms = delay_ms
+    cfg.interstitial_scroll_percent = scroll_percent
+    cfg.interstitial_feed_page_size = page_size
+    cfg.interstitial_feed_total_batches = total_batches
+    app = create_app(cfg)
+    app.testing = True
+    return app.test_client()
+
+
+def test_feed_interstitial_page_ships_the_overlay_markup_hidden_by_default(
+    tmp_path: Path,
+) -> None:
+    """The overlay itself is real markup shipped in the initial response
+    -- not injected only by JS -- starting hidden (display:none), shown
+    later by the trigger script. Real content stays in a separate,
+    always-present container, never wrapped by the overlay."""
+    client = _interstitial_client(tmp_path)
+
+    body = client.get("/feed-interstitial").get_data(as_text=True)
+
+    assert 'data-role="interstitial"' in body
+    assert 'data-role="interstitial-close"' in body
+    assert "display:none" in body
+    assert 'data-role="feed"' in body
+
+
+def test_feed_interstitial_page_wires_the_configured_trigger(tmp_path: Path) -> None:
+    """The trigger script actually reflects this app's own config, not a
+    hardcoded default -- a scroll-mode client gets scroll-trigger JS, a
+    time-mode client gets a setTimeout instead."""
+    time_client = _interstitial_client(tmp_path, trigger="time", delay_ms=1234)
+    scroll_client = _interstitial_client(tmp_path, trigger="scroll", scroll_percent=42)
+
+    time_body = time_client.get("/feed-interstitial").get_data(as_text=True)
+    scroll_body = scroll_client.get("/feed-interstitial").get_data(as_text=True)
+
+    assert "setTimeout(showInterstitial, 1234);" in time_body
+    assert "setTimeout(showInterstitial, 1234);" not in scroll_body
+    assert "pct >= 42" in scroll_body
+    assert "pct >= 42" not in time_body
+
+
+def test_feed_interstitial_page_sets_a_session_cookie(tmp_path: Path) -> None:
+    client = _interstitial_client(tmp_path)
+
+    response = client.get("/feed-interstitial")
+
+    assert "mocktarget_session" in response.headers.get("Set-Cookie", "")
+
+
+def test_api_feed_interstitial_first_batch_has_no_after_param(tmp_path: Path) -> None:
+    client = _interstitial_client(tmp_path, page_size=3, total_batches=2)
+
+    response = client.get("/api/feed-interstitial")
+
+    body = response.get_json()
+    assert len(body["edges"]) == 3
+    assert body["page_info"]["end_cursor"] == "0"
+    assert body["page_info"]["has_next_page"] is True
+
+
+def test_api_feed_interstitial_last_batch_has_no_next_page(tmp_path: Path) -> None:
+    client = _interstitial_client(tmp_path, page_size=3, total_batches=2)
+
+    first = client.get("/api/feed-interstitial").get_json()
+    second = client.get(
+        "/api/feed-interstitial?after=" + first["page_info"]["end_cursor"]
+    ).get_json()
+
+    assert len(second["edges"]) == 3
+    assert second["page_info"]["has_next_page"] is False
+
+
+def test_api_feed_interstitial_rejects_a_malformed_cursor(tmp_path: Path) -> None:
+    client = _interstitial_client(tmp_path)
+
+    response = client.get("/api/feed-interstitial?after=not-a-page")
+
+    assert response.status_code == 400

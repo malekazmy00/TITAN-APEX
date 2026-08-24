@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target - Feed (Interstitial)</title>
+</head>
+<body>
+  <main>
+    <h1 class="page-title">Live Feed</h1>
+    <div data-role="feed"></div>
+  </main>
+
+  {# A real interstitial overlay -- content above stays genuinely present
+     in the DOM the whole time, this is a sibling element on top of it,
+     never a replacement. Starts hidden (display:none); the script below
+     shows it per the configured trigger and wires the close button --
+     see structural/interstitial.py's render_interstitial_script. #}
+  <div data-role="interstitial" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.85); color:#fff; align-items:center; justify-content:center; flex-direction:column;">
+    <p>A message from our sponsors.</p>
+    <button data-role="interstitial-close" type="button">Close</button>
+  </div>
+
+  <script>
+    (function () {
+      let cursor = null;
+      let hasNext = true;
+      let loading = false;
+      const container = document.querySelector('[data-role="feed"]');
+
+      function appendEdges(edges) {
+        edges.forEach(function (edge) {
+          const post = edge.post;
+          const article = document.createElement("article");
+          article.setAttribute("data-role", "post");
+          article.setAttribute("data-post-id", post.id);
+
+          const author = document.createElement("span");
+          author.setAttribute("data-role", "post-author");
+          author.textContent = post.author;
+
+          const text = document.createElement("p");
+          text.setAttribute("data-role", "post-text");
+          text.textContent = post.text;
+
+          const likes = document.createElement("span");
+          likes.setAttribute("data-role", "post-likes");
+          likes.textContent = post.likes;
+
+          article.appendChild(author);
+          article.appendChild(text);
+          article.appendChild(likes);
+          container.appendChild(article);
+        });
+      }
+
+      function loadMore() {
+        // window.__interstitialShown (set/cleared by the script tag
+        // below) is a real site's own "pause loading behind the overlay
+        // until it's dismissed" pattern -- not this app defending
+        // itself against a scraper. See structural/interstitial.py's
+        // own docstring for why this is a JS flag, not CSS
+        // overflow:hidden.
+        if (loading || !hasNext || window.__interstitialShown) {
+          return;
+        }
+        loading = true;
+        const url = cursor
+          ? "/api/feed-interstitial?after=" + encodeURIComponent(cursor)
+          : "/api/feed-interstitial";
+        fetch(url)
+          .then(function (response) {
+            return response.json();
+          })
+          .then(function (data) {
+            appendEdges(data.edges || []);
+            const pageInfo = data.page_info || {};
+            cursor = pageInfo.end_cursor;
+            hasNext = Boolean(pageInfo.has_next_page);
+            loading = false;
+          })
+          .catch(function () {
+            loading = false;
+          });
+      }
+
+      window.addEventListener("scroll", function () {
+        if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 200) {
+          loadMore();
+        }
+      });
+
+      loadMore();
+    })();
+  </script>
+  <script>{{ interstitial_script | safe }}</script>
+</body>
+</html>

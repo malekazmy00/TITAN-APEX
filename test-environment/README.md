@@ -490,6 +490,67 @@ login mechanics above.
 credentials + token → follow the `302` → `GET /feed-protected` with the
 resulting cookie returns real posts instead.
 
+### 2.11 Interstitials (`/feed-interstitial`)
+
+`structural/interstitial.py` + `templates/feed_interstitial.html` — a
+real full-screen overlay that appears after the page has already
+loaded and genuinely blocks *further* content loading (not just the
+view) until it's dismissed — docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+محور 6, activated after Login/Session per explicit user request.
+Deliberately isolated: `/` and `/feed` are completely unchanged, and
+`/feed-interstitial` shares none of their client-side JS, DOM
+-virtualization, or rate-limiting machinery — its own dedicated
+`GET /api/feed-interstitial` JSON endpoint reuses the same
+`content_generator.generate_feed_page` every other feed route does, but
+with its own cursor/bound (`INTERSTITIAL_FEED_PAGE_SIZE`,
+`INTERSTITIAL_FEED_TOTAL_BATCHES`) so this layer's own live tests can't
+be affected by however many requests unrelated tests have already made
+against `/api/feed`'s shared rate limiter in the same CI run.
+
+**Genuinely different in kind from every other structural challenge
+here** (`structural/interstitial.py`'s own docstring): honeypots/decoy
+-data/Shadow DOM/DOM Virtualization are all about whether real content
+is *reachable* at all in a DOM read. Here, the real content is always
+present in the DOM the whole time — the overlay is a sibling element on
+top of it, never a replacement (`data-role="post"` elements are never
+touched). The obstacle is a real, interactive element that must be
+dismissed before the page's own client-side JS will keep loading more —
+the same class of problem 2.5's cookie-consent wall already solved with
+`click_selector`, just triggered later instead of gating the very first
+response.
+
+- **Trigger** (`INTERSTITIAL_TRIGGER`, `"time"` or `"scroll"`): `"time"`
+  shows the overlay `INTERSTITIAL_DELAY_MS` after page load (default);
+  `"scroll"` shows it once the page has been scrolled past
+  `INTERSTITIAL_SCROLL_PERCENT` percent of its scrollable height. Both
+  are fully implemented and unit-tested
+  (`structural/interstitial.py::render_interstitial_script`); this
+  stack's own shared mock-target container runs `"time"` mode for live
+  CI (deterministic real elapsed time, not a randomized threshold) —
+  see docs/REQUIREMENTS.md section 9 entry 16 for why `"scroll"` mode
+  isn't separately live-CI-exercised end to end this round.
+- **Block, not hide:** while shown, `window.__interstitialShown` is
+  `true` — `feed_interstitial.html`'s own `loadMore()` checks that flag
+  and refuses to fetch another batch while it's set (a real site's own
+  "pause behind the ad wall" pattern, not this app defending itself).
+  Deliberately a JS flag, not CSS `overflow: hidden` on the body:
+  `src.providers.antibot._scroll`'s own module docstring documents that
+  this stack's scroll simulation dispatches a synthetic `'scroll'`
+  Event unconditionally, regardless of whether the browser's real
+  scroll position could move at all, so a CSS-only block would not
+  reliably stop it.
+- **Dismiss:** a real, always-present `[data-role="interstitial-close"]`
+  button (initially not visible — `display:none` cascades from the
+  hidden overlay container) clears the flag and hides the overlay again
+  on click.
+
+**Verify it's active:** load `/feed-interstitial` in a real browser
+(past Anubis), wait past `INTERSTITIAL_DELAY_MS`, and confirm the
+overlay is visible with `document.querySelector('[data-role="post"]')`
+still returning a real element underneath it (content, not removed);
+scrolling further should not add any new posts until the close button
+is clicked.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently

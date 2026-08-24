@@ -1,0 +1,31 @@
+# The "after" half of mock_target_interstitial_camoufox_unhandled.yaml
+# -- same target, same real obstacle, this time with click_selector set
+# (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's cookie-consent-wall
+# round already proved this exact mechanism; this round's own
+# hypothesis, stated before either config was ever run, was that this
+# is the same fix, not a new one). CamoufoxProvider clicks
+# click_selector right after `goto()`, *before* `post_load_wait_ms`'s
+# wait and any scrolling -- Playwright's own actionability checks make
+# that click wait for the button to actually become visible first
+# (the interstitial starts `display:none`), so it reliably dismisses
+# the overlay however long INTERSTITIAL_DELAY_MS is, well before any
+# scroll attempt ever happens. With the overlay closed before scrolling
+# starts, every batch loads normally -- the full
+# INTERSTITIAL_FEED_PAGE_SIZE * INTERSTITIAL_FEED_TOTAL_BATCHES items.
+name: mock_target_interstitial_camoufox_dismissed
+start_urls:
+  - "http://localhost:8080/feed-interstitial"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+click_selector: '[data-role="interstitial-close"]'
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

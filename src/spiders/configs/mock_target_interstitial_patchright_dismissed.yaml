@@ -1,0 +1,23 @@
+# Same fix as mock_target_interstitial_camoufox_dismissed.yaml, this
+# time via antibot_provider: patchright -- PatchrightProvider's own
+# click_selector handling mirrors CamoufoxProvider's exactly (see
+# patchright_provider.py), so this config exists to confirm the same
+# click-before-scroll dismissal generalizes to the other real-browser
+# provider, not just Camoufox specifically.
+name: mock_target_interstitial_patchright_dismissed
+start_urls:
+  - "http://localhost:8080/feed-interstitial"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: patchright
+max_concurrency: 1
+click_selector: '[data-role="interstitial-close"]'
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

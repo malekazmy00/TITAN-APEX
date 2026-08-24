@@ -77,6 +77,20 @@ class MockTargetConfig:
         # re-testing lazy-loading/virtualization on top of them.
         self.protected_feed_page_size: int = _env_int("PROTECTED_FEED_PAGE_SIZE", 5)
         self.protected_feed_total_pages: int = _env_int("PROTECTED_FEED_TOTAL_PAGES", 2)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Interstitials round
+        # (محور 6): a full-screen overlay on /feed-interstitial that
+        # genuinely blocks further loading (not just the view) until
+        # dismissed -- see structural/interstitial.py. "time"/"scroll"
+        # trigger; delay/threshold and page geometry are separately
+        # configurable so the mock stays deterministic for live CI (real
+        # elapsed time, not a randomized threshold).
+        self.interstitial_trigger: str = os.environ.get("INTERSTITIAL_TRIGGER", "time")
+        self.interstitial_delay_ms: int = _env_int("INTERSTITIAL_DELAY_MS", 1000)
+        self.interstitial_scroll_percent: int = _env_int("INTERSTITIAL_SCROLL_PERCENT", 30)
+        self.interstitial_feed_page_size: int = _env_int("INTERSTITIAL_FEED_PAGE_SIZE", 5)
+        self.interstitial_feed_total_batches: int = _env_int(
+            "INTERSTITIAL_FEED_TOTAL_BATCHES", 3
+        )
         self.honeypot_log_path: str = os.environ.get(
             "HONEYPOT_LOG_PATH", "test-environment/mock-target/security/honeypot_triggers.log"
         )

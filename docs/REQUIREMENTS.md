@@ -1732,6 +1732,81 @@ commit (`attempt 1` من نفس الـ run) فشلت فعليًا — بس في 
 re-login مؤجّل صراحة بطلب المستخدم — لو احتجناه لاحقًا هيبقى بند
 منفصل.
 
+### 16. Interstitials — إعلان كامل الشاشة بيمنع التقدم لحد ما يتقفل (محور 6، طلب المستخدم صراحة بعد Login/Session)
+
+**الفكرة:** مسار جديد ومعزول تمامًا `/feed-interstitial` على mock-target
+(`structural/interstitial.py` + `templates/feed_interstitial.html`) —
+overlay حقيقي بيظهر **بعد** ما الصفحة تحمّل (مش بيمنع أول response زي
+cookie wall)، ومهما ظهر بيمنع تحميل بيانات إضافية فعليًا (`loadMore()`
+بترفض تجيب batch جديد وهو ظاهر) لحد ما يتقفل بزرار `[data-role="interstitial-close"]`
+واضح. `/` و`/feed` الأصليين اتسابوا من غير أي تعديل — `/feed-interstitial`
+بيستخدم content generator خاص بيه (`build_interstitial_feed_page`) ومسار
+JSON منفصل تمامًا (`/api/feed-interstitial`) عشان ميشاركش state مع
+`/feed`'s `FeedRateLimiter` أو DOM virtualization خالص.
+
+**الفرق الجوهري عن كل التحديات التانية:** المحتوى الحقيقي **موجود في
+الـ DOM طول الوقت** — الـ overlay عنصر شقيق (sibling) فوقه، مش بديل
+عنه (زي ما المستخدم حدد صراحة). المشكلة مش "المحتوى مش موجود" (زي
+Shadow DOM/DOM Virtualization)، لكن "فيه عنصر تفاعلي لازم يتم التعامل
+معاه الأول قبل ما التقدم يكمل".
+
+**قرار تصميمي حقيقي، مش عرضي:** الحجب بيتم عبر JS flag
+(`window.__interstitialShown`) بيتفحص جوّه `loadMore()` نفسها، **مش**
+`overflow: hidden` على الـ body. السبب: `src/providers/antibot/_scroll.py`
+نفسه موثّق فيه إن `scroll_and_collect`/الحلقة الأساسية بتعمل
+`dispatchEvent(new Event('scroll'))` **بغض النظر** عن إذا كان الموضع
+الفعلي اتغيّر، فحجب CSS بس مكانش هيوقف الـ synthetic dispatch ده فعليًا
+— اتقرر ده **قبل** ما أي كود يتكتب (verify don't assume تطبيق مباشر).
+
+**Trigger قابل للتهيئة (`INTERSTITIAL_TRIGGER`): الاتنين متاحين فعليًا،
+مش واحد بس:** `"time"` (بعد `INTERSTITIAL_DELAY_MS`) و`"scroll"` (بعد
+نسبة `INTERSTITIAL_SCROLL_PERCENT`) — الاتنين مُنفّذين بالكامل ومُختبرين
+بـunit tests (`render_interstitial_script`). الـ stack المشترك بتاع
+live CI شغّال بوضع `"time"` بس (حتمي، وقت حقيقي منقضي مش threshold
+عشوائي) — **قرار موثّق صراحة، مش نسيان:** وضع `"scroll"` مش هيتـlive-CI
+-اختبر end-to-end الجولة دي، لأن الآلية الحالية لـ`click_selector`
+(camoufox/patchright providers) بتضغط **قبل** أي محاولة scroll خالص
+(مباشرة بعد `goto()`/login، قبل `post_load_wait_ms`) — فلو الـ
+interstitial بيظهر بس بعد scroll فعلي، مفيش نقطة زمنية الـ click
+الوحيد الحالي يقدر يوصلها فيها أصلًا. ده قيد معماري حقيقي في الآلية
+الحالية، مش حل ناقص — لو احتجنا نحله (interstitial بيظهر أثناء الـ scroll
+مش قبله) هيبقى بند منفصل لاحقًا، زي 2FA اتسجّل في بند 15.
+
+**الاختبار بالترتيب المطلوب (بند 4 من طلب المستخدم):** الكود الحالي
+(`GenericSpider` + الـ3 providers) اتجرّب **من غير أي تعديل** الأول ضد
+`/feed-interstitial` عبر `mock_target_interstitial_camoufox_unhandled.yaml`
+(من غير `click_selector`) — الفرضية الموثّقة *قبل* أي push: بما إن
+`INTERSTITIAL_DELAY_MS=1000` أقل بكتير من `post_load_wait_ms` الافتراضي
+لـ camoufox/patchright (5000ms)، الـ overlay هيظهر ويقفل التحميل قبل أي
+محاولة scroll خالص، فبس أول batch (`INTERSTITIAL_FEED_PAGE_SIZE=5`
+items، بيتحمّل تلقائيًا عند فتح الصفحة) هو اللي هيترجّع — مش صفر (الصفحة
+مش عاطلة)، ومش الكل كمان (فيه عائق حقيقي). **الحل المتوقع (بند 5):**
+بالظبط زي ما المستخدم توقّع — نفس آلية `click_selector` بتاعة cookie
+wall بالحرف، من غير أي ميكانيزم جديد: `mock_target_interstitial_camoufox_dismissed.yaml`
+و`mock_target_interstitial_patchright_dismissed.yaml` بيضيفوا
+`click_selector: '[data-role="interstitial-close"]'` بس — Playwright's
+actionability checks بتخلي الـ click ينتظر لحد ما الزرار يبقى visible
+فعليًا (بما إن الـ overlay بيبدأ `display:none`)، فبيقفل الـ interstitial
+قبل أي scroll مهما كانت مدة التأخير، وكل الـ batches الـ3
+(`INTERSTITIAL_FEED_PAGE_SIZE * INTERSTITIAL_FEED_TOTAL_BATCHES = 15`
+item) بترجع طبيعي.
+
+**اتّحقّق محليًا** قبل الدفع: ruff نظيف (`src/`، `tests/`،
+`test-environment/`)، `mypy --strict` نظيف (`src/` — مفيش تعديل على
+interfaces خالص، `click_selector` كان موجود بالفعل)، نفس أوامر CI
+بالظبط: `pytest tests/unit --cov=src --cov-fail-under=85` → 264 passed،
+86.08% (مفيش تغيير — الجولة دي معماريًا كلها YAML configs جدد + مسار
+mock-target جديد، من غير أي كود `src/` جديد)، `pytest tests/contract`
+→ 29 passed، `test-environment`'s own suite → 158 passed، **100%
+coverage** (36 statement جديدة في `structural/interstitial.py` مغطّاة
+بالكامل). الاختبارات الحية الـ3 الجديدة
+(`test_unhandled_interstitial_blocks_further_loading_after_the_first_batch`،
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch`،
+`test_patchright_dismisses_the_interstitial_and_yields_every_batch`)
+اتّجمّعت (collected) واتخطّت (skipped) نظيف محليًا (من غير
+`TITAN_BYPARR_URL`) — **لسه محتاجين تأكيد CI حقيقي** للنتيجة الفعلية
+(هل الفرضية أعلاه صحيحة فعلًا؟) — هتتسجّل هنا بمجرد ما الـ run يخلص.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
