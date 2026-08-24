@@ -1342,8 +1342,33 @@ DOM **في نفس اللحظة** (بعد ما الـ scroll loop يخلص)، ف�
 `_scroll.py` كسبوا unit tests كاملة)، ruff على `test-environment/`،
 230 unit+contract test PASSED على `src` (88.64% coverage)، ruff/mypy
 --strict على `src`/`tests` (نفس مشكلة `patchright.sync_api` المحلية
-القديمة غير المرتبطة). **النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما
-يخلص، مش قبل كده.**
+القديمة غير المرتبطة).
+
+**✅✅✅ الفرضية اتأكّدت فعليًا (CI run [32725098955](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32725098955)) — دليل حقيقي من الـ job logs، مش افتراض:**
+`29 passed, 2 warnings in 332.58s (0:05:32)`، صفر FAILED. الاختبارين
+الحاسمين اتأكّدوا PASSED صراحة في نفس الـ run:
+```
+tests/integration/test_mock_target_dom_virtualization_live.py::test_parsed_html_only_recovers_the_final_virtualization_window PASSED
+tests/integration/test_mock_target_dom_virtualization_live.py::test_live_dom_also_only_recovers_the_final_virtualization_window PASSED
+```
+يعني الرقم الحتمي المتوقع (5 items بالظبط) اتأكّد فعليًا من **الاتنين**
+— `extraction_mode: live_dom` (اللي حل Shadow DOM فعليًا في بند 12)
+**ماقدرش** يسترجع البوستات المُزالة من virtualization، بالظبط زي
+الفرضية. السبب مؤكد فعليًا مش نظري: الاتنين (`page.content()` كـ
+string، و`page.locator()` كـ live query) بيقروا حالة الـ DOM في **نفس
+اللحظة** — بعد ما الـ scroll loop يخلص — فمفيش استخراج ممكن يسترجع
+بوست مش موجود خالص في الـ DOM وقت القراءة، بعكس Shadow DOM اللي كان
+المحتوى موجود فعليًا (بس متغطّي). دي أول جولة في المشروع كله بيبان
+فيها بوضوح إن `live_dom` **مش حل عام لكل مشكلة DOM** — بيحل مشاكل
+*encapsulation* بس، مش مشاكل *وجود/توقيت*. باقي الـ 27 اختبار تاني (بند
+9/10/11/12's tests، byparr/patchright sentinels، Test Targets التانية)
+كلهم PASSED برضه — regression check كامل، إضافة الـ scroll capability
+الجديدة مبوّظتش أي حاجة شغالة (ولا حتى honeypot اتلمس بالغلط من الـ
+scrolling). test-environment's own 101 unit test كمان PASSED. الفجوة
+دي (بند 3 obstacle map) موثّقة رسميًا كـ Known Limitation حقيقية
+ومؤكدة لـ**الاتنين**، مش قابلة للحل بدون تغيير معماري أعمق (جمع الـ
+items تدريجيًا أثناء كل دورة scroll بدل قراءة واحدة نهائية — خارج نطاق
+الجولة دي عن قصد).
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
