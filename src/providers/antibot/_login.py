@@ -77,7 +77,7 @@ def perform_login_and_navigate(
     get_last_status: Callable[[], int | None],
     target_url: str,
     session_expiry_probe_url: str | None,
-) -> bool:
+) -> tuple[bool, int | None]:
     """Runs the full login sequence via :func:`submit_login_form`, waits
     for the result to settle, then decides what happens next based on
     ``get_last_status()`` -- a callable the caller provides, closing over
@@ -98,10 +98,16 @@ def perform_login_and_navigate(
     else -- the login page's own failure response is left as the final
     state for the caller to read via its own tracking.
 
-    Returns ``True`` if the login POST itself succeeded, ``False`` if it
-    didn't -- the caller decides what to log (this function does no
-    logging itself, so provider-specific log-event names stay in each
-    provider's own module).
+    Returns ``(login_ok, final_status)``: ``login_ok`` is ``True`` if the
+    login POST itself succeeded, ``False`` if it didn't.
+    ``final_status`` is whatever ``get_last_status()`` reports right
+    before returning -- the login failure's own status when
+    ``login_ok`` is ``False``, or the status after the probe/target
+    navigation when it's ``True`` (which lets the caller detect a
+    session that was valid at login time but rejected moments later,
+    e.g. by ``session_expiry_probe_url``). This function does no
+    logging itself -- see :func:`log_login_outcome`, which the caller
+    uses with its own provider-specific log-event names.
     """
     submit_login_form(
         page, login_url, username, password, username_field, password_field, submit_selector,
@@ -110,8 +116,43 @@ def perform_login_and_navigate(
     page.wait_for_timeout(post_load_wait_ms)
     status = get_last_status()
     if status is not None and status >= 400:
-        return False
+        return False, status
     if session_expiry_probe_url:
         page.goto(session_expiry_probe_url, timeout=timeout_ms)
     page.goto(target_url, timeout=timeout_ms)
-    return True
+    return True, get_last_status()
+
+
+def log_login_outcome(
+    logger: Any,
+    event_prefix: str,
+    login_url: str,
+    target_url: str,
+    login_ok: bool,
+    final_status: int | None,
+) -> None:
+    """Logs the real outcome of one :func:`perform_login_and_navigate`
+    call -- shared by camoufox_provider.py/patchright_provider.py so
+    the branching decision of *which* event to log (not just
+    ``perform_login_and_navigate``'s own success/failure decision) is
+    itself unit-testable with a fake logger, instead of living inline
+    in a browser-driving function neither this codebase nor a real CI
+    coverage gate can ever exercise directly (docs/REQUIREMENTS.md
+    section 9 entry 14's own coverage-gate lesson, applied here too).
+
+    ``event_prefix`` is each provider's own module name (e.g.
+    ``"camoufox_provider"``), matching each provider's own existing
+    ``<module>.<event>`` log-naming convention exactly.
+    """
+    if login_ok:
+        logger.info(f"{event_prefix}.login_succeeded", extra={"login_url": login_url})
+        if final_status is not None and final_status >= 400:
+            logger.warning(
+                f"{event_prefix}.session_expired_mid_crawl",
+                extra={"url": target_url, "status": final_status},
+            )
+    else:
+        logger.warning(
+            f"{event_prefix}.login_failed",
+            extra={"login_url": login_url, "status": final_status},
+        )

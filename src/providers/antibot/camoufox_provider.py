@@ -74,7 +74,7 @@ from src.providers.antibot._live_dom import (
     collect_live_dom_items_progressively,
     extract_live_dom_items,
 )
-from src.providers.antibot._login import perform_login_and_navigate
+from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
 from src.providers.antibot._scroll import collect_html_snapshots, scroll_to_load_lazy_content
 
 DEFAULT_TIMEOUT_MS = 30_000
@@ -276,7 +276,7 @@ def _default_camoufox_solve(
                     # given, same shape as every other optional
                     # capability here.
                     if login_flow is not None:
-                        login_ok = perform_login_and_navigate(
+                        login_ok, final_status = perform_login_and_navigate(
                             page,
                             login_flow.login_url,
                             login_flow.username,
@@ -294,26 +294,14 @@ def _default_camoufox_solve(
                             url,
                             login_flow.session_expiry_probe_url,
                         )
-                        final_status = (
-                            last_main_frame_response.status
-                            if last_main_frame_response is not None
-                            else None
+                        log_login_outcome(
+                            logger,
+                            "camoufox_provider",
+                            login_flow.login_url,
+                            url,
+                            login_ok,
+                            final_status,
                         )
-                        if login_ok:
-                            logger.info(
-                                "camoufox_provider.login_succeeded",
-                                extra={"login_url": login_flow.login_url},
-                            )
-                            if final_status is not None and final_status >= 400:
-                                logger.warning(
-                                    "camoufox_provider.session_expired_mid_crawl",
-                                    extra={"url": url, "status": final_status},
-                                )
-                        else:
-                            logger.warning(
-                                "camoufox_provider.login_failed",
-                                extra={"login_url": login_flow.login_url, "status": final_status},
-                            )
                         initial_response = last_main_frame_response
                     else:
                         initial_response = page.goto(url, timeout=timeout_ms)

@@ -1668,6 +1668,35 @@ unit+contract test PASSED (85.25% coverage، مش بعيد عن الحد لكن 
 `test_session_expired_mid_crawl_after_a_real_login_yields_nothing_not_a_crash`)
 — النتيجة الفعلية هتتسجّل هنا بمجرد ما الـ run يخلص.
 
+**❌ الـ push الأول فشل فعليًا (CI run
+[32771322702](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32771322702))
+— بس مش في الاختبارات الحية، في خطوة تانية قبلهم خالص:** `Unit tests
+(coverage gate >= 85%)` — `260 passed` بس `Total coverage: 85.00%`، فشل
+الـ gate. **السبب الجذري الحقيقي، اتأكّد بإعادة نفس أمر الـ CI بالظبط
+محليًا (`pytest tests/unit --cov=src --cov-fail-under=85`، مش
+`tests/unit tests/contract` زي ما كنت بتحقق منه محليًا طول الوقت):**
+الـ CI workflow (`.github/workflows/ci.yml`) بيشغّل الـ coverage gate
+على `tests/unit` **بس**، منفصل تمامًا عن `tests/contract` (خطوة تانية
+براها، من غير `--cov`) — يعني كل تحقّقاتي المحلية طول الجولة دي كانت
+بتحسب `tests/unit + tests/contract` مع بعض (رقم أعلى بشكل مصطنع، لأن
+اختبار العقد الجديد لـ`login_flow` بيغطّي كود حقيقي في الـ3 providers
+مش بيتغطّى من `tests/unit` لوحدها) — فجوة حقيقية في عملية التحقّق
+بتاعتي نفسها، مش بس في الكود. الرقم الحقيقي (unit-only) كان 85.00%
+بالظبط — عند الحد تمامًا، وده كفاية إنه يفشل (لازم يكون *فوق* 85% مش
+مساوي بالظبط، حسب دقة الفاصلة العشرية الداخلية).
+
+**الحل:** استخراج المنطق المتبقي جوّه `_default_camoufox_solve`/
+`_default_patchright_solve` (حساب `final_status` + قرار أي log event
+ينده) لدالة جديدة قابلة للاختبار `log_login_outcome` في `_login.py` —
+`perform_login_and_navigate` بقت بترجّع `(login_ok, final_status)` معًا
+(بدل `bool` بس)، فمعظم منطق القرار بقى برّه الدالة اللي مستحيل تتغطّى
+مباشرة. النتيجة (unit-only، نفس أمر CI بالظبط): **86.08%** — هامش أمان
+حقيقي، مش عند الحد. 264 test PASSED. اتأكّد كمان: `tests/contract`
+لوحدها 29 test PASSED، test-environment's own suite 137 test PASSED
+(100%). **الدرس المسجّل صراحة:** أي تحقّق محلي جاي لازم يستخدم بالظبط
+نفس أوامر `.github/workflows/ci.yml` (منفصلة، مش مجمّعة)، مش تركيبة
+مريحة بس مختلفة عن الواقع.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

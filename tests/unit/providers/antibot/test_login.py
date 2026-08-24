@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from src.providers.antibot._login import perform_login_and_navigate, submit_login_form
+from src.providers.antibot._login import (
+    log_login_outcome,
+    perform_login_and_navigate,
+    submit_login_form,
+)
 
 
 class _FakePage:
@@ -157,12 +161,12 @@ def test_successful_login_visits_target_url_after_submitting() -> None:
         submit_selector="#login-submit",
         timeout_ms=30_000,
         post_load_wait_ms=5_000,
-        get_last_status=lambda: 302,  # a real login redirect
+        get_last_status=lambda: 200,  # both the login-check and final reads see this
         target_url="http://localhost:8080/feed-protected",
         session_expiry_probe_url=None,
     )
 
-    assert result is True
+    assert result == (True, 200)
     assert page.calls == [
         ("goto", "http://localhost:8080/login", "30000"),
         ("fill", "#username", "titan_test_user"),
@@ -194,7 +198,7 @@ def test_a_missing_status_after_submit_is_treated_as_success() -> None:
         session_expiry_probe_url=None,
     )
 
-    assert result is True
+    assert result == (True, None)
 
 
 def test_failed_login_does_not_navigate_anywhere_else() -> None:
@@ -218,7 +222,7 @@ def test_failed_login_does_not_navigate_anywhere_else() -> None:
         session_expiry_probe_url="http://localhost:8080/test-expire-session",
     )
 
-    assert result is False
+    assert result == (False, 401)
     assert page.calls == [
         ("goto", "http://localhost:8080/login", "30000"),
         ("fill", "#u", "u"),
@@ -253,4 +257,124 @@ def test_successful_login_visits_the_session_expiry_probe_before_the_target() ->
         "http://localhost:8080/login",
         "http://localhost:8080/test-expire-session",
         "http://localhost:8080/feed-protected",
+    ]
+
+
+def test_final_status_reflects_the_state_after_the_probe_and_target_navigation() -> None:
+    """The real reason perform_login_and_navigate returns a status at
+    all: a login that succeeded can still end up rejected by the time
+    the real target is actually reached (e.g. the session-expiry probe
+    deliberately invalidated it in between) -- final_status must reflect
+    *that* later read, not the (successful) status right after the login
+    POST itself."""
+    page = _FakePage()
+    statuses = iter([200, 401])  # right after login POST, then after probe+target
+
+    result = perform_login_and_navigate(
+        page,
+        login_url="http://localhost:8080/login",
+        username="u",
+        password="p",
+        username_field="#u",
+        password_field="#p",
+        submit_selector="#s",
+        timeout_ms=30_000,
+        post_load_wait_ms=5_000,
+        get_last_status=lambda: next(statuses),
+        target_url="http://localhost:8080/feed-protected",
+        session_expiry_probe_url="http://localhost:8080/test-expire-session",
+    )
+
+    assert result == (True, 401)  # login itself succeeded; final read shows it's now expired
+
+
+# --- log_login_outcome (docs/REQUIREMENTS.md section 9 entry 15) -------
+
+
+class _FakeLogger:
+    def __init__(self) -> None:
+        self.info_calls: list[tuple[str, dict[str, object]]] = []
+        self.warning_calls: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, event: str, extra: dict[str, object]) -> None:
+        self.info_calls.append((event, extra))
+
+    def warning(self, event: str, extra: dict[str, object]) -> None:
+        self.warning_calls.append((event, extra))
+
+
+def test_log_login_outcome_success_logs_only_login_succeeded() -> None:
+    """Happy path: a clean success (status < 400 after the target
+    navigation) logs exactly one info event, no warning."""
+    logger = _FakeLogger()
+
+    log_login_outcome(
+        logger,
+        "camoufox_provider",
+        login_url="http://localhost:8080/login",
+        target_url="http://localhost:8080/feed-protected",
+        login_ok=True,
+        final_status=200,
+    )
+
+    assert logger.info_calls == [
+        (
+            "camoufox_provider.login_succeeded",
+            {"login_url": "http://localhost:8080/login"},
+        )
+    ]
+    assert logger.warning_calls == []
+
+
+def test_log_login_outcome_success_then_expired_logs_both_events() -> None:
+    """The session-expiry-detection case: login succeeded (info), but
+    the final read is a real 401/403 -- a second, distinct warning event
+    fires too, not just the success log."""
+    logger = _FakeLogger()
+
+    log_login_outcome(
+        logger,
+        "patchright_provider",
+        login_url="http://localhost:8080/login",
+        target_url="http://localhost:8080/feed-protected",
+        login_ok=True,
+        final_status=401,
+    )
+
+    assert logger.info_calls == [
+        (
+            "patchright_provider.login_succeeded",
+            {"login_url": "http://localhost:8080/login"},
+        )
+    ]
+    assert logger.warning_calls == [
+        (
+            "patchright_provider.session_expired_mid_crawl",
+            {"url": "http://localhost:8080/feed-protected", "status": 401},
+        )
+    ]
+
+
+def test_log_login_outcome_failure_logs_only_login_failed() -> None:
+    """Failure-adjacent case: a failed login logs exactly one warning
+    event (login_failed), never login_succeeded and never
+    session_expired_mid_crawl (that event is specifically for a login
+    that *did* succeed)."""
+    logger = _FakeLogger()
+
+    log_login_outcome(
+        logger,
+        "camoufox_provider",
+        login_url="http://localhost:8080/login",
+        target_url="http://localhost:8080/feed-protected",
+        login_ok=False,
+        final_status=401,
+    )
+
+    assert logger.info_calls == []
+    assert logger.warning_calls == [
+        (
+            "camoufox_provider.login_failed",
+            {"login_url": "http://localhost:8080/login", "status": 401},
+        )
     ]
