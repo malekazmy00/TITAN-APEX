@@ -382,6 +382,36 @@ recipes) immediately after a request and confirm the response contains
 `>Loading...<` and `data-real-text="..."` with the real sentence inside
 it.
 
+### 2.8 Shadow DOM
+
+`structural/shadow_dom.py`: every other post (odd 0-based index, out of
+`INDEX_PAGE_SIZE`) renders as an opaque `<mock-shadow-post
+data-shadow-payload="...">` placeholder instead of plain
+`<article data-role="post">` markup. A small inline script
+(`SHADOW_ATTACH_SCRIPT`) attaches a real, `mode: "open"` shadow root to
+each placeholder on page load and builds its content from that
+base64(JSON) payload via safe DOM construction.
+
+This is a genuinely different kind of gap from every other layer here:
+honeypots/decoy-data are a *visibility* problem (the content sits in the
+same raw HTML string, just hidden by CSS/DOM order) — this is an
+*encapsulation* problem. Per the DOM spec, a shadow root attached via
+`Element.attachShadow()` is never included when serializing its host's
+`outerHTML`/`innerHTML`. `docs/REQUIREMENTS.md`'s three `AntibotProvider`s
+all return exactly that serialized string (`page.content()` is
+`document.documentElement.outerHTML` under the hood) to `GenericSpider`,
+which then runs a plain Scrapy/parsel CSS selector over it — there is no
+live DOM to pierce, so a shadow-DOM-wrapped post is structurally invisible
+to it even via a real, full browser (Camoufox/Patchright) that already
+gets past every other layer on the same page
+(`docs/REQUIREMENTS.md` section 9 entry 10's combined round).
+
+**Verify it's active:** `curl -s http://mock-target:8000/` (bypassing
+Anubis/the cookie wall, same as 2.5's own recipe) and confirm exactly 5
+`<mock-shadow-post ` placeholders and exactly 6 `data-role="post"`
+elements (5 light-DOM real posts + 1 decoy twin) — never the 10 real
+posts `/` actually generates.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently
@@ -399,6 +429,7 @@ isolated and tested alone — not just all-on together:
 | `ENABLE_AB_VARIANTS` | `true` | 2.6 A/B structural variants |
 | `ENABLE_PLACEHOLDER_CONTENT` | `true` | 2.7 Loading-placeholder leakage |
 | `PLACEHOLDER_DELAY_MS` | `500` | 2.7 swap-in delay |
+| `ENABLE_SHADOW_DOM` | `true` | 2.8 Shadow DOM |
 | `MARKUP_RANDOMIZER_INTERVAL_MINUTES` | `15` | 2.1 rotation interval |
 | `FEED_RATE_LIMIT_THRESHOLD` | `20` | 2.4 requests/window before 429 |
 | `FEED_RATE_LIMIT_WINDOW_SECONDS` | `60` | 2.4 sliding window size |

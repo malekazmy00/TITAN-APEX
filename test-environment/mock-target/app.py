@@ -27,6 +27,7 @@ from structural.feed import FeedRateLimiter, build_feed_page
 from structural.honeypots import generate_honeypot_links
 from structural.markup_randomizer import MarkupRandomizer
 from structural.placeholder_content import PLACEHOLDER_TEXT, render_swap_script
+from structural.shadow_dom import SHADOW_ATTACH_SCRIPT, encode_shadow_payload, is_shadow_wrapped
 
 INDEX_PAGE_SIZE = 10
 SESSION_COOKIE_NAME = "mocktarget_session"
@@ -60,6 +61,10 @@ def create_app(
     """
     cfg = config or get_config()
     app = Flask(__name__)
+    # Pure functions, safe to register once at app-build time rather than
+    # per request -- see structural/shadow_dom.py.
+    app.jinja_env.globals["is_shadow_wrapped"] = is_shadow_wrapped
+    app.jinja_env.globals["encode_shadow_payload"] = encode_shadow_payload
 
     app.config["MOCK_TARGET_CONFIG"] = cfg
     app.config["MARKUP_RANDOMIZER"] = MarkupRandomizer(
@@ -128,6 +133,8 @@ def create_app(
                     if cfg.enable_placeholder_content
                     else None
                 ),
+                shadow_dom_enabled=cfg.enable_shadow_dom,
+                shadow_attach_script=(SHADOW_ATTACH_SCRIPT if cfg.enable_shadow_dom else None),
             )
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)

@@ -37,7 +37,7 @@
 | العقبة | الوصف | حالتنا |
 |---|---|---|
 | Markup randomization | class names بتتغيّر دوريًا | ✅ Round 1 |
-| Shadow DOM | محتوى معزول عن `document` العادي | ⬜ غير مُختبر - **فجوة** |
+| Shadow DOM | محتوى معزول عن `document` العادي | 🔶 مُبني، قيد التأكيد بـ CI حقيقي (docs/REQUIREMENTS.md قسم 9 بند 11) - Known Limitation متوقعة: GenericSpider مايوصلش لمحتوى shadow root حتى عبر متصفح حقيقي كامل، معماريًا مش توقيتيًا |
 | Web Components مخصصة | عناصر بتتصرف زي widgets مش HTML عادي | ⬜ غير مُختبر |
 | DOM Virtualization (قوائم افتراضية) | مش كل العناصر موجودة في الـ DOM في نفس اللحظة، حتى لو ظاهرة على الشاشة | ⬜ غير مُختبر - **فجوة مهمة لمنصات social feed** |
 | CSS-in-JS (hashed classes) | زي `styled-components` | ✅ اتسجل كـ Known Limitation #5 |

@@ -21,6 +21,7 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
         "ENABLE_AB_VARIANTS",
         "ENABLE_PLACEHOLDER_CONTENT",
         "PLACEHOLDER_DELAY_MS",
+        "ENABLE_SHADOW_DOM",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -38,6 +39,7 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.enable_ab_variants is True
     assert cfg.enable_placeholder_content is True
     assert cfg.placeholder_delay_ms == 500
+    assert cfg.enable_shadow_dom is True
 
 
 def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,6 +52,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("ENABLE_COOKIE_WALL", "false")
     monkeypatch.setenv("ENABLE_AB_VARIANTS", "0")
     monkeypatch.setenv("ENABLE_PLACEHOLDER_CONTENT", "no")
+    monkeypatch.setenv("ENABLE_SHADOW_DOM", "false")
 
     cfg = get_config()
 
@@ -60,6 +63,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     assert cfg.enable_cookie_wall is False
     assert cfg.enable_ab_variants is False
     assert cfg.enable_placeholder_content is False
+    assert cfg.enable_shadow_dom is False
 
 
 def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:

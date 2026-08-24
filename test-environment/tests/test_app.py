@@ -30,6 +30,7 @@ def config(tmp_path: Path) -> MockTargetConfig:
     # builds its own client with it explicitly enabled instead (same "one
     # layer at a time, each verifiable alone" idea config.py documents).
     cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     return cfg
 
 
@@ -150,6 +151,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_markup_randomizer = False
     cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
 
     app = create_app(cfg)
     app.testing = True
@@ -169,6 +171,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
     cfg.enable_cookie_wall = False  # otherwise every assertion below passes vacuously
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
 
     app = create_app(cfg)
     app.testing = True
@@ -184,6 +187,7 @@ def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
     app = create_app(cfg, ab_variant_rand_fn=rand_fn)  # type: ignore[arg-type]
     app.testing = True
@@ -223,6 +227,7 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False
     cfg.enable_ab_variants = False
     app = create_app(cfg, ab_variant_rand_fn=lambda: 0.99)
@@ -244,6 +249,7 @@ def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     app = create_app(cfg)
     app.testing = True
 
@@ -262,6 +268,7 @@ def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path)
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_placeholder_content = False
     app = create_app(cfg)
     app.testing = True
@@ -279,6 +286,7 @@ def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.placeholder_delay_ms = 2000
     app = create_app(cfg)
     app.testing = True
@@ -293,6 +301,7 @@ def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.enable_cookie_wall = True
+    cfg.enable_shadow_dom = False  # isolate the cookie-wall layer alone
     app = create_app(cfg)
     app.testing = True
     return app.test_client()
@@ -339,3 +348,62 @@ def test_index_shows_real_content_once_consent_cookie_is_present(tmp_path: Path)
     assert response.status_code == 200
     assert 'data-role="cookie-consent-wall"' not in body
     assert 'data-role="post"' in body
+
+
+def _shadow_dom_client(tmp_path: Path) -> FlaskClient:
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False  # isolate the shadow-DOM layer alone
+    cfg.enable_shadow_dom = True
+    app = create_app(cfg)
+    app.testing = True
+    return app.test_client()
+
+
+def test_shadow_dom_odd_posts_render_as_opaque_placeholders_not_light_dom(
+    tmp_path: Path,
+) -> None:
+    """Happy path: every other post (odd 0-based index) is a
+    <mock-shadow-post> placeholder in the raw HTML, carrying none of its
+    real content directly (no data-role="post", no author/text/likes
+    anywhere as plain text) -- only an opaque base64 payload the
+    server-side response never decodes itself. The other half (even
+    index) render exactly as they always did."""
+    client = _shadow_dom_client(tmp_path)
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert body.count("<mock-shadow-post ") == 5  # odd indices 1,3,5,7,9
+    # 5 light-DOM real posts (even indices) + 1 decoy twin (always light DOM)
+    assert body.count('data-role="post"') == 6
+    assert "data-shadow-payload=" in body
+
+
+def test_shadow_dom_attach_script_is_present_when_enabled(tmp_path: Path) -> None:
+    """The client-side renderer that would build the real shadow roots is
+    actually shipped on the page -- without it, the placeholders above
+    would never become real content even in a live browser."""
+    client = _shadow_dom_client(tmp_path)
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert "attachShadow" in body
+
+
+def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> None:
+    """Failure-adjacent case: disabling the layer must fall back to every
+    post rendering directly, same as before this layer existed."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/").get_data(as_text=True)
+
+    assert "<mock-shadow-post" not in body
+    assert "attachShadow" not in body
+    assert body.count('data-role="post"') == 11  # 10 real posts + 1 decoy

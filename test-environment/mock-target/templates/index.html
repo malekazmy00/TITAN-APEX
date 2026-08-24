@@ -22,6 +22,14 @@
     {% endif %}
 
     {% for post in posts %}
+      {% if shadow_dom_enabled and is_shadow_wrapped(loop.index0) %}
+      {# Real Shadow DOM: this post's entire content is only ever built by
+         shadow_attach_script below, inside a genuine, client-side
+         -attached shadow root -- never present in this raw HTML string at
+         all (not even the data-role/data-post-id attributes), unlike
+         every other challenge on this page. See structural/shadow_dom.py. #}
+      <mock-shadow-post data-shadow-payload="{{ encode_shadow_payload(post) }}"></mock-shadow-post>
+      {% else %}
     <{{ container_tag }} class="{{ classes['post-item'] }}" data-role="post" data-post-id="{{ post.post_id }}">
       <span class="{{ classes['post-author'] }}" data-role="post-author">{{ post.author }}</span>
       {% if placeholder_enabled %}
@@ -44,6 +52,7 @@
         {% endfor %}
       </div>
     </{{ container_tag }}>
+      {% endif %}
     {% endfor %}
 
     {% if honeypots %}
@@ -67,6 +76,10 @@
 
   {% if placeholder_swap_script %}
   <script>{{ placeholder_swap_script | safe }}</script>
+  {% endif %}
+
+  {% if shadow_attach_script %}
+  <script>{{ shadow_attach_script | safe }}</script>
   {% endif %}
 
   {% if botd_enabled %}

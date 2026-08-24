@@ -1139,6 +1139,61 @@ test-environment's 81 unit test) كلهم PASSED برضه — regression check
 عشان أي فشل بعدها نعرف يقين إنه بسبب Shadow DOM تحديدًا مش تفاعل غامض
 مع أربعة حاجات تانية جديدة مع بعض.
 
+### 11. Shadow DOM كطبقة خامسة — Known Limitation جديدة، حقيقية (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، محور 3 "البنية الهيكلية"، فوق نفس الأربعة النشطين من بند 10)
+
+**الإضافة:** `structural/shadow_dom.py` في `test-environment/mock-target`
+— نص البوستات (index زوجي، 0-based) فاضل زي ما هو في الـ light DOM،
+والنص التاني (index فردي) بقى يترندر جوه **shadow root حقيقي** بيتلحق
+client-side بس (`element.attachShadow({mode: "open"})`)، مش أي حيلة
+`display:none`/hidden زي باقي الطبقات. الـ payload (author/text/likes/
+comments) بيتشفّر base64(JSON) في `data-shadow-payload` عشان مفيش أي
+نص حقيقي ظاهر في الـ raw HTML خالص لهذول الـ posts، وسكريبت client-side
+(`SHADOW_ATTACH_SCRIPT`) بيبنيهم فعليًا في shadow root حقيقي عند تحميل
+الصفحة، عبر DOM construction آمن (`textContent`، مش `innerHTML` string
+concatenation).
+
+**السبب ده مختلف نوعيًا عن كل الطبقات اللي فاتت:** honeypots/decoy-data
+مشكلة *visibility* (المحتوى موجود في نفس الـ HTML string، بس مخفي).
+Shadow DOM مشكلة *encapsulation* — حسب DOM spec نفسه، shadow root
+اتلحق بـ `attachShadow()` **مش بيتضمّن خالص** لما تعمل serialize
+لـ `outerHTML`/`innerHTML` بتاع العنصر المضيف ليه. Playwright's
+`page.content()` (اللي `CamoufoxProvider`/`PatchrightProvider` بيرجّعوه)
+هو بالظبط `document.documentElement.outerHTML` تحت الغطا، فبيورث نفس
+الـ blind spot ده. `GenericSpider.parse()` بيشغّل CSS selector عادي
+(Scrapy/parsel) على الـ **string** ده — مفيش live DOM يتعدّى (pierce)
+خالص، فالمحتوى ده بيبقى **مستحيل الوصول له معماريًا**، حتى لو Camoufox
+بيشغّل متصفح حقيقي كامل وعدّى كل طبقة تانية على نفس الصفحة بالظبط (بند
+10). دي أول طبقة في المشروع كله "شغّل متصفح حقيقي" **مش كفاية ليها** —
+الفجوة معمارية (GenericSpider أصلاً مابيسألش عن live DOM، بس بيحلل
+string)، مش فجوة توقيت/stealth/click زي كل الفجوات اللي اتصلحت قبل
+كده (`post_load_wait_ms`/`click_selector`).
+
+**دليل حتمي، قابل للتكرار (مش تقريبي):** `INDEX_PAGE_SIZE` (10) و
+`is_shadow_wrapped` (كل index فردي) الاتنين deterministic — يعني عدد
+الـ items المتوقع من كراول حقيقي رقم دقيق: 5 بوست حقيقي فاضل في light
+DOM (index زوجي) + decoy twin واحد (`structural/decoy_data.py`، دايمًا
+light DOM، مش متأثر بالطبقة دي) = **6 بالظبط**، مش الـ 10 بوست الحقيقيين
+اللي `/` فعليًا بيولّدهم. اختبار جديد
+(`test_mock_target_camoufox_misses_every_shadow_dom_wrapped_post` في
+`tests/integration/test_mock_target_shadow_dom_live.py`) بيتأكد من
+الرقم ده بالظبط، مش بس "أقل من قبل".
+
+**الحل الحقيقي (لو حبينا نقفلها بعدين) محتاج تغيير معماري فعلي** —
+GenericSpider يكسب مسار استخراج يقدر يعدّي الـ shadow DOM (مثلاً
+Playwright locators بتسأل الصفحة الحية بدل parsel على `page.content()`)
+— مش متنفّذ دلوقتي؛ مهمة الجولة دي توثيق الفجوة بدليل دقيق قابل للتكرار،
+زي أسلوب `test_mock_target_live.py`/`test_mock_target_patchright_live.py`
+مع فجوات Anubis بتاعتهم.
+
+**اتّحقّق محليًا** قبل الدفع: test-environment's own pytest suite (92
+passed، 100% coverage — الطبقة الجديدة كسبت unit tests لـ
+`structural/shadow_dom.py` + `test_app.py` + `test_config.py`)، ruff
+نضيف على `test-environment/` نضيف (مفيش mypy --strict عليها — خارج
+نطاق `lint.yml`، زي باقي test-environment/mock-target)، وruff/mypy
+--strict على `src`/`tests` (مفيش كود src اتغيّر الجولة دي أصلاً — الفجوة
+موثّقة، مش متصلحة). **النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما يخلص،
+مش قبل كده.**
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

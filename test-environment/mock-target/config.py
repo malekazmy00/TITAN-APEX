@@ -49,6 +49,11 @@ class MockTargetConfig:
         # see structural/placeholder_content.py.
         self.enable_placeholder_content: bool = _env_bool("ENABLE_PLACEHOLDER_CONTENT", True)
         self.placeholder_delay_ms: int = _env_int("PLACEHOLDER_DELAY_MS", 500)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Shadow DOM round
+        # (محور 3): every other post renders inside a real, client-side
+        # -attached shadow root instead of plain light-DOM markup -- see
+        # structural/shadow_dom.py.
+        self.enable_shadow_dom: bool = _env_bool("ENABLE_SHADOW_DOM", True)
         self.markup_randomizer_interval_minutes: int = _env_int(
             "MARKUP_RANDOMIZER_INTERVAL_MINUTES", 15
         )

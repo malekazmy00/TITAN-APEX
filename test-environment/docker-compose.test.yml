@@ -61,6 +61,11 @@ services:
       # post_load_wait_ms (default 5000ms, docs/REQUIREMENTS.md section 9).
       ENABLE_PLACEHOLDER_CONTENT: ${ENABLE_PLACEHOLDER_CONTENT:-true}
       PLACEHOLDER_DELAY_MS: ${PLACEHOLDER_DELAY_MS:-500}
+      # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's Shadow DOM round:
+      # every other post renders inside a real, client-side-attached
+      # shadow root, invisible to a plain-string HTML parser
+      # (structural/shadow_dom.py) -- on by default like every other layer.
+      ENABLE_SHADOW_DOM: ${ENABLE_SHADOW_DOM:-true}
       MARKUP_RANDOMIZER_INTERVAL_MINUTES: ${MARKUP_RANDOMIZER_INTERVAL_MINUTES:-15}
       FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
       FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}
