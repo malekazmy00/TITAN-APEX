@@ -1290,6 +1290,61 @@ JSON API، الجولة المركّبة من بند 10، Test Targets التا�
 شغالة. Shadow DOM بقى محلول فعليًا (مش بس موثّق كـ Known Limitation) —
 لمين يختار `extraction_mode: live_dom` صراحة.
 
+### 13. DOM Virtualization — Known Limitation حقيقية لـ**الاتنين** parsed_html وlive_dom مع بعض (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md، محور 3، طلب المستخدم صراحة بعد بند 12)
+
+**الفكرة:** `/feed` دلوقتي بيحاكي virtualized list حقيقية — بس N بوست
+(افتراضي 5، `DOM_VIRTUALIZATION_WINDOW_SIZE`) موجودين فعليًا في الـ DOM
+في أي لحظة. مع كل batch جديد بيتحمّل من `/api/feed`، أقدم البوستات
+المعروضة بتتشال فعليًا من الـ DOM (`container.removeChild` — إزالة
+حقيقية، مش `display:none`) — نفس الآلية اللي React Window ومنصات
+social feed حقيقية بتستخدمها. القاعدة موثّقة ومُختبرة في Python
+(`structural/dom_virtualization.py`'s `excess_count`)، ومنعكسة يدويًا
+في الـ client-side script (`templates/feed.html`).
+
+**فجوة تمهيدية حقيقية اتكشفت في الطريق، مش جزء من سؤال الـ
+virtualization نفسه:** لا `CamoufoxProvider` ولا `PatchrightProvider`
+كان عندهم أي قدرة scroll خالص قبل الجولة دي — `PlaywrightMiddleware`'s
+scroll loop (موجود من Phase 2) **مستحيل معماريًا يوصله** لأي target
+وراء Anubis (`antibot_needed: true`): `ByparrMiddleware` بيرجّع
+response الأول، وScrapy بيوقف عن نداء `process_request` لباقي الـ
+middlewares بمجرد ما وحدة ترجّع response. يعني `/feed`'s المحتوى
+الديناميكي (بند 2.4) **ما كانش أصلاً قابل للوصول** عبر أي من الـ 3
+providers طول الوقت. الحل: وحدة مشتركة جديدة
+`src/providers/antibot/_scroll.py` (`scroll_to_load_lazy_content`) —
+نفس منطق `playwright_middleware.py`'s `_scroll_to_load_lazy_content`
+بالظبط، متلحقة الآن في `_default_camoufox_solve`/`_default_patchright_solve`
+(بعد `post_load_wait_ms`، عشان المحتوى الحقيقي يكون وصل الأول قبل ما
+نحاول نعمل scroll له). قيم ثابتة (8 attempts، 700ms pause) زي
+`PlaywrightMiddleware`'s الافتراضية بالظبط — مفيش constructor param
+جديد (YAGNI، مفيش حاجة حقيقية دلوقتي تحتاج تعديل per-target).
+
+**السؤال الحقيقي المفتوح:** بعد ما بقى فيه scroll حقيقي، هل
+`extraction_mode: live_dom` (بند 12's الحل لـ Shadow DOM) يقدر يمسك
+البوستات اللي "اتشالت" فعليًا من الـ DOM؟ **الفرضية (من المستخدم
+نفسه): لأ — المشكلتين مختلفتين في النوع.** Shadow DOM مشكلة
+*encapsulation* (المحتوى موجود في live DOM، بس متغطّي عن string
+parser). Virtualization مشكلة *وجود فعلي + توقيت*: البوست اللي
+اتشال حقيقي مش موجود خالص في أي لحظة قراءة — سواء `page.content()`
+(string) أو `page.locator()` (live query)، الاتنين بيقروا حالة الـ
+DOM **في نفس اللحظة** (بعد ما الـ scroll loop يخلص)، فمفيش حيلة
+استخراج تقدر تسترجع حاجة مش موجودة أصلاً وقت القراءة.
+
+**Config جديدين للتجربة (نفس target/selectors، extraction_mode بس
+مختلف):** `mock_target_feed_virtualized_parsed_html.yaml` و
+`mock_target_feed_virtualized_live_dom.yaml` — الاتنين بيستهدفوا
+`/feed` عبر camoufox. **التوقع الحتمي، مش تقريبي:** بما إن
+`FEED_PAGE_SIZE` (10) أكبر من `DOM_VIRTUALIZATION_WINDOW_SIZE` (5)،
+أول batch لوحده كفاية إن الـ trim يوصل بالضبط لـ 5 — يعني `len(items)
+== 5` متوقعة من الاتنين، بغض النظر عن عدد دورات الـ scroll الفعلية.
+
+**اتّحقّق محليًا** قبل الدفع: test-environment's own pytest suite
+(101 passed، 100% coverage — طبقة جديدة `dom_virtualization.py` +
+`_scroll.py` كسبوا unit tests كاملة)، ruff على `test-environment/`،
+230 unit+contract test PASSED على `src` (88.64% coverage)، ruff/mypy
+--strict على `src`/`tests` (نفس مشكلة `patchright.sync_api` المحلية
+القديمة غير المرتبطة). **النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما
+يخلص، مش قبل كده.**
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

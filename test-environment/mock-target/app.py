@@ -154,6 +154,8 @@ def create_app(
                 "feed.html",
                 classes=_classes(),
                 page_size=cfg.feed_page_size,
+                dom_virtualization_enabled=cfg.enable_dom_virtualization,
+                dom_virtualization_window_size=cfg.dom_virtualization_window_size,
             )
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)

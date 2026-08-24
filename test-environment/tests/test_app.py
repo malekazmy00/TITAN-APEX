@@ -143,6 +143,55 @@ def test_feed_page_sets_a_session_cookie(client: FlaskClient) -> None:
     assert "mocktarget_session" in response.headers.get("Set-Cookie", "")
 
 
+def test_feed_page_ships_the_virtualization_config_when_enabled(client: FlaskClient) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 13: the default config
+    (ENABLE_DOM_VIRTUALIZATION default True) ships the eviction rule
+    (virtualizationEnabled/windowSize) client-side -- a Flask test client
+    can't execute the script, so this checks the static markers a real
+    browser's JS would read, the same shape
+    test_placeholder_content_shows_loading_text_with_the_real_text_hidden
+    already uses for its own script."""
+    body = client.get("/feed").get_data(as_text=True)
+
+    assert "const virtualizationEnabled = true;" in body
+    assert "const windowSize = 5;" in body  # the default DOM_VIRTUALIZATION_WINDOW_SIZE
+    assert "removeChild" in body
+
+
+def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -> None:
+    """Failure-adjacent case: disabling the layer must ship
+    virtualizationEnabled = false, so the real client-side script never
+    evicts anything -- same "one layer at a time, each verifiable alone"
+    isolation every other layer's own disabled-case test already has."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    cfg.enable_dom_virtualization = False
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/feed").get_data(as_text=True)
+
+    assert "const virtualizationEnabled = false;" in body
+
+
+def test_feed_page_window_size_is_configurable(tmp_path: Path) -> None:
+    """A non-default window size actually reaches the rendered script,
+    not silently ignored in favour of the default."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.enable_cookie_wall = False
+    cfg.dom_virtualization_window_size = 3
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/feed").get_data(as_text=True)
+
+    assert "const windowSize = 3;" in body
+
+
 def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None:
     """Failure-adjacent case 4: disabling the randomizer must not crash
     template rendering -- every logical name still resolves, just to ''."""

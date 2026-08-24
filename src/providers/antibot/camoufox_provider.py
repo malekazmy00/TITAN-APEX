@@ -38,6 +38,21 @@ past ``load``) using a Chromium engine instead of Camoufox's Firefox.
 
 The actual browser-driving call is injectable (``solve_fn``) so unit
 tests never launch a real browser or touch the network.
+
+**Scroll capability (docs/REQUIREMENTS.md section 9 entry 13):** this
+provider had none at all before -- unlike
+:func:`~src.middlewares.playwright_middleware.render_with_playwright`,
+which has scrolled to load lazy content since Phase 2, that middleware's
+own ``process_request`` never actually runs for an Anubis-protected
+target (``antibot_needed: true``), since ``ByparrMiddleware`` already
+returns a response first and Scrapy stops walking the downloader-
+middleware chain once one does. Any Anubis-protected, infinite-scroll-
+shaped target (test-environment/mock-target's own ``/feed``) was
+structurally unreachable by that scroll loop, discovered while building
+the DOM Virtualization round -- see
+:func:`~src.providers.antibot._scroll.scroll_to_load_lazy_content`,
+called unconditionally here now, the identical logic and justification
+``render_with_playwright`` already established.
 """
 
 from __future__ import annotations
@@ -51,6 +66,7 @@ from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.logging_config import get_logger
 from src.providers.antibot._live_dom import extract_live_dom_items
+from src.providers.antibot._scroll import scroll_to_load_lazy_content
 
 DEFAULT_TIMEOUT_MS = 30_000
 # How long to wait after the page's `load` event before reading content
@@ -59,6 +75,15 @@ DEFAULT_TIMEOUT_MS = 30_000
 # round-trip, confirmed sufficient by hand against the real
 # test-environment/ stack (docs/REQUIREMENTS.md section 9 entry 4/round 3).
 DEFAULT_POST_LOAD_WAIT_MS = 5_000
+# docs/REQUIREMENTS.md section 9 entry 13: same values
+# playwright_middleware.py's own DEFAULT_MAX_SCROLL_ATTEMPTS/
+# DEFAULT_SCROLL_PAUSE_MS already use, for consistency -- not exposed as
+# a constructor parameter (unlike timeout_ms/post_load_wait_ms) since no
+# real per-target tuning need has been demonstrated yet, the same "add
+# configurability only where a real gap proves it's needed" principle
+# post_load_wait_ms itself was originally added under.
+DEFAULT_MAX_SCROLL_ATTEMPTS = 8
+DEFAULT_SCROLL_PAUSE_MS = 700
 
 
 class _RawSolve(NamedTuple):
@@ -190,6 +215,17 @@ def _default_camoufox_solve(
                     # triggered (e.g. a consent-wall reload) time to
                     # settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
+                    # docs/REQUIREMENTS.md section 9 entry 13: scrolled
+                    # *after* the wait above, not before -- real content
+                    # needs to actually be there first (past Anubis/the
+                    # cookie wall) for there to be anything lazy-loading
+                    # JS could load more of. Harmless on a page with no
+                    # infinite scroll at all (src.providers.antibot._scroll's
+                    # own docstring) -- called unconditionally, same
+                    # justification `render_with_playwright` already has.
+                    scroll_to_load_lazy_content(
+                        page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
+                    )
                     final_response = last_main_frame_response or initial_response
                     content_type = (
                         final_response.headers.get("content-type", "")

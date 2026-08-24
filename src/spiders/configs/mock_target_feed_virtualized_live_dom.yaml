@@ -1,0 +1,34 @@
+# docs/REQUIREMENTS.md section 9 entry 13 (DOM Virtualization round):
+# the `extraction_mode: live_dom` half of a deliberate two-config
+# experiment against test-environment/mock-target's `/feed` --
+# `mock_target_feed_virtualized_parsed_html.yaml` is the other half,
+# identical target/selectors, only `extraction_mode` differs.
+#
+# Unlike entry 12's Shadow DOM fix, `live_dom`'s shadow-piercing
+# `page.locator()` capability is not expected to help here: piercing
+# reaches content that exists in the live DOM but is merely
+# *encapsulated* from a string-based parser's view. A post evicted by
+# `structural/dom_virtualization.py`'s own layer isn't encapsulated
+# anywhere -- it has been genuinely, unambiguously removed
+# (`container.removeChild`) from the DOM entirely by the time either
+# extraction strategy reads the page, once past the same
+# antibot-provider scroll loop both configs equally rely on to trigger
+# any loading at all. Not assumed either way, though -- see
+# docs/REQUIREMENTS.md for the real, CI-confirmed result.
+name: mock_target_feed_virtualized_live_dom
+start_urls:
+  - "http://localhost:8080/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+extraction_mode: live_dom
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

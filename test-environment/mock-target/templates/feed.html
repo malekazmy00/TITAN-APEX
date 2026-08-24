@@ -22,6 +22,15 @@
       let loading = false;
       const container = document.querySelector('[data-role="feed"]');
       const loadingEl = document.getElementById("loading");
+      // DOM Virtualization (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
+      // محور 3, docs/REQUIREMENTS.md section 9 entry 13): mirrors
+      // structural/dom_virtualization.py's excess_count(rendered_count,
+      // window_size) by hand -- that module is this rule's real,
+      // unit-tested source of truth; this is the client-side rendering
+      // of it, same shape structural/ab_variant.py's container_tag_for
+      // already has for its own server-side decision.
+      const virtualizationEnabled = {{ dom_virtualization_enabled | tojson }};
+      const windowSize = {{ dom_virtualization_window_size }};
 
       function renderComments(comments, parent) {
         comments.forEach(function (comment) {
@@ -72,6 +81,20 @@
           article.appendChild(commentsDiv);
           container.appendChild(article);
         });
+
+        if (virtualizationEnabled) {
+          // Evict the *oldest* rendered posts once over the window --
+          // genuinely removed from the DOM (removeChild), not hidden.
+          // A raw HTML/live-DOM read after this point will never see
+          // them again; see structural/dom_virtualization.py's own
+          // docstring for why that's a fundamentally different problem
+          // from every other structural challenge here.
+          let excess = container.children.length - windowSize;
+          while (excess > 0) {
+            container.removeChild(container.firstElementChild);
+            excess -= 1;
+          }
+        }
       }
 
       function loadMore() {

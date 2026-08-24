@@ -66,6 +66,13 @@ services:
       # shadow root, invisible to a plain-string HTML parser
       # (structural/shadow_dom.py) -- on by default like every other layer.
       ENABLE_SHADOW_DOM: ${ENABLE_SHADOW_DOM:-true}
+      # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's DOM Virtualization
+      # round: /feed keeps only a bounded window of posts genuinely
+      # present in the DOM at once, evicting the oldest as new ones load
+      # (structural/dom_virtualization.py) -- on by default like every
+      # other layer.
+      ENABLE_DOM_VIRTUALIZATION: ${ENABLE_DOM_VIRTUALIZATION:-true}
+      DOM_VIRTUALIZATION_WINDOW_SIZE: ${DOM_VIRTUALIZATION_WINDOW_SIZE:-5}
       MARKUP_RANDOMIZER_INTERVAL_MINUTES: ${MARKUP_RANDOMIZER_INTERVAL_MINUTES:-15}
       FEED_RATE_LIMIT_THRESHOLD: ${FEED_RATE_LIMIT_THRESHOLD:-20}
       FEED_RATE_LIMIT_WINDOW_SECONDS: ${FEED_RATE_LIMIT_WINDOW_SECONDS:-60}

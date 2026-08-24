@@ -1,0 +1,41 @@
+# docs/REQUIREMENTS.md section 9 entry 13 (DOM Virtualization round,
+# docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md محور 3): the
+# `extraction_mode: parsed_html` half of a deliberate two-config
+# experiment against test-environment/mock-target's `/feed` --
+# `mock_target_feed_virtualized_live_dom.yaml` is the other half, same
+# target/selectors, only `extraction_mode` differs.
+#
+# `/feed` (test-environment/README.md section 2.4) lazily appends posts
+# fetched from `/api/feed` as the page is scrolled -- CamoufoxProvider
+# only gained the scroll capability needed to trigger that loading at all
+# this same round (docs/REQUIREMENTS.md section 9 entry 13's own
+# "Scroll capability" note: PlaywrightMiddleware's identical scroll loop
+# was structurally unreachable for any Anubis-protected target, since
+# ByparrMiddleware already returns a response first). Now that scrolling
+# actually happens, `structural/dom_virtualization.py`'s own layer
+# (section 2.9) evicts the *oldest* rendered posts once their count
+# exceeds `DOM_VIRTUALIZATION_WINDOW_SIZE` (default 5) -- a real DOM
+# removal, not a visibility trick.
+#
+# The real, open question this config (and its live_dom sibling) is the
+# first live test of: can either extraction strategy recover posts that
+# were genuinely, unambiguously removed from the DOM by the time either
+# one reads it? Not assumed either way -- see docs/REQUIREMENTS.md for
+# the real, CI-confirmed result.
+name: mock_target_feed_virtualized_parsed_html
+start_urls:
+  - "http://localhost:8080/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+extraction_mode: parsed_html
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'

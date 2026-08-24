@@ -22,6 +22,8 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
         "ENABLE_PLACEHOLDER_CONTENT",
         "PLACEHOLDER_DELAY_MS",
         "ENABLE_SHADOW_DOM",
+        "ENABLE_DOM_VIRTUALIZATION",
+        "DOM_VIRTUALIZATION_WINDOW_SIZE",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -40,6 +42,8 @@ def test_defaults_when_nothing_set(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.enable_placeholder_content is True
     assert cfg.placeholder_delay_ms == 500
     assert cfg.enable_shadow_dom is True
+    assert cfg.enable_dom_virtualization is True
+    assert cfg.dom_virtualization_window_size == 5
 
 
 def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,6 +57,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv("ENABLE_AB_VARIANTS", "0")
     monkeypatch.setenv("ENABLE_PLACEHOLDER_CONTENT", "no")
     monkeypatch.setenv("ENABLE_SHADOW_DOM", "false")
+    monkeypatch.setenv("ENABLE_DOM_VIRTUALIZATION", "false")
 
     cfg = get_config()
 
@@ -64,6 +69,7 @@ def test_each_layer_individually_toggleable(monkeypatch: pytest.MonkeyPatch) -> 
     assert cfg.enable_ab_variants is False
     assert cfg.enable_placeholder_content is False
     assert cfg.enable_shadow_dom is False
+    assert cfg.enable_dom_virtualization is False
 
 
 def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,9 +78,11 @@ def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MARKUP_RANDOMIZER_INTERVAL_MINUTES", "5")
     monkeypatch.setenv("FEED_RATE_LIMIT_THRESHOLD", "50")
     monkeypatch.setenv("PLACEHOLDER_DELAY_MS", "1200")
+    monkeypatch.setenv("DOM_VIRTUALIZATION_WINDOW_SIZE", "3")
 
     cfg = get_config()
 
     assert cfg.markup_randomizer_interval_minutes == 5
     assert cfg.feed_rate_limit_threshold == 50
     assert cfg.placeholder_delay_ms == 1200
+    assert cfg.dom_virtualization_window_size == 3

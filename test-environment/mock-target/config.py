@@ -54,6 +54,12 @@ class MockTargetConfig:
         # -attached shadow root instead of plain light-DOM markup -- see
         # structural/shadow_dom.py.
         self.enable_shadow_dom: bool = _env_bool("ENABLE_SHADOW_DOM", True)
+        # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's DOM Virtualization
+        # round (محور 3): /feed keeps only a bounded window of posts
+        # genuinely present in the DOM at once, evicting the oldest as new
+        # ones load -- see structural/dom_virtualization.py.
+        self.enable_dom_virtualization: bool = _env_bool("ENABLE_DOM_VIRTUALIZATION", True)
+        self.dom_virtualization_window_size: int = _env_int("DOM_VIRTUALIZATION_WINDOW_SIZE", 5)
         self.markup_randomizer_interval_minutes: int = _env_int(
             "MARKUP_RANDOMIZER_INTERVAL_MINUTES", 15
         )

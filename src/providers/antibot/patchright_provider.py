@@ -28,6 +28,13 @@ has been run against it for real.
 
 The actual browser-driving call is injectable (``solve_fn``) so unit tests
 never launch a real browser or touch the network.
+
+**Scroll capability (docs/REQUIREMENTS.md section 9 entry 13):** same
+gap and same fix as
+:class:`~src.providers.antibot.camoufox_provider.CamoufoxProvider`'s own
+module docstring documents -- see that for the full explanation of why
+``PlaywrightMiddleware``'s existing scroll loop was structurally
+unreachable for any Anubis-protected target.
 """
 
 from __future__ import annotations
@@ -41,6 +48,7 @@ from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
 from src.logging_config import get_logger
 from src.providers.antibot._live_dom import extract_live_dom_items
+from src.providers.antibot._scroll import scroll_to_load_lazy_content
 
 DEFAULT_TIMEOUT_MS = 30_000
 # Same reasoning and same default as CamoufoxProvider's
@@ -48,6 +56,10 @@ DEFAULT_TIMEOUT_MS = 30_000
 # Anubis's own real, difficulty-2-by-default proof-of-work challenge to
 # compute and round-trip.
 DEFAULT_POST_LOAD_WAIT_MS = 5_000
+# Same values and same reasoning as CamoufoxProvider's identical
+# constants (docs/REQUIREMENTS.md section 9 entry 13).
+DEFAULT_MAX_SCROLL_ATTEMPTS = 8
+DEFAULT_SCROLL_PAUSE_MS = 700
 
 
 class _RawSolve(NamedTuple):
@@ -166,6 +178,13 @@ def _default_patchright_solve(
                     # if a click just happened above, give whatever it
                     # triggered time to settle before reading content.
                     page.wait_for_timeout(post_load_wait_ms)
+                    # Same reasoning and order as CamoufoxProvider's
+                    # identical comment (docs/REQUIREMENTS.md section 9
+                    # entry 13): scrolled after the wait above, once real
+                    # content has actually had a chance to arrive.
+                    scroll_to_load_lazy_content(
+                        page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
+                    )
                     final_response = last_main_frame_response or initial_response
                     content_type = (
                         final_response.headers.get("content-type", "")

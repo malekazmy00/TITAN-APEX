@@ -412,6 +412,38 @@ Anubis/the cookie wall, same as 2.5's own recipe) and confirm exactly 5
 elements (5 light-DOM real posts + 1 decoy twin) — never the 10 real
 posts `/` actually generates.
 
+### 2.9 DOM Virtualization
+
+`structural/dom_virtualization.py` (the rule) + `templates/feed.html`'s
+own script (the client-side mirror of it): `/feed` keeps only a bounded
+window (`DOM_VIRTUALIZATION_WINDOW_SIZE`, default `5`) of posts
+genuinely present in the DOM at any one time. As more posts load in from
+`/api/feed` (the same lazy-loading fetch loop 2.4 already documents),
+the *oldest* rendered posts are evicted — `container.removeChild`, a
+real DOM removal, not a `display:none`/CSS-hidden trick — once the
+rendered count exceeds the window. This is the same technique a real
+virtualized list (react-window, an actual social-feed client) uses to
+keep DOM node count bounded regardless of how much total content has
+been scrolled through.
+
+**Genuinely different in kind from every other structural challenge
+here** (`structural/dom_virtualization.py`'s own docstring has the full
+reasoning): honeypots/decoy-data/Shadow DOM (2.2/2.3/2.8) are all about
+*what's reachable* in a single, static DOM snapshot — a visibility
+check, an encapsulation boundary. This is about *time*: an evicted post
+is not merely hidden or hard to select — by the time anything (a raw
+HTML string, or a live DOM query) reads the page, it is genuinely,
+unambiguously gone. See `docs/REQUIREMENTS.md` section 9 entry 13 for
+the real, evidenced result of testing exactly that against both of
+`GenericSpider`'s own extraction modes (2.8's `parsed_html`/`live_dom`).
+
+**Verify it's active:** load `/feed` in a real browser (past Anubis),
+scroll to trigger a few `/api/feed` fetches, then check
+`document.querySelectorAll('[data-role="post"]').length` in devtools —
+it should stay at (or very near) `DOM_VIRTUALIZATION_WINDOW_SIZE`
+regardless of how far you've scrolled, never growing unbounded the way
+2.4's own plain lazy-loading description alone would suggest.
+
 ## Section 3 — Extensibility
 
 Every security layer and structural challenge is independently
@@ -430,6 +462,8 @@ isolated and tested alone — not just all-on together:
 | `ENABLE_PLACEHOLDER_CONTENT` | `true` | 2.7 Loading-placeholder leakage |
 | `PLACEHOLDER_DELAY_MS` | `500` | 2.7 swap-in delay |
 | `ENABLE_SHADOW_DOM` | `true` | 2.8 Shadow DOM |
+| `ENABLE_DOM_VIRTUALIZATION` | `true` | 2.9 DOM Virtualization |
+| `DOM_VIRTUALIZATION_WINDOW_SIZE` | `5` | 2.9 max posts genuinely in the DOM at once |
 | `MARKUP_RANDOMIZER_INTERVAL_MINUTES` | `15` | 2.1 rotation interval |
 | `FEED_RATE_LIMIT_THRESHOLD` | `20` | 2.4 requests/window before 429 |
 | `FEED_RATE_LIMIT_WINDOW_SECONDS` | `60` | 2.4 sliding window size |
