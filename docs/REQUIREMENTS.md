@@ -1115,8 +1115,24 @@ randomizer، cookie wall، A/B variants، ...). الجولة دي مختلفة: 
 **اتّحقّق محليًا** (ruff/mypy --strict على الملف المعدّل، 189
 unit+contract test PASSED — الاختبار الجديد نفسه بيتخطى (skip) محليًا
 بسبب غياب `TITAN_BYPARR_URL`، زي كل اختبار حي تاني في المشروع، وده
-متوقع ومقصود). **النتيجة الحقيقية من CI هتتسجّل هنا بمجرد ما يخلص، مش
-قبل كده** — نفس مبدأ كل جولة سابقة في القسم ده: دليل حقيقي مش افتراض.
+متوقع ومقصود).
+
+**✅✅✅ اتأكّد فعليًا (CI run [32677298333](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32677298333)) — دليل حقيقي من الـ job logs، مش افتراض:**
+`25 passed, 2 warnings in 285.49s (0:04:45)`، صفر FAILED في اللوج كله.
+الاختبار الجديد نفسه اتأكّد PASSED صراحة:
+```
+tests/integration/test_mock_target_camoufox_live.py::test_mock_target_camoufox_crawl_gets_real_posts_and_never_reaches_a_real_honeypot PASSED
+```
+يعني في نفس الطلب الحقيقي ده: Camoufox عدّى Anubis (Anubis's log نفسه
+أظهر `"new challenge issued"` لـ Camoufox's requests بالظبط، ومفيش
+`explicit deny` غير لـ Byparr/plain-Scrapy زي المتوقع تمامًا) + عدّى
+cookie wall + اتعامل صح مع أي A/B variant/markup randomizer class وقع
+عليها الطلب + مالمسش أي واحد من الـ 4 honeypot links المخفيين
+(`honeypot_triggers.log` ثابت الحجم قبل وبعد). باقي الـ 24 اختبار
+(byparr/patchright's sentinels، JSON API، Test Targets التانية،
+test-environment's 81 unit test) كلهم PASSED برضه — regression check
+كامل، مش بس الاختبار الجديد. الأربعة طبقات دي مؤكدين شغالين مع بعض
+بدليل CI حقيقي، مش افتراض مبني على نجاح كل طبقة لوحدها.
 
 **بعد كده بس:** خطوة تانية (Shadow DOM كطبقة خامسة، جولة تصعيد صعوبة
 حقيقية هذه المرة) — مش تبدأ إلا لو الجولة دي اتأكّدت بدليل CI حقيقي،
