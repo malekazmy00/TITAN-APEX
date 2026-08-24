@@ -1697,6 +1697,41 @@ unit+contract test PASSED (85.25% coverage، مش بعيد عن الحد لكن 
 نفس أوامر `.github/workflows/ci.yml` (منفصلة، مش مجمّعة)، مش تركيبة
 مريحة بس مختلفة عن الواقع.
 
+**✅✅ مُختبر ومحلول فعليًا بدليل CI حقيقي — CI run
+[32785461995](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32785461995)
+(commit `e49c745`)، Lint run
+[32785461981](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32785461981):**
+كل الخطوات نجحت فعليًا — `Unit tests (coverage gate >= 85%)`: 264
+test PASSED، 86.08% coverage (نفس الرقم اللي اتأكّد منه محليًا فوق).
+`Contract tests`: 29 test PASSED. `test-environment unit tests`: 137
+test PASSED، 100% coverage. **الاختبارات الحية الـ3 الجديدة نجحت
+بالاسم فعليًا:**
+`test_login_flow_reaches_protected_data_after_a_real_post_and_csrf_token`
+PASSED (5 items حقيقية بعد تسجيل دخول ناجح فعلي: GET /login → parse
+CSRF → POST → session cookie → /feed-protected)،
+`test_feed_protected_without_any_login_yields_nothing_not_a_crash`
+PASSED (0 items، الرفض 401/403 اتسجّل في اللوج مش crash)،
+`test_session_expired_mid_crawl_after_a_real_login_yields_nothing_not_a_crash`
+PASSED (0 items، `session_expired_mid_crawl` اتسجّل في اللوج فعليًا).
+
+**ملاحظة صادقة (مش هتتمسح، append فقط):** أول محاولة تشغيل لنفس الـ
+commit (`attempt 1` من نفس الـ run) فشلت فعليًا — بس في اختبار قديم مش
+له علاقة بالجولة دي خالص:
+`tests/integration/test_mock_target_live_dom_live.py::test_mock_target_live_dom_recovers_every_shadow_dom_wrapped_post`
+(بند 12، Shadow DOM، مبيستخدمش `login_flow` خالص) فشل بخطأ Playwright
+حقيقي `Page.click: Target crashed` أثناء انتظار `#accept-cookies` —
+كراش حقيقي في عملية المتصفح (camoufox)، مش خطأ منطقي في الكود. اتأكّد
+إنه flake بإعادة تشغيل الـ job الفاشل بس (`rerun_failed_jobs`) مرة
+واحدة — نجح فعليًا في المحاولة التانية (`attempt 2`، نفس الـ commit
+`e49c745`)، فده يأكّد إنه مش مرتبط بالتغييرات دي (مش بـ`login_flow`،
+ومش بـ`handle_httpstatus_list` اللي بقى unconditional — الاختبار ده
+بيستهدف `/` مش أي مسار محمي).
+
+**الخلاصة:** بند Login/Session (POST + CSRF + session persistence +
+اكتشاف انتهاء الصلاحية) اتحل واتأكّد بدليل CI حقيقي كامل. Auto
+re-login مؤجّل صراحة بطلب المستخدم — لو احتجناه لاحقًا هيبقى بند
+منفصل.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

@@ -60,11 +60,11 @@
 
 | العقبة | الوصف | حالتنا |
 |---|---|---|
-| Login (POST + session) | تسجيل دخول أساسي | ⬜ Known Limitation #1 |
-| CSRF token rotation | توكن بيتغيّر كل طلب | ⬜ غير مُختبر |
-| 2FA/MFA | كود إضافي بعد كلمة السر | ⬜ غير مُختبر (خارج النطاق أخلاقيًا لمعظم الحالات) |
+| Login (POST + session) | تسجيل دخول أساسي | ✅✅ **مُختبر ومحلول فعليًا بدليل CI** (docs/REQUIREMENTS.md قسم 9: بند 15 — `/login` حقيقي (GET فورم + POST بيانات) على mock-target، `perform_login_and_navigate` بيملأ الفورم ويضغط submit فعليًا عبر camoufox/patchright، الـ session cookie بيتحمل تلقائيًا لأي طلب لاحق لنفس الـ target داخل نفس الـ `solve()`، مؤكد فعليًا CI run 32785461995: `test_login_flow_reaches_protected_data_after_a_real_post_and_csrf_token` PASSED — 5 items حقيقية بعد تسجيل دخول ناجح؛ ومحاولة بدون تسجيل دخول بترفض بوضوح 401/403 موثّق في اللوج مش crash، `test_feed_protected_without_any_login_yields_nothing_not_a_crash` PASSED) |
+| CSRF token rotation | توكن بيتغيّر كل طلب | ✅✅ **مُختبر ومحلول فعليًا بدليل CI** (docs/REQUIREMENTS.md قسم 9: بند 15 — `CsrfTokenStore` بيولّد توكن عشوائي جديد كل `GET /login` وبيستهلكه (single-use حقيقي، مش مجرد "بيتغيّر مع كل تحميل") أول ما `POST` يستخدمه بنجاح؛ المتصفح نفسه بيقرأ ويبعت التوكن من الفورم الحقيقي، مش الكود بيبنيه، مؤكد فعليًا CI run 32785461995 (نفس الاختبار الحي أعلاه)) |
+| 2FA/MFA | كود إضافي بعد كلمة السر | ⬜ غير مُختبر (خارج النطاق أخلاقيًا لمعظم الحالات) — مؤجّل صراحة لـ PHASE_2_BACKLOG لو احتجناه |
 | OAuth/SSO redirects | تفويض عبر جهة خارجية | ⬜ غير مُختبر |
-| Session expiry + إعادة مصادقة تلقائية | كشف انتهاء الجلسة والتجديد | ⬜ غير مُختبر |
+| Session expiry + إعادة مصادقة تلقائية | كشف انتهاء الجلسة والتجديد | 🟡 **اكتشاف فقط اتحل ومؤكد بدليل CI** — التجديد التلقائي (auto re-login) مؤجّل صراحة بطلب المستخدم لبند لاحق. docs/REQUIREMENTS.md قسم 9 بند 15: مسار اختباري حتمي `/test-expire-session` (زي `/honeypot-trap` بالظبط) بيلغي الجلسة عمدًا بين تسجيل الدخول والوصول للهدف الحقيقي، `log_login_outcome` بيسجّل `session_expired_mid_crawl` بوضوح في اللوج بدل فشل صامت أو بيانات فاضية من غير تفسير، مؤكد فعليًا CI run 32785461995: `test_session_expired_mid_crawl_after_a_real_login_yields_nothing_not_a_crash` PASSED |
 | Session tied to fingerprint/IP | الجلسة بترفض لو الـ IP أو الـ UA اتغيّر | ⬜ غير مُختبر |
 
 ## المحور 6 — محتوى غير متوقع (Unexpected UX)
