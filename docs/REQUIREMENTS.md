@@ -1881,6 +1881,66 @@ PASSED (0 items — Anubis's own logs في نفس الـrun أكّدت السب�
 `"scroll"` trigger (مش live-CI-مُختبر end-to-end الجولة دي) لسه موثّق
 وقائم زي ما اتشرح فوق.
 
+### 17. F5-class طبقة سلوكية متعددة الإشارات (TLS/JA4 + fpscanner + mouse/scroll telemetry) — تجربة على branch منفصل (محور "المستوى 2" الأخير)
+
+**السياق:** آخر بند في Level 2، بناءً على بحث سابق عن أقرب تطابق مفتوح
+المصدر لمعمارية F5/DataDome/Akamai الحقيقية (3 طبقات كشف مع بعض، مش
+تحدي واحد سطحي زي Anubis). قبل أي كود، اتعمل **بحث تأثير كامل** لأن
+الجزء الأول (JA4/TLS) بيحتاج تغيير حقيقي: الـstack دلوقتي من غير TLS
+خالص (قرار موثّق سابقًا في `docker-compose.test.yml`'s تعليقات
+الخاصة بـAnubis — *"Anubis has no built-in HTTPS server at all...
+would be a whole additional container + getting Byparr's Chromium to
+trust a self-signed CA, an unverified extra failure surface for no
+real benefit here"*).
+
+**جدول التأثير** (اتسلّم للمستخدم قبل أي كود، مُلخّص هنا): أعلى نقطتين
+خطورة حقيقيتين — (أ) `browser.new_page()` في Camoufox/Patchright
+(كود مشترك تعتمد عليه كل الاختبارات الحية)، (ب) proxy جديد كليًا
+(HAProxy + Lua JA4 plugin) كنقطة فشل بنيوية جديدة. باقي النقاط (Anubis
+نفسه، mock-target، Scrapy's downloader، `_live_helpers.py`) بدون تأثير
+طالما التزمنا بعدم لمس أي route/config موجود.
+
+**قرار المستخدم:** التنفيذ على branch تجريبي منفصل تمامًا
+(`claude/ja4-experiment`, من HEAD مستقر لـ
+`claude/osint-scraping-platform-wnuyk6`)، خطوة بخطوة، مع تشغيل **كل**
+الـ37+ اختبار حي القديم بعد كل خطوة مؤثرة (مش بس في النهاية) — عشان
+لو حاجة اتكسرت نعرف بالظبط أي خطوة كانت السبب. شرط إضافي: التفرقة
+الصريحة بين "Byparr فشل بسبب Anubis rejection" (القديم، موثّق من زمان)
+و"Byparr فشل بسبب TLS certificate error" (لو حصل مستقبلًا) — رسالتين
+مختلفتين تمامًا، مش نفس الفشل.
+
+**Step A (مُنفّذة، مُتأكّدة فعليًا):** إضافة `ignore_https_errors=True`
+لـ`browser.new_page()` في الاتنين (Camoufox + Patchright)، من غير أي
+بنية تحتية جديدة لسه (مفيش proxy لسه) — الهدف الوحيد من الخطوة دي هو
+إثبات إن التعديل المشترك ده لوحده مش بيكسر أي حاجة قبل ما نضيف أي حاجة
+فوقه.
+
+- اكتشاف حقيقي أثناء التنفيذ (mypy، مش افتراض): Camoufox نفسه بيرجّع
+  `Union[Browser, BrowserContext]` (مفيش py.typed marker) — فحصت مصدر
+  camoufox نفسه (`sync_api.py`'s `NewBrowser`) وأكّدت إن المسار الفعلي
+  اللي بيتنفّذ هنا (`persistent_context` مش متمرّر) بيرجّع `Browser`
+  حقيقي دايمًا، فالخيار صحيح وقت التشغيل — `type: ignore[call-arg]`
+  موضعي بشرح كامل، مش تجاهل أعمى.
+- **❌ CI run [32909141714](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32909141714)
+  (commit `0b10b98`) فشل فعليًا في المحاولة الأولى** — اختبارين من 37:
+  `test_progressive_parsed_html_recovers_every_virtualization_window`
+  (اتوقّع 25، رجع 20 — نفس عائلة اختبار اتشافت flaky قبل كده في الجلسة
+  دي بنتيجة مختلفة 23/25) و
+  `test_login_flow_reaches_protected_data_after_a_real_post_and_csrf_token`
+  (اتوقّع 5، **رجع صفر** — `Page.fill: Target page, context or browser
+  has been closed` وهو بينتظر `#username`، بيلمس بالظبط كود Camoufox
+  اللي اتعدّل). الاتنين اتعاملوا كـ"يحتاجوا تأكيد حقيقي، مش افتراض
+  فوري إنهم flakes" — `rerun_failed_jobs` مرة واحدة (نفس السابقة في
+  الجلسة دي).
+- **✅ نفس الـrun، المحاولة التانية: 37/37 نجحوا بالكامل**، بما فيهم
+  الاتنين اللي فشلوا قبل كده — دليل حقيقي إنهم كانوا flakes (ضغط موارد
+  CI)، مش رجرشن حقيقي مرتبط بـ`ignore_https_errors`. مسجّل صراحة، مش
+  ممسوح.
+
+**التالي:** Step B — إضافة HAProxy + JA4 Lua plugin (proxy جديد كليًا،
+port معزول، شهادة self-signed) قدام Anubis من غير أي تعديل عليه، ثم
+إعادة تشغيل الـ37+ اختبار كامل تاني قبل أي خطوة تالية.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
