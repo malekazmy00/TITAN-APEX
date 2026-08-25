@@ -1855,6 +1855,32 @@ unit tests` كلها نجحت زي المتوقع (مفيش كود `src/` جدي
 واتخطّت نظيف محليًا. **CI run جديد لسه محتاج تأكيد** — هيتسجّل هنا
 بمجرد ما يخلص.
 
+**✅✅ مُختبر ومحلول فعليًا بدليل CI حقيقي — CI run
+[32849689626](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32849689626)
+(commit `b0c1c62`)، Lint run
+[32849689586](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32849689586):**
+كل الخطوات نجحت — `Unit tests`/`Contract tests`/`test-environment unit
+tests` زي المعتاد، و`Integration tests` نجحت بالكامل هالمرة (37
+passed، 0 failed). **الاختبارات الحية الـ3 نجحت بالاسم فعليًا بالأرقام
+الحقيقية المُصحَّحة:**
+`test_unhandled_interstitial_blocks_further_loading_after_the_first_batch`
+PASSED (5 items — الـinterstitial منع أي batch زيادة فعليًا، مش artifact
+غير مرتبط، بفضل `progressive_extraction`)،
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch`
+PASSED (15 item — `click_selector` قفل الـinterstitial قبل أي scroll
+فعليًا، كل الـ3 batches اترجعوا)،
+`test_patchright_is_still_denied_by_anubis_same_as_every_other_route`
+PASSED (0 items — Anubis's own logs في نفس الـrun أكّدت السبب بالحرف:
+`"explicit deny"` بقاعدة `bot/headless-chrome`، بالظبط زي التوثيق
+الأسبق لجولة cookie wall).
+
+**الخلاصة:** الفرضية الأصلية كانت غلط، اتصلحت بأدلة حقيقية مش افتراض،
+واتأكّدت فعليًا بعد الإصلاح. بند Interstitials اتحل بالكامل — نفس آلية
+`click_selector` بتاعة cookie wall عمّمت بنجاح على عائق جديد (overlay
+بيظهر بعد التحميل، مش بيمنع أول response). القيد المعماري بتاع وضع
+`"scroll"` trigger (مش live-CI-مُختبر end-to-end الجولة دي) لسه موثّق
+وقائم زي ما اتشرح فوق.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

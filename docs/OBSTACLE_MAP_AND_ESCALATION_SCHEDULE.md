@@ -72,7 +72,7 @@
 | العقبة | الوصف | حالتنا |
 |---|---|---|
 | Cookie consent banners/walls | overlay بيمنع المحتوى لحد الموافقة | ⬜ غير مُختبر - **شائع جدًا وسهل الإضافة** |
-| Interstitials (إعلانات كاملة الشاشة) | تظهر بعد وقت/scroll معين | 🟡 **مبني ومُختبر محليًا، لسه محتاج تأكيد CI حي** (docs/REQUIREMENTS.md قسم 9: بند 16 — `/feed-interstitial` overlay حقيقي بيظهر بعد التحميل (time أو scroll، قابل للتهيئة، الاتنين مُنفّذين) وبيمنع تحميل بيانات إضافية فعليًا (JS flag، مش CSS overflow) لحد ما يتقفل بـ`click_selector` — نفس آلية cookie wall بالحرف. النتيجة النهائية (CI run حقيقي) هتتسجّل هنا بمجرد ما تتأكّد) |
+| Interstitials (إعلانات كاملة الشاشة) | تظهر بعد وقت/scroll معين | ✅✅ **مُختبر ومحلول فعليًا بدليل CI** (docs/REQUIREMENTS.md قسم 9: بند 16 — `/feed-interstitial` overlay حقيقي بيظهر بعد التحميل (time أو scroll، قابل للتهيئة، الاتنين مُنفّذين) وبيمنع تحميل بيانات إضافية فعليًا (JS flag، مش CSS overflow) لحد ما يتقفل بـ`click_selector` — نفس آلية cookie wall بالحرف. أول محاولة فشلت فعليًا (page مكانتش طويلة كفاية تعمل scroll حقيقي، مش مشكلة في click_selector) — اتصلحت بـ`progressive_extraction` (نفس حل بند 14)، مؤكد فعليًا CI run 32849689626: 5/15/0 items للـ3 سيناريوهات (unhandled/dismissed/patchright-denied-by-anubis) بالظبط زي المتوقع) |
 | Modals عشوائية التوقيت | تظهر بشكل غير متوقع أثناء التصفح | ⬜ غير مُختبر |
 | A/B test variants | نفس الصفحة بهيكل مختلف حسب المستخدم | ⬜ غير مُختبر - **فجوة مهمة، بتكسر الـ selectors بدون سبب ظاهري** |
 | Maintenance/soft-404 pages | صفحة "تحت الصيانة" بدل 404 حقيقي | ⬜ غير مُختبر |
