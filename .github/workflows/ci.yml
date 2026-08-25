@@ -94,7 +94,7 @@ jobs:
         # anything the client/provider side can observe), so print it for
         # real before the containers are torn down.
         if: always()
-        run: docker compose -f test-environment/docker-compose.test.yml logs anubis mock-target
+        run: docker compose -f test-environment/docker-compose.test.yml logs anubis mock-target ja4-proxy
       - name: test-environment stack teardown
         if: always()
         run: docker compose -f test-environment/docker-compose.test.yml down -v
