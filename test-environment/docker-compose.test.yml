@@ -206,3 +206,27 @@ services:
         limits:
           cpus: "1.0"
           memory: 1G
+
+  # docs/REQUIREMENTS.md section 9 entry 17 (F5-class multi-signal
+  # layer, claude/ja4-experiment branch): a NEW, isolated TLS front
+  # door on its own port -- Anubis's own existing `:8080` listener
+  # above is completely untouched. Real TLS termination + a real JA4
+  # fingerprint computed from the ClientHello (ja4-proxy/haproxy.cfg's
+  # own header comment has the full architecture), forwarded as a
+  # header to Anubis (still unmodified, still runs its own separate
+  # real proof-of-work challenge on top).
+  ja4-proxy:
+    build:
+      context: ./ja4-proxy
+    depends_on:
+      anubis:
+        condition: service_healthy
+    ports:
+      - "${JA4_PROXY_PORT:-8443}:8443"
+    networks:
+      - edge
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
