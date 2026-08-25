@@ -176,7 +176,14 @@ def _default_patchright_solve(
             ) from exc
 
         try:
-            page = browser.new_page()
+            # ignore_https_errors=True (docs/REQUIREMENTS.md section 9,
+            # JA4/TLS experiment -- claude/ja4-experiment branch): same
+            # justification as camoufox_provider.py's own identical
+            # change -- unconditional, a genuine no-op for every
+            # existing plain-http:// target (no TLS handshake happens
+            # there at all), only takes effect against the new
+            # JA4-proxy target's self-signed cert.
+            page = browser.new_page(ignore_https_errors=True)
             try:
                 try:
                     # Tracks the *last* main-frame navigation response --

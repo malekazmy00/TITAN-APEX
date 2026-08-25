@@ -247,7 +247,25 @@ def _default_camoufox_solve(
         # way playwright_middleware.py already treats them) as untyped.
         with Camoufox(headless=True) as browser:  # type: ignore[no-untyped-call]
             try:
-                page = browser.new_page()
+                # ignore_https_errors=True (docs/REQUIREMENTS.md section
+                # 9, JA4/TLS experiment -- claude/ja4-experiment branch):
+                # unconditional, same justification generic_spider.py's
+                # own handle_httpstatus_list already has -- this only
+                # matters when a real TLS handshake actually happens.
+                # Every existing plain-http:// target here negotiates no
+                # TLS at all, so this is a genuine no-op for them; it
+                # only takes effect against the new JA4-proxy target's
+                # self-signed cert. Real Playwright option (Browser.new_page
+                # forwards straight to new_context()); mypy sees `browser`
+                # as camoufox's own untyped Union[Browser, BrowserContext]
+                # (no py.typed marker -- same root cause as this line's
+                # existing no-untyped-call ignore above) and can't narrow
+                # it to the concrete Browser NewBrowser's default,
+                # non-persistent-context code path always returns here
+                # (persistent_context is never passed above) -- confirmed
+                # by reading camoufox's own source (sync_api.py's
+                # NewBrowser), not assumed.
+                page = browser.new_page(ignore_https_errors=True)  # type: ignore[call-arg]
                 try:
                     # Tracks the *last* main-frame navigation response,
                     # not just the first one `goto()` returns -- see this
