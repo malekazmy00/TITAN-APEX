@@ -259,7 +259,14 @@ def _default_patchright_solve(  # pragma: no cover
 
         browser.on("disconnected", _mark_browser_crashed)
         try:
-            page = browser.new_page()
+            # ignore_https_errors=True (docs/REQUIREMENTS.md section 9,
+            # JA4/TLS experiment -- ported from claude/ja4-experiment onto
+            # this branch): same justification as camoufox_provider.py's
+            # own identical change -- unconditional, a genuine no-op for
+            # every existing plain-http:// target (no TLS handshake
+            # happens there at all), only takes effect against the
+            # JA4-proxy target's self-signed cert.
+            page = browser.new_page(ignore_https_errors=True)
             page.on("crash", _mark_browser_crashed)
             if trace_dir is not None:
                 page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
