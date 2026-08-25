@@ -18,6 +18,22 @@
 # page load) is ever captured -- exactly the same "gets *something*,
 # not a crash, but not everything either" shape a real, un-adapted
 # scraper hitting a real interstitial would see.
+#
+# progressive_extraction (docs/REQUIREMENTS.md section 9 entry 16,
+# after a real, CI-confirmed first attempt without it): plain
+# scroll_to_load_lazy_content() relies on window.scrollTo() producing
+# a genuine scroll-position change to fire a real, native 'scroll'
+# event -- feed_interstitial.html's own loadMore() listener is bound
+# to exactly that. With only INTERSTITIAL_FEED_PAGE_SIZE short posts
+# rendered, the page is not reliably tall enough to ever scroll at
+# all, so the listener may never fire again after the first automatic
+# call *regardless* of the interstitial. scroll_and_collect (what
+# progressive_extraction uses) dispatches a synthetic 'scroll' Event
+# unconditionally every attempt (src/providers/antibot/_scroll.py's
+# own docstring, already proven for entry 14's DOM Virtualization
+# round) -- the same fix, reused here to make sure this config is
+# actually exercising the interstitial's own block, not an unrelated
+# "page too short to scroll" artifact.
 name: mock_target_interstitial_camoufox_unhandled
 start_urls:
   - "http://localhost:8080/feed-interstitial"
@@ -27,6 +43,7 @@ rate_limit: 1.0
 antibot_needed: true
 antibot_provider: camoufox
 max_concurrency: 1
+progressive_extraction: true
 selectors:
   item: '[data-role="post"]'
   fields:

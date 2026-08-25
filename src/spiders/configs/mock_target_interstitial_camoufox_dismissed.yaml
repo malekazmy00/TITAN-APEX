@@ -12,6 +12,14 @@
 # scroll attempt ever happens. With the overlay closed before scrolling
 # starts, every batch loads normally -- the full
 # INTERSTITIAL_FEED_PAGE_SIZE * INTERSTITIAL_FEED_TOTAL_BATCHES items.
+#
+# progressive_extraction: true for the same reason
+# mock_target_interstitial_camoufox_unhandled.yaml's own comment gives
+# -- without it, this config's real result was indistinguishable from
+# the unhandled one (both got exactly the first batch), not because
+# click_selector didn't work, but because the page was never reliably
+# tall enough to fire a real native 'scroll' event at all (a real,
+# CI-confirmed first-attempt finding, not assumed).
 name: mock_target_interstitial_camoufox_dismissed
 start_urls:
   - "http://localhost:8080/feed-interstitial"
@@ -21,6 +29,7 @@ rate_limit: 1.0
 antibot_needed: true
 antibot_provider: camoufox
 max_concurrency: 1
+progressive_extraction: true
 click_selector: '[data-role="interstitial-close"]'
 selectors:
   item: '[data-role="post"]'

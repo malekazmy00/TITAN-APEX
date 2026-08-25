@@ -1807,6 +1807,54 @@ coverage** (36 statement جديدة في `structural/interstitial.py` مغطّا
 `TITAN_BYPARR_URL`) — **لسه محتاجين تأكيد CI حقيقي** للنتيجة الفعلية
 (هل الفرضية أعلاه صحيحة فعلًا؟) — هتتسجّل هنا بمجرد ما الـ run يخلص.
 
+**❌ الفرضية الأصلية غلط فعليًا — CI run
+[32789920874](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32789920874)
+(commit `cb42c10`):** `Unit tests`/`Contract tests`/`test-environment
+unit tests` كلها نجحت زي المتوقع (مفيش كود `src/` جديد الجولة دي)، بس
+الاختبارات الحية الـ2 اللي فيهم `click_selector` فشلوا فعليًا:
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch` —
+اتوقّع 15 items، **رجع 5 بالظبط** (نفس رقم الـ"unhandled" تمامًا، يعني
+`click_selector` مكانش بيغيّر النتيجة خالص). `test_patchright_dismisses_the_interstitial_and_yields_every_batch`
+— اتوقّع 15، **رجع 0** مع `Page.click: Timeout 30000ms exceeded`.
+
+**السبب الجذري الحقيقي (اتفحص بعمق، مش افتراض):**
+
+1. **Camoufox (فجوة حقيقية جديدة، مش مرتبطة بـ`click_selector` خالص):**
+   `feed_interstitial.html`'s `loadMore()` مربوطة بحدث `'scroll'`
+   **حقيقي** (native)، و`scroll_to_load_lazy_content()` (اللي
+   الـconfigs دي كانت بتستخدمها افتراضيًا، من غير `progressive_extraction`)
+   بتعتمد على `window.scrollTo()` يغيّر موضع الـscroll فعليًا عشان يطلع
+   حدث `'scroll'` حقيقي. بـ`INTERSTITIAL_FEED_PAGE_SIZE=5` posts قصيرة
+   بس (author + text + likes، من غير أي padding/CSS)، الصفحة مش طويلة
+   بما يكفي إنها تعمل scroll فعلي خالص — يعني `loadMore()` ميترجّعش
+   يتنده تاني **بغض النظر تمامًا عن الـ interstitial**. ده يفسّر ليه
+   الـ"unhandled" والـ"dismissed" رجعوا بنفس الرقم بالظبط: مكانش
+   `click_selector` فاشل، كان بيختبر آلية مش هي اللي بتحدد النتيجة
+   أصلًا. **الحل:** أضفنا `progressive_extraction: true` للـ3 configs —
+   بتستخدم `scroll_and_collect` اللي بيعمل
+   `dispatchEvent(new Event('scroll'))` **صناعي وإجباري** كل محاولة
+   (نفس الحل اللي بند 14 أثبته فعليًا لـDOM Virtualization، مُعاد
+   استخدامه هنا بالحرف، مش حل جديد) — كده `loadMore()` بتتنده فعليًا كل
+   مرة بغض النظر عن طول الصفحة، والاختبار بقى بيقيس آلية الـ interstitial
+   نفسها فعلًا، مش artifact غير مرتبط.
+
+2. **Patchright (مش فجوة جديدة خالص — معلومة موثّقة بالفعل):** رجعنا
+   لتوثيق جولة cookie wall نفسها (قسم 9 فوق) ولقينا `PatchrightProvider`
+   **موثّق صراحة** إنه بيترفض من Anubis's `bot/headless-chrome` rule
+   قبل `load` حتى، على **كل** route في الـstack، مش بس `/`. يعني
+   `click_selector` معندوش فرصة يتنفّذ خالص — نفس القيد بالظبط، مش
+   حاجة جديدة. **غلطة عملية حقيقية مني:** اخترت Patchright كـ"provider
+   تاني نتأكد إن الحل بيعمم عليه" من غير ما أتحقّق من القيد الموثّق ده
+   الأول — كان لازم أراجع التوثيق قبل ما أكتب الـconfig، مش أفترض. **الحل:**
+   الـconfig اتحول من "اختبار fix" لـ"تأكيد إن القيد الموجود فعلًا ينطبق
+   على `/feed-interstitial` كمان" — النتيجة المتوقعة بقت 0 items صراحة
+   (بدل 15)، والاسم/الـdocstring اتحدّثوا يوضّحوا ده مش رجرشن جديد.
+
+**اتّحقّق محليًا بعد الإصلاح:** كل الـconfigs التلاتة بترفض/تتحقّق صح
+(`SpiderConfig` validation)، ruff نظيف، الاختبارات الحية اتّجمّعت
+واتخطّت نظيف محليًا. **CI run جديد لسه محتاج تأكيد** — هيتسجّل هنا
+بمجرد ما يخلص.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

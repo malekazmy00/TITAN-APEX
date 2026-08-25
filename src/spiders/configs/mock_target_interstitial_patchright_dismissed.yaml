@@ -1,9 +1,18 @@
-# Same fix as mock_target_interstitial_camoufox_dismissed.yaml, this
-# time via antibot_provider: patchright -- PatchrightProvider's own
-# click_selector handling mirrors CamoufoxProvider's exactly (see
-# patchright_provider.py), so this config exists to confirm the same
-# click-before-scroll dismissal generalizes to the other real-browser
-# provider, not just Camoufox specifically.
+# Real, CI-confirmed result (not the original hypothesis): this is
+# NOT a test of whether click_selector generalizes to Patchright for
+# interstitials specifically -- PatchrightProvider is already
+# documented (docs/REQUIREMENTS.md section 9, the cookie-consent-wall
+# round) as explicitly, deterministically denied by Anubis's own
+# `bot/headless-chrome` rule before `load` even happens, on *every*
+# route on this stack, not just this one -- the same pre-existing gap
+# `mock_target_patchright.yaml`'s own
+# test_mock_target_patchright_yields_zero_items_denied_by_anubis
+# already covers. click_selector never gets a chance to run in this
+# environment either way; this config exists only to confirm that
+# stays true for /feed-interstitial too, not to prove anything new
+# about interstitials -- the same "not new information, documented
+# explicitly, not hidden" treatment that round already gave
+# Patchright/Byparr for the cookie wall.
 name: mock_target_interstitial_patchright_dismissed
 start_urls:
   - "http://localhost:8080/feed-interstitial"
@@ -13,6 +22,7 @@ rate_limit: 1.0
 antibot_needed: true
 antibot_provider: patchright
 max_concurrency: 1
+progressive_extraction: true
 click_selector: '[data-role="interstitial-close"]'
 selectors:
   item: '[data-role="post"]'
