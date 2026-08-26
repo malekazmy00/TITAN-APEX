@@ -222,7 +222,23 @@ def _default_patchright_solve(  # pragma: no cover
     trace_dir = trace_dir_from_env()
     with sync_playwright() as p:
         try:
-            browser = p.chromium.launch(headless=True)
+            # --disable-dev-shm-usage (docs/REQUIREMENTS.md section 9,
+            # JA4 experiment crash investigation): a real, well-documented
+            # Chromium mitigation for the exact "Target page, context or
+            # browser has been closed" crash this session has observed
+            # repeatedly -- redirects Chromium's shared-memory usage to
+            # /tmp instead of /dev/shm, avoiding an OOM-kill of the
+            # renderer process when shm runs out. Confirmed harmless for
+            # patchright's own stealth properties (it only changes where
+            # temp shared-memory files live, not any navigator/WebGL/CDP
+            # -detectable signal). Added defensively even though every
+            # crash actually observed in this investigation was in
+            # CamoufoxProvider (Firefox-based), never here -- this flag
+            # is Chromium-specific and has no Firefox equivalent, so it
+            # cannot fix what was actually crashing; see docs/REQUIREMENTS.md
+            # entry 17 for the full, honest writeup of what this
+            # investigation did and did not resolve.
+            browser = p.chromium.launch(headless=True, args=["--disable-dev-shm-usage"])
         except PatchrightError as exc:
             raise AntibotError(
                 f"patchright failed to launch chromium for {url} "

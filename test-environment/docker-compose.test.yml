@@ -226,8 +226,15 @@ services:
       - "${JA4_PROXY_PORT:-8443}:8443"
     networks:
       - edge
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 128M
+    # mem_limit/cpus (real, plain-`docker compose up`-enforced fields),
+    # not `deploy.resources.limits` -- a real finding from this round's
+    # crash investigation (docs/REQUIREMENTS.md section 9 entry 17):
+    # `deploy:` is a Swarm-mode construct and is silently a no-op under
+    # plain `docker compose up` (confirmed against Compose's own docs),
+    # which is what this stack's CI step actually runs. Every other
+    # existing service here (anubis/mock-target/byparr) uses the same
+    # `deploy:` shape and has the same latent gap -- left untouched
+    # here (out of scope for this round, they're proven-stable), but
+    # this new service gets the real, enforced fields from the start.
+    mem_limit: 128m
+    cpus: 0.5
