@@ -97,10 +97,32 @@
         }
       }
 
+      // docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
+      // investment: a real, cheap, page-side counter distinguishing "a
+      // scroll-triggered loadMore() call actually ran" from "it was
+      // silently dropped because the previous fetch was still in
+      // flight" -- the two things a Playwright-side network-idle check
+      // structurally cannot tell apart (confirmed for real, CI run
+      // 32997246624: network_idle_timeouts was 0 the whole run -- the
+      // network side was never the bottleneck -- yet the same
+      // shortfall happened anyway). Deliberately does *not* count a
+      // no-op caused by `!hasNext` (pagination genuinely finished) as a
+      // "drop" -- that is normal, expected behavior, not a race.
+      // camoufox_provider.py/patchright_provider.py read these back via
+      // page.evaluate() when progressive_extraction is used, and log
+      // them -- harmless (stays undefined, read back as 0) on any page
+      // that isn't this one.
+      window.__loadMoreCalls = 0;
+      window.__loadMoreDropped = 0;
+
       function loadMore() {
         if (loading || !hasNext) {
+          if (loading) {
+            window.__loadMoreDropped += 1;
+          }
           return;
         }
+        window.__loadMoreCalls += 1;
         loading = true;
         loadingEl.style.display = "block";
         const url = cursor ? "/api/feed?after=" + encodeURIComponent(cursor) : "/api/feed";

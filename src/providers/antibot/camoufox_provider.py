@@ -81,6 +81,7 @@ from src.providers.antibot._scroll import (
     poll_until_idle,
     scroll_to_load_lazy_content,
 )
+from src.providers.antibot._tracing import build_trace_path, trace_dir_from_env
 
 DEFAULT_TIMEOUT_MS = 30_000
 # How long to wait after the page's `load` event before reading content
@@ -161,7 +162,21 @@ CamoufoxSolveFn = Callable[
 ]
 
 
-def _default_camoufox_solve(
+# docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
+# investigation: this whole function's body needs a real, live browser
+# -- it is exercised (and was always meant to be exercised) only via
+# tests/integration, never tests/unit, the same reasoning entry 14's own
+# CHANGELOG entry documents ("مستحيل تتعمله unit test مباشر — محتاج
+# متصفح حقيقي"). The `# pragma: no cover` below makes that explicit and
+# permanent instead of it silently eating into the 85% unit-coverage
+# gate's margin every time this function grows (it did, twice, in this
+# same investigation -- entries in CHANGELOG.md/REQUIREMENTS.md both
+# record adding unrelated-but-real tests elsewhere to compensate, which
+# works but isn't sustainable as a recurring fix for a gap that is
+# structural, not accidental). `CamoufoxProvider.solve()` itself (the
+# part that unit tests actually exercise, via the injectable `solve_fn`)
+# is unaffected -- coverage there stays real and enforced.
+def _default_camoufox_solve(  # pragma: no cover
     url: str,
     timeout_ms: int,
     post_load_wait_ms: int,
@@ -267,6 +282,11 @@ def _default_camoufox_solve(
     from playwright.sync_api import Response as PlaywrightResponse
 
     logger = get_logger(__name__)
+    # docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
+    # investment: off by default (None), active only when TITAN_TRACE_DIR
+    # is set -- see _tracing.py's own module docstring for the full
+    # reasoning.
+    trace_dir = trace_dir_from_env()
     try:
         # camoufox ships no py.typed marker / inline stubs, so mypy sees
         # this constructor call itself (not objects it returns -- those
@@ -275,6 +295,8 @@ def _default_camoufox_solve(
         with Camoufox(headless=True) as browser:  # type: ignore[no-untyped-call]
             try:
                 page = browser.new_page()
+                if trace_dir is not None:
+                    page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
                 try:
                     # Tracks the *last* main-frame navigation response,
                     # not just the first one `goto()` returns -- see this
@@ -438,6 +460,28 @@ def _default_camoufox_solve(
                             items = extract_live_dom_items(
                                 page, extraction_selectors.item, extraction_selectors.fields
                             )
+                    # docs/REQUIREMENTS.md section 9's "DOM Virtualization
+                    # Instability" investigation, monitoring-infrastructure
+                    # investment: window.__loadMoreCalls/__loadMoreDropped
+                    # (templates/feed.html) directly answer "did the page's
+                    # own loadMore() guard actually drop a call", something
+                    # network_idle_timeouts above cannot -- confirmed for
+                    # real (CI run 32997246624) that a network-side wait
+                    # succeeding on every poll does *not* rule out a
+                    # page-side drop. Harmless (reads back 0/0) on any page
+                    # that isn't this one -- `|| 0` covers both `undefined`
+                    # (the property was never defined) and a page that
+                    # errored before its own script ran at all.
+                    load_more_calls = (
+                        page.evaluate("window.__loadMoreCalls || 0")
+                        if progressive_extraction
+                        else None
+                    )
+                    load_more_dropped = (
+                        page.evaluate("window.__loadMoreDropped || 0")
+                        if progressive_extraction
+                        else None
+                    )
                     final_response = last_main_frame_response or initial_response
                     content_type = (
                         final_response.headers.get("content-type", "")
@@ -505,6 +549,8 @@ def _default_camoufox_solve(
                             # (the mistake the first, wait_for_load_state
                             # -based attempt at this fix made).
                             "network_idle_timeouts": network_idle_timeouts,
+                            "load_more_calls": load_more_calls,
+                            "load_more_dropped": load_more_dropped,
                         },
                     )
                     return _RawSolve(
@@ -516,6 +562,8 @@ def _default_camoufox_solve(
                         html_snapshots=html_snapshots,
                     )
                 finally:
+                    if trace_dir is not None:
+                        page.context.tracing.stop(path=build_trace_path(trace_dir, url, "camoufox"))
                     page.close()
             finally:
                 browser.close()

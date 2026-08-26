@@ -160,6 +160,22 @@ def test_feed_page_ships_the_virtualization_config_when_enabled(client: FlaskCli
     assert "removeChild" in body
 
 
+def test_feed_page_ships_the_progressive_diagnostic_counters(client: FlaskClient) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
+    investment: window.__loadMoreCalls/__loadMoreDropped must ship on
+    every /feed render, unconditionally (not gated behind
+    virtualization/any other toggle) -- camoufox_provider.py/
+    patchright_provider.py read these back for real, live diagnostic
+    evidence distinguishing "loadMore() actually ran" from "silently
+    dropped by the loading guard"."""
+    body = client.get("/feed").get_data(as_text=True)
+
+    assert "window.__loadMoreCalls = 0;" in body
+    assert "window.__loadMoreDropped = 0;" in body
+    assert "window.__loadMoreDropped += 1;" in body
+    assert "window.__loadMoreCalls += 1;" in body
+
+
 def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -> None:
     """Failure-adjacent case: disabling the layer must ship
     virtualizationEnabled = false, so the real client-side script never

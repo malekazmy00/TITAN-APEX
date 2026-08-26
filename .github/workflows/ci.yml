@@ -24,6 +24,15 @@ jobs:
       TITAN_REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
+      # docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
+      # investigation's monitoring-infrastructure investment: started as
+      # early as possible (right after checkout) so it covers the whole
+      # job, not just the "Integration tests" step -- a real, explicit
+      # user request after two CI attempts of a code-only fix left the
+      # actual root cause unconfirmed. scripts/ci-monitor-start.sh's own
+      # header comment has the full reasoning.
+      - name: Start resource monitors (docker stats + runner stats, for the whole job)
+        run: scripts/ci-monitor-start.sh "$GITHUB_WORKSPACE/ci-diagnostics"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -80,12 +89,45 @@ jobs:
         # docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md -- a fourth real
         # browser launch against /api/feed).
         timeout-minutes: 20
+        env:
+          # docs/REQUIREMENTS.md section 9's "DOM Virtualization
+          # Instability" investigation's monitoring-infrastructure
+          # investment: off by default everywhere else (src/providers/
+          # antibot/_tracing.py's own module docstring) -- active here so
+          # every live browser-driving call in this step captures a real
+          # Playwright trace (screenshots, DOM snapshots, network,
+          # console, source-mapped stack traces), uploaded below.
+          TITAN_TRACE_DIR: ${{ github.workspace }}/ci-diagnostics/traces
         run: |
+          mkdir -p "$TITAN_TRACE_DIR"
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             pytest tests/integration -v
           else
             echo "No integration tests yet (added from Phase 2 onward)."
           fi
+      - name: Stop resource monitors
+        if: always()
+        run: scripts/ci-monitor-stop.sh "$GITHUB_WORKSPACE/ci-diagnostics"
+      - name: Check for kernel OOM activity
+        # Confirms or denies the "memory pressure" hypothesis with direct
+        # evidence, every run -- not just when something already failed
+        # (docs/REQUIREMENTS.md section 9's "DOM Virtualization
+        # Instability" investigation's monitoring-infrastructure
+        # investment). scripts/ci-check-oom.sh's own header comment has
+        # the full reasoning.
+        if: always()
+        run: scripts/ci-check-oom.sh "$GITHUB_WORKSPACE/ci-diagnostics/oom-check.txt"
+      - name: Upload CI diagnostics (docker/runner resource logs, OOM check, Playwright traces)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-diagnostics/
+          # Diagnostic evidence, not a build artifact anyone needs
+          # forever -- short retention keeps this from silently
+          # accumulating storage across every push/PR run.
+          retention-days: 14
+          if-no-files-found: warn
       - name: test-environment stack logs
         # Unlike byparr/redis above, this stack isn't a `services:` entry,
         # so its containers' logs aren't printed automatically on job

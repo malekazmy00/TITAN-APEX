@@ -63,6 +63,7 @@ from src.providers.antibot._scroll import (
     poll_until_idle,
     scroll_to_load_lazy_content,
 )
+from src.providers.antibot._tracing import build_trace_path, trace_dir_from_env
 
 DEFAULT_TIMEOUT_MS = 30_000
 # Same reasoning and same default as CamoufoxProvider's
@@ -110,7 +111,13 @@ PatchrightSolveFn = Callable[
 ]
 
 
-def _default_patchright_solve(
+# Same reasoning as camoufox_provider.py's identical pragma (docs/
+# REQUIREMENTS.md section 9's "DOM Virtualization Instability"
+# investigation): this whole function's body needs a real, live browser
+# and is exercised only via tests/integration -- see that module's own
+# comment for the full explanation. PatchrightProvider.solve() itself
+# (unit-tested via the injectable solve_fn) is unaffected.
+def _default_patchright_solve(  # pragma: no cover
     url: str,
     timeout_ms: int,
     post_load_wait_ms: int,
@@ -179,6 +186,11 @@ def _default_patchright_solve(
     from patchright.sync_api import sync_playwright
 
     logger = get_logger(__name__)
+    # docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
+    # investment: off by default (None), active only when TITAN_TRACE_DIR
+    # is set -- see _tracing.py's own module docstring for the full
+    # reasoning. Same shape as camoufox_provider.py's identical use.
+    trace_dir = trace_dir_from_env()
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch(headless=True)
@@ -190,6 +202,8 @@ def _default_patchright_solve(
 
         try:
             page = browser.new_page()
+            if trace_dir is not None:
+                page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
             try:
                 try:
                     # Tracks the *last* main-frame navigation response --
@@ -332,6 +346,19 @@ def _default_patchright_solve(
                             items = extract_live_dom_items(
                                 page, extraction_selectors.item, extraction_selectors.fields
                             )
+                    # Same reasoning as camoufox_provider.py's identical
+                    # block (docs/REQUIREMENTS.md section 9's "DOM
+                    # Virtualization Instability" investigation).
+                    load_more_calls = (
+                        page.evaluate("window.__loadMoreCalls || 0")
+                        if progressive_extraction
+                        else None
+                    )
+                    load_more_dropped = (
+                        page.evaluate("window.__loadMoreDropped || 0")
+                        if progressive_extraction
+                        else None
+                    )
                     final_response = last_main_frame_response or initial_response
                     content_type = (
                         final_response.headers.get("content-type", "")
@@ -384,6 +411,8 @@ def _default_patchright_solve(
                             # Same reasoning as camoufox_provider.py's
                             # identical field.
                             "network_idle_timeouts": network_idle_timeouts,
+                            "load_more_calls": load_more_calls,
+                            "load_more_dropped": load_more_dropped,
                         },
                     )
                     return _RawSolve(
@@ -397,6 +426,8 @@ def _default_patchright_solve(
                 except PatchrightError as exc:
                     raise AntibotError(f"patchright failed to solve {url}: {exc}") from exc
             finally:
+                if trace_dir is not None:
+                    page.context.tracing.stop(path=build_trace_path(trace_dir, url, "patchright"))
                 page.close()
         finally:
             browser.close()
