@@ -117,10 +117,36 @@ no-op) -- every existing caller that doesn't pass one (including every
 unit test written before this revision) keeps its exact prior behavior,
 the same backward-compatibility guarantee this module has kept at every
 prior revision.
+
+**Third revision (same investigation, a real, CI-confirmed correction
+to the "Second revision" above -- not erased, appended):** the
+``settle_fn`` contract itself was right, but its first concrete
+implementation (in ``camoufox_provider.py``/``patchright_provider.py``,
+built around ``page.wait_for_load_state("networkidle", ...)``) was
+proven wrong by a real CI run (32973393111): the exact same shortfall
+(20 of 25 items) as before ``settle_fn`` existed, unchanged. Root
+cause, confirmed against Playwright's own load-state tracking:
+``wait_for_load_state`` checks a per-*navigation* lifecycle flag --
+once "networkidle" is reached (which happens almost immediately after
+the very first, automatic on-load batch here), it stays reached until
+the next real navigation, so *every later call* resolves *immediately*
+without waiting for anything. Since progressive scrolling never
+re-navigates (it is all in-page AJAX against the same document), that
+first call is the only one that ever actually waited -- every
+subsequent ``settle_fn`` call was a no-op. :func:`poll_until_idle`
+below is the corrected building block: a plain, engine-agnostic polling
+loop over an injected ``is_idle_fn`` (so it never needs a real browser,
+or even real wall-clock time, to unit test) -- each provider supplies
+one backed by its *own* live request-tracking (``page.on("request"/
+"requestfinished"/"requestfailed")``, maintained continuously across
+the whole progressive collection so it can't miss a request that starts
+and finishes between two separate polls), a genuinely reusable signal
+``wait_for_load_state`` cannot provide for this shape of page.
 """
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -244,3 +270,96 @@ def collect_html_snapshots(
         page, max_attempts, pause_ms, lambda: snapshots.append(page.content()), settle_fn
     )
     return snapshots
+
+
+def poll_until_idle(
+    is_idle_fn: Callable[[], bool],
+    sleep_fn: Callable[[int], None],
+    timeout_ms: int,
+    quiet_ms: int = 500,
+    now_fn: Callable[[], float] = time.monotonic,
+) -> bool:
+    """The corrected building block for a ``settle_fn`` (this module's own
+    "Third revision" docstring paragraph explains what it replaces and
+    why): polls ``is_idle_fn()`` -- expected to reflect *live* state, not
+    a cached one-time flag -- via ``sleep_fn(50)`` between checks, until
+    it has returned ``True`` continuously for ``quiet_ms``, or
+    ``timeout_ms`` elapses first. Returns ``True`` if it settled,
+    ``False`` on timeout -- a caller that only cares about "did I wait
+    long enough" (every current caller) can ignore the return value; it
+    exists for callers/tests that want to tell the two apart explicitly.
+
+    Deliberately takes ``is_idle_fn``/``sleep_fn``/``now_fn`` as plain
+    injected callables instead of a ``page`` object -- this function
+    itself never touches a browser at all (unlike everything else in
+    this module), so it needs neither a real one nor real wall-clock
+    time to unit test. Each provider supplies ``is_idle_fn`` backed by
+    its own live request-tracking and ``sleep_fn``/``now_fn`` backed by
+    the real ``page``/``time.monotonic`` respectively.
+
+    Raises:
+        ValueError: if ``timeout_ms`` is not positive, or ``quiet_ms`` is
+            negative -- both are meaningless configurations, the same
+            validation shape :func:`scroll_and_collect` already has.
+    """
+    if timeout_ms <= 0:
+        raise ValueError(f"timeout_ms must be > 0, got {timeout_ms}")
+    if quiet_ms < 0:
+        raise ValueError(f"quiet_ms must be >= 0, got {quiet_ms}")
+
+    deadline = now_fn() + timeout_ms / 1000
+    quiet_since: float | None = None
+    poll_interval_ms = 50
+    while now_fn() < deadline:
+        now = now_fn()
+        if is_idle_fn():
+            if quiet_since is None:
+                quiet_since = now
+            elif now - quiet_since >= quiet_ms / 1000:
+                return True
+        else:
+            quiet_since = None
+        sleep_fn(poll_interval_ms)
+    return False
+
+
+class RequestCounter:
+    """A tiny, purely-local in-flight-request tally -- the ``is_idle_fn``
+    each provider hands :func:`poll_until_idle`, backed by *live* request
+    state instead of Playwright's own per-navigation ``networkidle``
+    cache (see this module's own "Third revision" docstring paragraph
+    for why that cache is the wrong signal here).
+
+    :meth:`on_start`/:meth:`on_settle` are meant to be wired directly as
+    ``page.on("request", counter.on_start)`` /
+    ``page.on("requestfinished", counter.on_settle)`` /
+    ``page.on("requestfailed", counter.on_settle)`` listeners -- but
+    neither method touches a ``Page`` (or anything else) itself, so this
+    class needs no real browser to unit test, unlike the listener wiring
+    itself. Both accept and ignore a single positional argument (the
+    ``Request`` object Playwright/Patchright passes to the listener) so
+    they match that callback shape directly, with no lambda needed at
+    the call site.
+    """
+
+    def __init__(self) -> None:
+        self._pending = 0
+
+    def on_start(self, _event: Any = None) -> None:
+        """Call when a request begins (``page.on("request", ...)``)."""
+        self._pending += 1
+
+    def on_settle(self, _event: Any = None) -> None:
+        """Call when a request ends, successfully or not
+        (``page.on("requestfinished"/"requestfailed", ...)``). Clamped
+        at zero -- a settle event for a request this counter never saw
+        start (e.g. one already in flight before listeners were
+        attached) must not push the count negative, which would make
+        :meth:`is_idle` wrongly report idle while requests are still
+        outstanding.
+        """
+        self._pending = max(0, self._pending - 1)
+
+    def is_idle(self) -> bool:
+        """``True`` when nothing is currently tracked as in flight."""
+        return self._pending == 0

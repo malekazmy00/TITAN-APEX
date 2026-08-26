@@ -1977,6 +1977,75 @@ default `None` (backward compatibility) صراحة. **لسه محتاجين تأ
 كانت عشوائية أصلًا) — النتيجة الفعلية هتتسجّل هنا بمجرد ما الـ run(s)
 تخلص، زي كل بند قبل كده.
 
+**❌ المحاولة الأولى فشلت فعليًا — دليل حقيقي من CI، مش تحسّن وهمي
+(مسجّل صراحة، مش ممسوح):** CI run
+[32973393111](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32973393111)
+(commit `9199905`): `2 failed, 35 passed` —
+`test_progressive_live_dom_recovers_every_virtualization_window` فشل
+**بنفس الرقم بالظبط** اللي كان بيفشل بيه قبل ما `settle_fn` يتضاف خالص
+(20 من 25، `live_dom_item_count: 20` في اللوج المُبنيَن)، يعني الإصلاح
+الأول **ملوش أي تأثير قابل للقياس**. (فشل ثاني منفصل تمامًا في نفس الـ
+run — `test_mock_target_live_dom_recovers_every_shadow_dom_wrapped_post`،
+بند 12، بـ`Page.click: Target crashed` — كراش متصفح حقيقي، مش نفس
+النمط، ومالوش علاقة بالـDOM Virtualization خالص؛ اتسجّل هنا للتفرقة
+الصريحة المطلوبة، مش اتخلط بيه.)
+
+**السبب الجذري الحقيقي للفشل ده (اتأكّد من قراءة سلوك Playwright's
+`wait_for_load_state` نفسه، مش تخمين تاني):** `"networkidle"` عبارة عن
+flag خاص بدورة حياة *الـnavigation*، مش فحص حي "فيه نشاط شبكة دلوقتي
+ولا لأ" — بمجرد ما يوصل "networkidle" مرة واحدة (بيحصل بسرعة جدًا بعد
+أول batch تلقائي وقت تحميل الصفحة)، أي نداء تاني لنفس الدالة على نفس
+الصفحة (من غير navigation جديدة) بيرجع **فورًا** من غير ما ينتظر أي
+حاجة — وبما إن الـprogressive scroll كله عبارة عن AJAX داخل نفس الصفحة
+(مفيش navigation تاني خالص)، الـcall الأول بس هو اللي كان بينتظر فعليًا؛
+كل الـ`settle_fn` calls اللي بعده كانت no-op بالكامل. ده معناه
+`wait_for_load_state("networkidle")` أداة غلط تمامًا لإعادة المزامنة
+مع fetch متكرر على نفس الصفحة — مش أداة ضعيفة بس، أداة غير فعّالة خالص
+بعد أول استخدام.
+
+**الإصلاح المُصحَّح (`_scroll.py` + الاتنين providers):** بدل الاعتماد
+على `wait_for_load_state`، الكود بقى بيتابع الطلبات الشبكية بنفسه
+مباشرة عبر `page.on("request"/"requestfinished"/"requestfailed")` —
+إشارة حية حقيقية، بتتجدد صح كل مرة، بدل الفلاج المُخزَّن بتاع
+Playwright. اتقسّم لجزئين للحفاظ على قابلية الاختبار (نفس مبدأ بند 14):
+- `poll_until_idle` (`_scroll.py`، دالة نقية بالكامل): تاخد
+  `is_idle_fn`/`sleep_fn`/`now_fn` كـcallables محقونة — بتتأكد إنها
+  فضلت idle لمدة `quiet_ms` متواصلة قبل ما ترجع `True`، أو ترجع `False`
+  لو `timeout_ms` خلص من غير استقرار. اختبارات جديدة بـ`_FakeClock`
+  (زمن وهمي محقون، صفر real sleep) بتأكّد الـhappy path، الـtimeout،
+  و**الجزء الأهم**: إن أي نشاط جديد بيقاطع فترة الهدوء بيرجّع العداد
+  لأول واحد (مش بياخد كريديت من قبل المقاطعة) — بالظبط السلوك اللي
+  الـrequest tracking الحقيقي محتاجه.
+- `RequestCounter` (`_scroll.py`، class نقي بالكامل): `on_start`/
+  `on_settle`/`is_idle` — تجميعة بسيطة لعدد الطلبات الجارية، بتتوصل
+  مباشرة كـlisteners لـ`page.on(...)` بس هي نفسها مالهاش أي علاقة بـ
+  `Page` خالص، فقابلة للاختبار الكامل بدون متصفح. `on_settle` بيتوقف
+  عند صفر (مش يروح سالب) — طلب "settled" وصل قبل ما نبدأ نتابعه (طلب
+  كان شغّال من الأول) ميكسرش العداد.
+
+كل provider بيبني `RequestCounter()` واحد لكل progressive collection
+كاملة (مش لكل خطوة scroll لوحدها — عشان الـlisteners تفضل متابعة
+النشاط طول الوقت، ومتفوّتش طلب بدأ وخلص بين خطوتين منفصلتين)، بيوصّل
+الـlisteners قبل أي scroll، وبيشيلهم في `finally` بعد ما الـcollection
+كله يخلص. `_wait_for_network_idle(timeout_ms)` بقت مجرد wrapper رفيع
+حوالين `poll_until_idle(request_counter.is_idle, page.wait_for_timeout,
+timeout_ms)` — منطق التوقيت والعداد نفسه اتشال بالكامل من الملفين دول
+لـ`_scroll.py` المُختبَر بالكامل، مسيبين هنا بس الـwiring اللي محتاج
+`Page` حقيقي (نفس مبدأ الفصل بين المُختبَر وغير المُختبَر اللي بند 14
+أسسه). سطر اللوج النهائي (`camoufox_provider.solved`/
+`patchright_provider.solved`) كسب field جديد `network_idle_timeouts`
+(عدد مرات الـsettle_fn اللي مضربتش الـtimeout من غير ما تستقر) —
+دليل تشخيصي حقيقي متاح في أي CI run جاي، بدل ما نحتاج نخمّن من رقم
+الـitems لوحده تاني زي ما حصل في المحاولة الأولى.
+
+**اتّحقّق محليًا بعد الإصلاح المُصحَّح:** `ruff check src/ tests/`
+نظيف، `mypy src/ --strict` نظيف (36 ملف)، 309 unit+contract test
+PASSED (85.13% coverage — فوق الـgate؛ `_scroll.py` نفسه رجع 100%
+coverage، `poll_until_idle`/`RequestCounter` الاتنين مُختبَرين بالكامل
+بدون أي متصفح). **لسه محتاجين تأكيد CI حقيقي** (المحاولة الأولى
+اتأكّدت فعليًا إنها مش كافية — النتيجة الفعلية للإصلاح المُصحَّح
+هتتسجّل هنا بمجرد ما الـrun(s) تخلص، عبر عدة محاولات زي ما اتفق).
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

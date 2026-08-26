@@ -9,7 +9,9 @@ from __future__ import annotations
 import pytest
 
 from src.providers.antibot._scroll import (
+    RequestCounter,
     collect_html_snapshots,
+    poll_until_idle,
     scroll_and_collect,
     scroll_to_load_lazy_content,
 )
@@ -311,3 +313,163 @@ def test_collect_html_snapshots_rejects_negative_pause_ms() -> None:
     page = _FakeContentPage(heights=[1000], html_per_read=["x"])
     with pytest.raises(ValueError, match="pause_ms must be >= 0"):
         collect_html_snapshots(page, max_attempts=8, pause_ms=-1)
+
+
+# --- poll_until_idle (docs/REQUIREMENTS.md section 9's "DOM
+# Virtualization Instability" investigation, "Third revision" --
+# the corrected settle_fn building block, after a real CI run proved
+# the first implementation, page.wait_for_load_state("networkidle"),
+# was a no-op for repeated same-page fetches) --------------------------
+
+
+class _FakeClock:
+    """Deterministic clock for poll_until_idle -- makes timeout/quiet-
+    window edges exact without any real sleeping. Each sleep_fn(ms) call
+    advances the clock by ms milliseconds; now_fn reads it back."""
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+        self.sleep_calls: list[int] = []
+
+    def now(self) -> float:
+        return self.seconds
+
+    def sleep(self, ms: int) -> None:
+        self.sleep_calls.append(ms)
+        self.seconds += ms / 1000
+
+
+def test_poll_until_idle_returns_true_once_idle_for_the_full_quiet_window() -> None:
+    """Happy path: is_idle_fn true from the very first check -- settles
+    (returns True) once quiet_ms worth of idle time has accumulated,
+    nowhere near timeout_ms."""
+    clock = _FakeClock()
+
+    settled = poll_until_idle(
+        lambda: True, clock.sleep, timeout_ms=5_000, quiet_ms=200, now_fn=clock.now
+    )
+
+    assert settled is True
+    assert len(clock.sleep_calls) == 4  # 50ms polls: 0, .05, .10, .15 -> settles at .20
+    assert clock.seconds == pytest.approx(0.20)
+
+
+def test_poll_until_idle_returns_false_when_never_idle_before_timeout() -> None:
+    """Failure-adjacent case 1: is_idle_fn always false -- times out
+    (returns False) at timeout_ms, never settles."""
+    clock = _FakeClock()
+
+    settled = poll_until_idle(
+        lambda: False, clock.sleep, timeout_ms=200, quiet_ms=500, now_fn=clock.now
+    )
+
+    assert settled is False
+    assert clock.seconds == pytest.approx(0.20)
+
+
+def test_poll_until_idle_resets_the_quiet_window_on_renewed_activity() -> None:
+    """The actual point of this function, and the exact behavior the
+    real request-tracking settle_fn relies on: a quiet period that gets
+    interrupted by renewed activity (e.g. one more still-in-flight
+    fetch) must start counting over from scratch, not credit time
+    accumulated before the interruption."""
+    # idle, idle, BUSY (resets the window), idle forever after.
+    states = iter([True, True, False, *([True] * 20)])
+
+    def is_idle() -> bool:
+        return next(states)
+
+    clock = _FakeClock()
+
+    settled = poll_until_idle(
+        is_idle, clock.sleep, timeout_ms=5_000, quiet_ms=200, now_fn=clock.now
+    )
+
+    assert settled is True
+    # Without the reset this would settle after 4 polls (see the happy
+    # path test above) -- the interruption forces it to restart the
+    # quiet window from the first idle check after it, so strictly more
+    # polls happen. (Not an exact count: float accumulation in repeated
+    # 50ms adds can tip a boundary check either way by one poll -- the
+    # real, meaningful guarantee is "more than the no-reset baseline",
+    # not a bit-exact tally.)
+    assert len(clock.sleep_calls) > 4
+
+
+def test_poll_until_idle_rejects_non_positive_timeout_ms() -> None:
+    """Failure case 2: a zero/negative timeout would never poll at all --
+    a real misconfiguration, not silently a no-op."""
+    with pytest.raises(ValueError, match="timeout_ms must be > 0"):
+        poll_until_idle(lambda: True, lambda _ms: None, timeout_ms=0)
+
+
+def test_poll_until_idle_rejects_negative_quiet_ms() -> None:
+    """Failure case 3: a negative quiet window is meaningless."""
+    with pytest.raises(ValueError, match="quiet_ms must be >= 0"):
+        poll_until_idle(lambda: True, lambda _ms: None, timeout_ms=1_000, quiet_ms=-1)
+
+
+# --- RequestCounter (the is_idle_fn each provider hands
+# poll_until_idle, backed by live page.on() listener state) -----------
+
+
+def test_request_counter_starts_idle() -> None:
+    """Happy path: with no requests ever seen, it's idle from the start
+    -- the common case (the very first settle_fn call of a crawl)."""
+    counter = RequestCounter()
+
+    assert counter.is_idle() is True
+
+
+def test_request_counter_is_not_idle_while_a_request_is_outstanding() -> None:
+    """Happy path: one on_start() with no matching on_settle() yet means
+    something is genuinely still in flight."""
+    counter = RequestCounter()
+
+    counter.on_start()
+
+    assert counter.is_idle() is False
+
+
+def test_request_counter_is_idle_again_once_every_request_settles() -> None:
+    """Happy path: on_settle() (success or failure -- both wired to it,
+    see camoufox_provider.py/patchright_provider.py) balances a matching
+    on_start(), including more than one concurrent request."""
+    counter = RequestCounter()
+
+    counter.on_start()
+    counter.on_start()
+    counter.on_settle()
+    assert counter.is_idle() is False  # one still outstanding
+    counter.on_settle()
+
+    assert counter.is_idle() is True
+
+
+def test_request_counter_never_goes_negative_on_an_unmatched_settle() -> None:
+    """Failure-adjacent case: a settle event for a request this counter
+    never saw start (e.g. one already in flight before listeners were
+    attached) must not push the tally negative -- that would make
+    is_idle() wrongly report idle while something else might still
+    genuinely be outstanding on the very next real on_start()/on_settle()
+    pair (a negative tally would need an extra, spurious on_settle() to
+    cancel out before is_idle() ever reported False again correctly)."""
+    counter = RequestCounter()
+
+    counter.on_settle()
+
+    assert counter.is_idle() is True
+    counter.on_start()
+    assert counter.is_idle() is False
+
+
+def test_request_counter_on_start_and_on_settle_accept_an_ignored_argument() -> None:
+    """Both are wired directly as page.on(event, handler) listeners,
+    which always pass the triggering Request object positionally -- must
+    accept (and ignore) it, not just work when called with none."""
+    counter = RequestCounter()
+
+    counter.on_start("a fake Request object")
+    counter.on_settle("the same shape")
+
+    assert counter.is_idle() is True

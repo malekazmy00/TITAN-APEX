@@ -57,7 +57,12 @@ from src.providers.antibot._live_dom import (
     extract_live_dom_items,
 )
 from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
-from src.providers.antibot._scroll import collect_html_snapshots, scroll_to_load_lazy_content
+from src.providers.antibot._scroll import (
+    RequestCounter,
+    collect_html_snapshots,
+    poll_until_idle,
+    scroll_to_load_lazy_content,
+)
 
 DEFAULT_TIMEOUT_MS = 30_000
 # Same reasoning and same default as CamoufoxProvider's
@@ -171,30 +176,9 @@ def _default_patchright_solve(
     """
     from patchright.sync_api import Error as PatchrightError
     from patchright.sync_api import Response as PatchrightResponse
-    from patchright.sync_api import TimeoutError as PatchrightTimeoutError
     from patchright.sync_api import sync_playwright
 
     logger = get_logger(__name__)
-
-    def _wait_for_network_idle(target_page: Any, timeout_ms: int) -> None:
-        """Same reasoning as
-        :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
-        identical helper -- a real "no fetch currently in flight" signal
-        for ``scroll_and_collect``'s ``settle_fn``, instead of guessing a
-        fixed sleep duration. A timeout here is expected and tolerated,
-        not an error: the caller's own ``pause_ms`` wait still runs right
-        after this, unchanged, as a last-resort buffer. Caught
-        specifically as ``PatchrightTimeoutError`` (a ``PatchrightError``
-        subclass) so it is *not* swallowed by this function's own
-        outer ``except PatchrightError`` -- that one is reserved for
-        genuinely unexpected failures, which should still fail the solve.
-        """
-        try:
-            target_page.wait_for_load_state("networkidle", timeout=timeout_ms)
-        except PatchrightTimeoutError:
-            logger.debug(
-                "patchright_provider.network_idle_timeout", extra={"timeout_ms": timeout_ms}
-            )
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch(headless=True)
@@ -280,26 +264,66 @@ def _default_patchright_solve(
                     # camoufox_provider.py's identical block.
                     items: list[dict[str, Any]] | None = None
                     html_snapshots: list[str] | None = None
-                    if progressive_extraction and extraction_selectors is not None:
-                        items = collect_live_dom_items_progressively(
-                            page,
-                            extraction_selectors.item,
-                            extraction_selectors.fields,
-                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                            settle_fn=lambda: _wait_for_network_idle(
-                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                            ),
-                        )
-                    elif progressive_extraction:
-                        html_snapshots = collect_html_snapshots(
-                            page,
-                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                            settle_fn=lambda: _wait_for_network_idle(
-                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                            ),
-                        )
+                    network_idle_timeouts = 0
+                    if progressive_extraction:
+                        # docs/REQUIREMENTS.md section 9's "DOM
+                        # Virtualization Instability" investigation --
+                        # same real, CI-confirmed correction as
+                        # camoufox_provider.py's identical block: a first
+                        # attempt using page.wait_for_load_state("networkidle")
+                        # made no measurable difference (confirmed via CI
+                        # run 32973393111 -- same shortfall as before it
+                        # existed), since that call is a per-*navigation*
+                        # lifecycle flag that resolves immediately once
+                        # reached, not a live "is anything in flight right
+                        # now" check -- useless for resynchronizing
+                        # against a *repeated* same-page fetch like this
+                        # one. See camoufox_provider.py's identical block
+                        # for the full explanation. This tracks in-flight
+                        # requests directly instead, maintained
+                        # continuously across the whole progressive
+                        # collection. RequestCounter and poll_until_idle
+                        # (_scroll.py) are pure, unit-tested functions --
+                        # only this listener wiring, which needs a real
+                        # Page, lives here untested.
+                        request_counter = RequestCounter()
+
+                        def _wait_for_network_idle(timeout_ms: int) -> None:
+                            nonlocal network_idle_timeouts
+                            settled = poll_until_idle(
+                                request_counter.is_idle, page.wait_for_timeout, timeout_ms
+                            )
+                            if not settled:
+                                network_idle_timeouts += 1
+
+                        page.on("request", request_counter.on_start)
+                        page.on("requestfinished", request_counter.on_settle)
+                        page.on("requestfailed", request_counter.on_settle)
+                        try:
+                            if extraction_selectors is not None:
+                                items = collect_live_dom_items_progressively(
+                                    page,
+                                    extraction_selectors.item,
+                                    extraction_selectors.fields,
+                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                    settle_fn=lambda: _wait_for_network_idle(
+                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                                    ),
+                                )
+                            else:
+                                html_snapshots = collect_html_snapshots(
+                                    page,
+                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                    settle_fn=lambda: _wait_for_network_idle(
+                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                                    ),
+                                )
+                        finally:
+                            page.remove_listener("request", request_counter.on_start)
+                            page.remove_listener("requestfinished", request_counter.on_settle)
+                            page.remove_listener("requestfailed", request_counter.on_settle)
                     else:
                         scroll_to_load_lazy_content(
                             page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
@@ -357,6 +381,9 @@ def _default_patchright_solve(
                                 len(html_snapshots) if html_snapshots is not None else None
                             ),
                             "login_flow_used": login_flow is not None,
+                            # Same reasoning as camoufox_provider.py's
+                            # identical field.
+                            "network_idle_timeouts": network_idle_timeouts,
                         },
                     )
                     return _RawSolve(

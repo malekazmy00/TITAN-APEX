@@ -75,7 +75,12 @@ from src.providers.antibot._live_dom import (
     extract_live_dom_items,
 )
 from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
-from src.providers.antibot._scroll import collect_html_snapshots, scroll_to_load_lazy_content
+from src.providers.antibot._scroll import (
+    RequestCounter,
+    collect_html_snapshots,
+    poll_until_idle,
+    scroll_to_load_lazy_content,
+)
 
 DEFAULT_TIMEOUT_MS = 30_000
 # How long to wait after the page's `load` event before reading content
@@ -260,31 +265,8 @@ def _default_camoufox_solve(
     from camoufox.sync_api import Camoufox
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import Response as PlaywrightResponse
-    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     logger = get_logger(__name__)
-
-    def _wait_for_network_idle(target_page: Any, timeout_ms: int) -> None:
-        """A real "no fetch currently in flight" signal for
-        ``scroll_and_collect``'s ``settle_fn`` -- see
-        ``_scroll.py``'s "Second revision" docstring and this module's
-        own ``DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS`` comment for
-        the exact race this closes. A timeout here is expected and
-        tolerated (a slow CI runner, or -- not the case for this mock
-        target, but ``_scroll.py`` stays target-agnostic -- some
-        unrelated persistent connection), not an error: the caller's own
-        ``pause_ms`` wait still runs right after this, unchanged, as a
-        last-resort buffer, so a timeout here never blocks the crawl
-        outright. Every other Playwright error at this call is genuinely
-        unexpected and is left to propagate, same as every other
-        Playwright call in this function.
-        """
-        try:
-            target_page.wait_for_load_state("networkidle", timeout=timeout_ms)
-        except PlaywrightTimeoutError:
-            logger.debug(
-                "camoufox_provider.network_idle_timeout", extra={"timeout_ms": timeout_ms}
-            )
     try:
         # camoufox ships no py.typed marker / inline stubs, so mypy sees
         # this constructor call itself (not objects it returns -- those
@@ -375,26 +357,79 @@ def _default_camoufox_solve(
                     # the end -- see this function's own docstring.
                     items: list[dict[str, Any]] | None = None
                     html_snapshots: list[str] | None = None
-                    if progressive_extraction and extraction_selectors is not None:
-                        items = collect_live_dom_items_progressively(
-                            page,
-                            extraction_selectors.item,
-                            extraction_selectors.fields,
-                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                            settle_fn=lambda: _wait_for_network_idle(
-                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                            ),
-                        )
-                    elif progressive_extraction:
-                        html_snapshots = collect_html_snapshots(
-                            page,
-                            DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                            DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                            settle_fn=lambda: _wait_for_network_idle(
-                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                            ),
-                        )
+                    network_idle_timeouts = 0
+                    if progressive_extraction:
+                        # docs/REQUIREMENTS.md section 9's "DOM
+                        # Virtualization Instability" investigation,
+                        # second attempt: the first fix here used
+                        # page.wait_for_load_state("networkidle"), and a
+                        # real CI run (32973393111) showed it made *no*
+                        # measurable difference -- same exact shortfall
+                        # (20 of 25) as before it existed. Root cause,
+                        # confirmed against Playwright's own load-state
+                        # tracking: "networkidle" is a per-*navigation*
+                        # lifecycle flag -- once reached (which happens
+                        # almost immediately after the very first,
+                        # automatic on-load batch here), every later call
+                        # to wait_for_load_state("networkidle") resolves
+                        # *immediately* without waiting for anything,
+                        # since no new navigation ever happens between
+                        # scroll steps on this page (it's all in-page
+                        # AJAX). It is simply the wrong tool for
+                        # resynchronizing against a *repeated* same-page
+                        # fetch. This tracks in-flight requests directly
+                        # instead (page.on("request"/"requestfinished"/
+                        # "requestfailed")), maintained continuously
+                        # across the whole progressive collection (not
+                        # reconstructed per step, so it can't miss a
+                        # request that starts and finishes between two
+                        # separate calls) -- a real, live "is anything
+                        # actually in flight right now" signal, correctly
+                        # re-armed on every check. RequestCounter and
+                        # poll_until_idle (_scroll.py) are pure,
+                        # unit-tested functions -- only this listener
+                        # wiring, which needs a real Page, lives here
+                        # untested (same "extract what can be tested"
+                        # principle entry 14 already established for this
+                        # module).
+                        request_counter = RequestCounter()
+
+                        def _wait_for_network_idle(timeout_ms: int) -> None:
+                            nonlocal network_idle_timeouts
+                            settled = poll_until_idle(
+                                request_counter.is_idle, page.wait_for_timeout, timeout_ms
+                            )
+                            if not settled:
+                                network_idle_timeouts += 1
+
+                        page.on("request", request_counter.on_start)
+                        page.on("requestfinished", request_counter.on_settle)
+                        page.on("requestfailed", request_counter.on_settle)
+                        try:
+                            if extraction_selectors is not None:
+                                items = collect_live_dom_items_progressively(
+                                    page,
+                                    extraction_selectors.item,
+                                    extraction_selectors.fields,
+                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                    settle_fn=lambda: _wait_for_network_idle(
+                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                                    ),
+                                )
+                            else:
+                                html_snapshots = collect_html_snapshots(
+                                    page,
+                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                    settle_fn=lambda: _wait_for_network_idle(
+                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                                    ),
+                                )
+                        finally:
+                            page.remove_listener("request", request_counter.on_start)
+                            page.remove_listener("requestfinished", request_counter.on_settle)
+                            page.remove_listener("requestfailed", request_counter.on_settle)
                     else:
                         scroll_to_load_lazy_content(
                             page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
@@ -457,6 +492,19 @@ def _default_camoufox_solve(
                                 len(html_snapshots) if html_snapshots is not None else None
                             ),
                             "login_flow_used": login_flow is not None,
+                            # docs/REQUIREMENTS.md section 9's "DOM
+                            # Virtualization Instability" investigation:
+                            # how many of this solve's settle_fn calls
+                            # hit DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                            # without ever seeing the network go quiet --
+                            # 0 when progressive_extraction is False (the
+                            # settle_fn/counter never runs at all). Real
+                            # diagnostic evidence for whether this
+                            # mechanism is doing anything, instead of
+                            # having to guess from the item count alone
+                            # (the mistake the first, wait_for_load_state
+                            # -based attempt at this fix made).
+                            "network_idle_timeouts": network_idle_timeouts,
                         },
                     )
                     return _RawSolve(
