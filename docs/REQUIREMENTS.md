@@ -1941,6 +1941,69 @@ real benefit here"*).
 port معزول، شهادة self-signed) قدام Anubis من غير أي تعديل عليه، ثم
 إعادة تشغيل الـ37+ اختبار كامل تاني قبل أي خطوة تالية.
 
+**Step B — نتيجة حقيقية (3 محاولات، run [32912093420](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32912093420)):**
+خطوة "بناء وتشغيل الـstack" نجحت من أول مرة (الـproxy الجديد اتبنى
+واشتغل نظيف). لكن الاختبارات الحية فشلت بشكل متكرر عبر الـ3 محاولات:
+محاولة 1 (`test_progressive_parsed_html_recovers_every_virtualization_window`،
+25→20)، محاولة 2 (اختبار خارجي غير مرتبط تمامًا — `nowsecure.nl` timeout)،
+محاولة 3 (`test_progressive_live_dom_recovers_every_virtualization_window`
+تاني، 25→**صفر**، مع `Page.wait_for_timeout: Target page, context or
+browser has been closed`). عائلة اختبار الـDOM Virtualization التدريجي
+فشلت في 2 من 3 محاولات — نمط متكرر حقيقي، مش flake عابر واحد، بس
+**مؤكّد مش مرتبط بـJA4/TLS** (الـtarget بتاعه `/feed` عادي HTTP).
+
+**تحقيق سريع مطلوب من المستخدم قبل الاستمرار — نتيجة حقيقية، مش
+افتراض:**
+
+1. **تصحيح حقيقي للفرضية الأولى:** فحصت `.github/workflows/ci.yml`
+   مباشرة — **مفيش container بيشغّل Camoufox/Patchright خالص**. الاختبارات
+   الحية بتتشغّل بـ`pytest tests/integration` **مباشرة على GitHub
+   Actions runner نفسه** (`ubuntu-latest`)، مش جوّه أي service في
+   `docker-compose.test.yml` (اللي بيحتوي بس على mock-target/anubis/
+   byparr/ja4-proxy — الطرف اللي بيتستهدف، مش أداة السحب). بحثت
+   القيمة الفعلية لـ`/dev/shm` على runner من نوع `ubuntu-latest` (بحث
+   ويب، مش تخمين): **~3.4GB**، مش الـ64MB الافتراضية بتاعة Docker
+   الشهيرة اللي المشكلة دي موثّقة عادةً بيها. يعني الفرضية الأصلية
+   (`shm_size` في docker-compose) معندهاش container حقيقي تتطبّق عليه.
+
+2. **تصحيح تاني مهم:** راجعت الـconfigs الفعلية
+   (`mock_target_feed_virtualized_progressive_{parsed_html,live_dom}.yaml`)
+   — الاتنين `antibot_provider: camoufox`. **كل الكراشات الثلاثة
+   اللي شفناها (بند A وB مع بعض) كانت في Camoufox (Firefox) حصريًا،
+   مش Patchright (Chromium) خالص.** `--disable-dev-shm-usage` نفسه
+   flag خاص بـChromium بس (Playwright's بحث ويب مباشر أكّد كل الحالات
+   الموثّقة بالحرف عن نفس رسالة الخطأ دي مرتبطة بـChromium/Docker's
+   64MB — مش Firefox). يعني الإضافة دي، لو حصلت، مش هتصلح اللي بيكسر
+   فعليًا.
+
+**اللي اتنفّذ فعليًا رغم كده (تعديلات حقيقية، مش وهمية):**
+
+- إضافة `--disable-dev-shm-usage` لـ`p.chromium.launch()` في
+  `patchright_provider.py` — دفاع احترازي حقيقي (flag موثّق ومجاني
+  التكلفة، ومتأكّد إنه مالوش أي تأثير على خصائص التخفّي بتاعة
+  patchright)، موثّق صراحة إنه مش هيصلح الكراشات المُلاحظة فعليًا
+  (كلها Camoufox).
+- **اكتشاف حقيقي تاني مفيد بغض النظر عن سبب الكراش:** `deploy.resources.limits`
+  في `docker-compose.test.yml` (بما فيها الـja4-proxy الجديد بتاعي)
+  **مش بيتطبّق فعليًا تحت `docker compose up` العادي** — ده construct
+  خاص بـSwarm mode بس (موثّق في Docker's نفسها). يعني الـ"128M" اللي
+  حطّيتها لـja4-proxy في Step B معندهاش أي حماية فعلية. اتصلحت لـ
+  `mem_limit`/`cpus` (الحقول الحقيقية المُطبَّقة فعليًا) للـja4-proxy
+  تحديدًا — باقي الـservices القديمة (anubis/mock-target/byparr) عندها
+  نفس الفجوة بالظبط، بس اتسابت من غير تعديل (خارج نطاق الجولة دي،
+  مستقرة من 16 جولة سابقة).
+- **لسه مفيش حل حقيقي لكراشات Camoufox نفسها** — مفيش Firefox-equivalent
+  موثّق لـ`--disable-dev-shm-usage` اتلقى في البحث. الاحتمال الأقرب
+  (مش مؤكّد): ضغط موارد عام على الـrunner (RAM/CPU) مع تعدد الـcontainers
+  والمتصفحات الشغّالة مع بعض، مش تحديدًا shared-memory. **مسجّلة
+  كمحاولة مستبعدة جزئيًا** — الجزء المتعلق بـshm/Chromium اتنفّذ، الجزء
+  المتعلق بـFirefox/Camoufox لسه مفتوح، زي ما اتفق عليه (بند مستقل لو
+  استمر يتكرر).
+- **قيد حقيقي في بيئة التنفيذ الحالية:** مفيش Docker daemon متاح محليًا
+  في الـsandbox دي (اتأكّد من الأول)، فتشغيل الاختبار 3 مرات محليًا زي
+  ما طُلب **مش ممكن فعليًا هنا** — البديل الوحيد المتاح هو التحقق عبر
+  CI حقيقي (نفس الأداة المستخدمة طول الجلسة دي).
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
