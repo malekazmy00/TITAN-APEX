@@ -24,6 +24,7 @@ from security.auth import (
 from security.botd_integration import VENDORED_SCRIPT_PATH, log_botd_report
 from security.file_logger import get_file_logger
 from security.honeypot_logger import log_honeypot_trigger
+from security.ja4_integration import JA4_HEADER_NAME, log_ja4_fingerprint
 from structural.ab_variant import choose_variant, container_tag_for
 from structural.cookie_wall import (
     ACCEPT_PATH,
@@ -87,8 +88,18 @@ def create_app(
     )
     honeypot_logger = get_file_logger("mock_target.honeypot", cfg.honeypot_log_path)
     botd_logger = get_file_logger("mock_target.botd", cfg.botd_log_path)
+    ja4_logger = get_file_logger("mock_target.ja4", cfg.ja4_log_path)
     app.config["CSRF_TOKEN_STORE"] = CsrfTokenStore()
     app.config["AUTH_SESSION_STORE"] = SessionStore(ttl_seconds=cfg.session_ttl_seconds)
+
+    @app.before_request
+    def _log_ja4_fingerprint() -> None:
+        # Runs for every route, not just new ones -- see
+        # security/ja4_integration.py's own docstring for why this is
+        # structurally a no-op for every existing route (none of them
+        # are ever reached through the JA4 proxy, so the header is
+        # simply never present on those requests).
+        log_ja4_fingerprint(ja4_logger, request.headers.get(JA4_HEADER_NAME))
 
     def _classes() -> dict[str, str]:
         randomizer: MarkupRandomizer = app.config["MARKUP_RANDOMIZER"]
