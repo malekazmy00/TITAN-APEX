@@ -279,6 +279,52 @@ def test_progressive_collection_ignores_items_with_no_id_field_value() -> None:
     assert items == []
 
 
+def test_progressive_collection_passes_settle_fn_through_to_scroll_and_collect() -> None:
+    """docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
+    investigation: this module's own settle_fn parameter is a thin
+    passthrough to scroll_and_collect's -- confirms it actually reaches
+    it, invoked once per scroll attempt, not swallowed along the way."""
+    page = _FakeVirtualizedPage(
+        row_sets_per_read=[
+            [_post_row("p1", "alice", "hi")],
+            [_post_row("p2", "bob", "yo")],
+            [_post_row("p3", "carol", "sup")],
+        ],
+    )
+    calls = 0
+
+    def settle() -> None:
+        nonlocal calls
+        calls += 1
+
+    items = collect_live_dom_items_progressively(
+        page,
+        '[data-role="post"]',
+        FIELD_SELECTORS,
+        max_attempts=2,
+        pause_ms=700,
+        settle_fn=settle,
+    )
+
+    assert calls == 2  # once per scroll attempt, not the pre-scroll read
+    assert {item["post_id"] for item in items} == {"p1", "p2", "p3"}
+
+
+def test_progressive_collection_defaults_settle_fn_to_none() -> None:
+    """Happy path (backward compatibility): every call site written
+    before this revision never passes settle_fn -- must keep working
+    unchanged."""
+    page = _FakeVirtualizedPage(
+        row_sets_per_read=[[_post_row("p1", "alice", "hi")], [_post_row("p2", "bob", "yo")]],
+    )
+
+    items = collect_live_dom_items_progressively(
+        page, '[data-role="post"]', FIELD_SELECTORS, max_attempts=1, pause_ms=700
+    )
+
+    assert {item["post_id"] for item in items} == {"p1", "p2"}
+
+
 def test_progressive_collection_uses_a_custom_id_field_when_given() -> None:
     row = _post_row("p1", "alice", "hi")
     page = _FakeVirtualizedPage(

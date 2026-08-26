@@ -113,6 +113,23 @@ DEFAULT_SCROLL_PAUSE_MS = 700
 # already-proven scroll_to_load_lazy_content caller's timing.
 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS = 10
 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
+# docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
+# investigation: DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS above only narrowed
+# a real race, never closed it -- the same test family kept failing
+# intermittently (21/20/0/24 of an expected 25, across 7 separate CI
+# attempts, always short, never over) even with the more generous
+# constant. Root cause, confirmed against templates/feed.html's own
+# source: its loadMore() silently drops a scroll-triggered call if the
+# *previous* fetch is still in flight, and a fixed pause_ms sleep is a
+# guessed duration for "one fetch+render+trim round trip", not a real
+# completion signal -- wrong under real, variable CI load. This bounds
+# how long _wait_for_network_idle below (a real completion signal) is
+# allowed to wait per scroll step before falling back to the unchanged
+# pause_ms sleep -- generous enough for a slow CI runner, bounded so a
+# page with some unrelated persistent connection (this mock target has
+# none, but _scroll.py stays engine/target-agnostic) can't hang a whole
+# crawl step.
+DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS = 5_000
 
 
 class _RawSolve(NamedTuple):
@@ -209,6 +226,11 @@ def _default_camoufox_solve(
     the caller to parse and merge itself, since the live-DOM extraction
     path is the only one that needs selectors down here at all). A no-op
     (behaves exactly like ``progressive_extraction=False``) when not given.
+    Each scroll step also waits (bounded,
+    ``DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS``) for network activity
+    to genuinely settle before collecting -- see this module's own
+    ``_wait_for_network_idle`` and ``_scroll.py``'s "Second revision"
+    docstring for the real, CI-confirmed race this closes.
 
     ``login_flow`` (docs/REQUIREMENTS.md section 9 entry 15, Known
     Limitation #1: login/session): when given,
@@ -238,8 +260,31 @@ def _default_camoufox_solve(
     from camoufox.sync_api import Camoufox
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import Response as PlaywrightResponse
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     logger = get_logger(__name__)
+
+    def _wait_for_network_idle(target_page: Any, timeout_ms: int) -> None:
+        """A real "no fetch currently in flight" signal for
+        ``scroll_and_collect``'s ``settle_fn`` -- see
+        ``_scroll.py``'s "Second revision" docstring and this module's
+        own ``DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS`` comment for
+        the exact race this closes. A timeout here is expected and
+        tolerated (a slow CI runner, or -- not the case for this mock
+        target, but ``_scroll.py`` stays target-agnostic -- some
+        unrelated persistent connection), not an error: the caller's own
+        ``pause_ms`` wait still runs right after this, unchanged, as a
+        last-resort buffer, so a timeout here never blocks the crawl
+        outright. Every other Playwright error at this call is genuinely
+        unexpected and is left to propagate, same as every other
+        Playwright call in this function.
+        """
+        try:
+            target_page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except PlaywrightTimeoutError:
+            logger.debug(
+                "camoufox_provider.network_idle_timeout", extra={"timeout_ms": timeout_ms}
+            )
     try:
         # camoufox ships no py.typed marker / inline stubs, so mypy sees
         # this constructor call itself (not objects it returns -- those
@@ -337,12 +382,18 @@ def _default_camoufox_solve(
                             extraction_selectors.fields,
                             DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                             DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                            settle_fn=lambda: _wait_for_network_idle(
+                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                            ),
                         )
                     elif progressive_extraction:
                         html_snapshots = collect_html_snapshots(
                             page,
                             DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                             DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                            settle_fn=lambda: _wait_for_network_idle(
+                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                            ),
                         )
                     else:
                         scroll_to_load_lazy_content(

@@ -164,6 +164,81 @@ def test_collect_variant_rejects_negative_pause_ms() -> None:
         scroll_and_collect(_FakePage([1000]), max_attempts=8, pause_ms=-1, collect_fn=lambda: None)
 
 
+# --- settle_fn (docs/REQUIREMENTS.md section 9's "DOM Virtualization
+# Instability" investigation -- the real, CI-confirmed race the
+# "more generous constants" fix above only narrowed, never closed) -----
+
+
+def test_settle_fn_defaults_to_none_and_is_never_required() -> None:
+    """Happy path (backward compatibility): every caller written before
+    this revision -- including every other test in this file -- never
+    passes settle_fn, and must keep behaving exactly as before."""
+    page = _FakePage([1000, 1000, 1000])
+
+    scroll_and_collect(page, max_attempts=2, pause_ms=700, collect_fn=lambda: None)
+
+    assert page.wait_calls == [700, 700]
+
+
+def test_settle_fn_runs_once_per_scroll_attempt_before_the_pause() -> None:
+    """The actual fix: a real completion signal (settle_fn) is given a
+    chance to run *before* the fixed pause_ms sleep on every attempt --
+    not just once, not after the pause (which would defeat the point:
+    the pause would still race the same fetch settle_fn is meant to wait
+    for)."""
+    page = _FakePage([1000, 1000, 1000])
+    order: list[str] = []
+
+    def settle() -> None:
+        order.append("settle")
+
+    def collect() -> None:
+        order.append("collect")
+
+    scroll_and_collect(page, max_attempts=2, pause_ms=700, collect_fn=collect, settle_fn=settle)
+
+    # pre-scroll collect, then (settle, collect) per attempt -- settle_fn
+    # is not called before the very first, pre-scroll read (there's no
+    # scroll step to settle yet).
+    assert order == ["collect", "settle", "collect", "settle", "collect"]
+
+
+def test_settle_fn_is_not_called_when_max_attempts_validation_fails() -> None:
+    """Failure-adjacent case: validation happens before any scroll step
+    (and thus before settle_fn could ever run) -- same ordering
+    guarantee scroll_to_load_lazy_content's own validation already has."""
+    calls = 0
+
+    def settle() -> None:
+        nonlocal calls
+        calls += 1
+
+    with pytest.raises(ValueError, match="max_attempts must be > 0"):
+        scroll_and_collect(
+            _FakePage([1000]), max_attempts=0, pause_ms=700, collect_fn=lambda: None,
+            settle_fn=settle,
+        )
+
+    assert calls == 0
+
+
+def test_collect_html_snapshots_passes_settle_fn_through() -> None:
+    """collect_html_snapshots is a thin wrapper -- confirms settle_fn
+    reaches scroll_and_collect unchanged through it too, not just when
+    calling scroll_and_collect directly."""
+    page = _FakeContentPage(heights=[1000, 1000], html_per_read=["first", "second"])
+    calls = 0
+
+    def settle() -> None:
+        nonlocal calls
+        calls += 1
+
+    snapshots = collect_html_snapshots(page, max_attempts=1, pause_ms=700, settle_fn=settle)
+
+    assert snapshots == ["first", "second"]
+    assert calls == 1
+
+
 # --- collect_html_snapshots (docs/REQUIREMENTS.md section 9 entry 14 --
 # the "parsed_html" half of the DOM Virtualization fix) -----------------
 

@@ -51,6 +51,7 @@ def collect_live_dom_items_progressively(
     max_attempts: int,
     pause_ms: int,
     id_field: str = "post_id",
+    settle_fn: Callable[[], None] | None = None,
 ) -> list[dict[str, Any]]:
     """The ``"live_dom"`` half of docs/REQUIREMENTS.md section 9 entry
     14's progressive-collection fix for entry 13's confirmed DOM
@@ -67,6 +68,11 @@ def collect_live_dom_items_progressively(
     entirely, or genuinely absent on that particular element) is dropped
     from the merge rather than raising, since there's no way to
     deduplicate what has no identity.
+
+    ``settle_fn`` (docs/REQUIREMENTS.md section 9's "DOM Virtualization
+    Instability" investigation): passed straight through to
+    :func:`~src.providers.antibot._scroll.scroll_and_collect` -- see its
+    own docstring for why this module doesn't build one itself.
     """
     collected: dict[Any, dict[str, Any]] = {}
 
@@ -76,7 +82,7 @@ def collect_live_dom_items_progressively(
             if key is not None and key not in collected:
                 collected[key] = item
 
-    scroll_and_collect(page, max_attempts, pause_ms, _collect)
+    scroll_and_collect(page, max_attempts, pause_ms, _collect, settle_fn)
     return list(collected.values())
 
 

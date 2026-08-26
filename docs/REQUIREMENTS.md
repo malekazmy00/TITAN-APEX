@@ -1881,6 +1881,102 @@ PASSED (0 items — Anubis's own logs في نفس الـrun أكّدت السب�
 `"scroll"` trigger (مش live-CI-مُختبر end-to-end الجولة دي) لسه موثّق
 وقائم زي ما اتشرح فوق.
 
+### 17. DOM Virtualization Instability — Progressive Extraction Race Condition — تحقيق مستقل (طلب المستخدم صراحة، أثناء وقف مؤقت لـ JA4 experiment)
+
+**السياق:** أثناء تنفيذ الـ F5-class behavioral layer (JA4/TLS) على
+branch منفصل (`claude/ja4-experiment`، لسه موجود بدون حذف، موقوف مؤقتًا
+عند Step C)، اتلاحظت عائلة اختبار الـ progressive DOM Virtualization
+(بند 14) بتفشل بشكل متكرر عبر عدة CI runs من غير أي علاقة بالتعديلات
+الفعلية بتاعة JA4 نفسها (target بتاعها `/feed` عادي HTTP، مش TLS خالص).
+بعد تحقيق سريع أوّلي (30-60 دقيقة، فرضية Docker shared-memory) صحّح
+جزء من الفرضية بس سايب السبب الجذري الحقيقي لسه مفتوح، طلب المستخدم
+صراحة: وقف الـ JA4 experiment مؤقتًا (branch يفضل موجود)، وفتح بند
+تحقيق مستقل ومخصص لهذا النمط على `claude/osint-scraping-platform-wnuyk6`
+(مش الـ branch التجريبي).
+
+**جمع الأدلة (7 محاولات CI منفصلة، من REQUIREMENTS.md الخاص بـ
+`claude/ja4-experiment` — بند 17 هناك، موثّق بالتفصيل وقت حصولها، مش
+افتراض لاحق):**
+
+| المحاولة | Run | الاختبار اللي فشل | المتوقع/الفعلي | ملحوظة |
+|---|---|---|---|---|
+| Step A، محاولة 1 | [32909141714](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32909141714) | `test_progressive_parsed_html_recovers_every_virtualization_window` | 25→20 | بدون رسالة كراش |
+| Step B، محاولة 1 | [32912093420](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32912093420) | نفس الاختبار (parsed_html) | 25→20 | بدون رسالة كراش |
+| Step B، محاولة 3 | نفس الـ run فوق | `test_progressive_live_dom_recovers_every_virtualization_window` | 25→**0** | `Page.wait_for_timeout: Target page, context or browser has been closed` — كراش حقيقي، فئة فشل مختلفة تمامًا |
+| Step C، محاولة 2 | [32968255926](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32968255926) | `test_progressive_live_dom_recovers_every_virtualization_window` | 25→24 | بدون رسالة كراش |
+
+(الرقم الرابع من الأربعة المذكورين في طلب المستخدم — 21 — من نفس عائلة
+الاختبار في جولة سابقة أثناء بناء بند 14 نفسه، قبل حتى ما الثوابت
+الأسخى `DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS=10`/`DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS=1500ms`
+تتضاف — موثّق هناك تحت "23/25" كوصف عام لنفس العائلة، مش رقم run منفصل
+موثّق بدقّة أكبر من كده في أي مكان تاني.)
+
+**تحليل التوقيت (إجابة مباشرة على سؤال المستخدم):** مفيش نمط توقيت
+ثابت — الفشل مش بيحصل بعد نفس عدد الـ scroll steps بالظبط في كل مرة
+(اللوج المتاح، `html_snapshot_count`/`live_dom_item_count`، بيثبت إن كل
+الـ `max_attempts` (10) بتتنفّذ فعليًا كل مرة، بدون early exit — نفس
+تأكيد بند 14 القديم). **العدد المرتجع دايمًا أقل من 25، أبدًا مش أكتر
+ولا يساويه برقم تاني ثابت (20، 0، 24)** — ده تحديدًا التوقيع (signature)
+بتاع **race حقيقي، مش نقص/heuristic غلط** (لو كان heuristic غلط زي بند
+14's الأولى، كان هيرجّع نفس الرقم الثابت كل مرة — 5 أو 10، مش أرقام
+عشوائية قريبة من 25).
+
+**السبب الجذري (اتأكّد من قراءة الكود الفعلي، مش تخمين):**
+`templates/feed.html`'s `loadMore()` بتحمي نفسها بـ`loading` flag —
+أي نداء يوصل والـ fetch السابق لسه شغّال بيتجاهل بصمت (`if (loading ||
+!hasNext) return;`، بدون queue ولا retry). `scroll_and_collect`
+(`_scroll.py`) بتنادي `page.evaluate(_SCROLL_AND_DISPATCH_SCRIPT)` (بتبعت
+الـ scroll event) وبعدها بتستنى مدة ثابتة (`pause_ms`) قبل ما تنادي
+`collect_fn()` — المدة دي **تخمين** لمدة "fetch+render+trim كاملة"، مش
+إشارة حقيقية للانتهاء. لو التخمين غلط (ضغط CI حقيقي ومتغيّر)، إما (أ)
+القراءة بتحصل قبل ما الـ fetch يخلص فعليًا، أو (ب) الـ scroll event
+بتاع الخطوة الجاية بيوصل والـ fetch السابق لسه شغّال فيتجاهَل بصمت —
+ولو ده حصل في آخر محاولة (مفيش خطوة تانية تعيد المحاولة)، النافذة دي
+بتضيع نهائيًا. الاتنين بينتجوا بالظبط النمط المُلاحظ: رقم عشوائي، دايمًا
+ناقص، بيعتمد على مين المحاولات اللي الـ race ضربها في الـ run ده تحديدًا.
+
+**تفرقة صريحة (زي ما طلب المستخدم أثناء JA4 experiment، نفس المبدأ
+مُطبّق هنا):** حالة الـ"25→0" (Step B، محاولة 3) رسالتها مختلفة تمامًا
+(`Page.wait_for_timeout: ... browser has been closed` — كراش متصفح
+حقيقي) عن باقي الحالات (20/24، بدون أي رسالة كراش، القراءة بترجع نتيجة
+سليمة بس ناقصة). دول **فئتين فشل مختلفتين**: الـrace المذكور فوق (سببه
+معروف الآن ومُصلَح) لا يفسّر كراش متصفح كامل — ده أقرب لضغط موارد CI
+حقيقي (نفس الفرضية اللي التحقيق السريع السابق قالها ولسه غير مؤكدة
+بالكامل)، مش نفس السبب. الإصلاح ده بيستهدف الـrace بس، مش الكراشات.
+
+**الإصلاح (`src/providers/antibot/_scroll.py` + `_live_dom.py` +
+الاتنين providers):** `scroll_and_collect`/`collect_html_snapshots`/
+`collect_live_dom_items_progressively` كسبوا parameter اختياري جديد
+`settle_fn` (افتراضي `None` — صفر تغيير سلوك لأي caller قديم)، بيتنادى
+**بعد** الـ scroll+dispatch مباشرة و**قبل** الـ `pause_ms` sleep
+القديم (اللي فضل زي ما هو، كـ buffer أخير). `_scroll.py`/`_live_dom.py`
+نفسهم فضلوا **من غير أي استيراد لـ playwright/patchright** (نفس مبدأ
+`Any`-typing الموثّق من الأول) — كل provider بيبني الـ `settle_fn`
+بتاعه بنفسه، حوالين `page.wait_for_load_state("networkidle",
+timeout=DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS)` (5 ثواني)، ماسك
+الـ timeout الخاص بمكتبته هو (`playwright.sync_api.TimeoutError` لـ
+camoufox، `patchright.sync_api.TimeoutError` لـ patchright — مش نفس
+الكلاس، درس اتاخد من comments قديمة في نفس الملفين) — timeout هنا
+متوقع ومقبول (مش error)، بيتسجّل بـ`logger.debug` وبعدين الكود بيكمل
+عادي للـ `pause_ms` القديم. ده إشارة انتهاء **حقيقية** (network فعليًا
+مفيهوش نشاط) بدل تخمين مدة ثابتة — بيحل الـrace من غير ما يغيّر أي
+سلوك موجود (كل الـ providers لسه بتعمل نفس الخطوات، بس بانتظار حقيقي
+بدل تخمين).
+
+**اتّحقّق محليًا:** `ruff check src/ tests/` نظيف، `mypy src/ --strict`
+نظيف (36 ملف)، 299 unit+contract test PASSED (85.48% coverage — لسه
+فوق الـ gate؛ `_default_camoufox_solve`/`_default_patchright_solve`'s
+الأجسام الداخلية، بما فيها `_wait_for_network_idle` الجديدة، فضلت غير
+مغطاة محليًا بنفس السبب الموثّق من بند 14: محتاجة متصفح حقيقي، بتتغطى
+فعليًا بس عبر `tests/integration` في CI). اختبارات جديدة اتضافت
+لـ`test_scroll.py`/`test_live_dom.py` بتأكّد `settle_fn`'s الترتيب
+(بعد dispatch، قبل الـ pause)، الـ passthrough عبر
+`collect_html_snapshots`/`collect_live_dom_items_progressively`، والـ
+default `None` (backward compatibility) صراحة. **لسه محتاجين تأكيد CI
+حقيقي** للرقم 25 عبر عدة محاولات (مش محاولة واحدة بس، بما إن الـ race
+كانت عشوائية أصلًا) — النتيجة الفعلية هتتسجّل هنا بمجرد ما الـ run(s)
+تخلص، زي كل بند قبل كده.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

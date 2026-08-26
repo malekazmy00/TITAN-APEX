@@ -74,6 +74,11 @@ DEFAULT_SCROLL_PAUSE_MS = 700
 # see camoufox_provider.py's own comment for the full explanation.
 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS = 10
 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
+# Same value and same reasoning as CamoufoxProvider's identical constant
+# (docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
+# investigation) -- see camoufox_provider.py's own comment for the full
+# explanation.
+DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS = 5_000
 
 
 class _RawSolve(NamedTuple):
@@ -146,7 +151,10 @@ def _default_patchright_solve(
     ``post_id`` behavior as
     :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
     identical parameter (docs/REQUIREMENTS.md section 9 entry 14) -- see
-    that function's own docstring for the full explanation.
+    that function's own docstring for the full explanation, including
+    the network-idle ``settle_fn`` wait (docs/REQUIREMENTS.md section 9's
+    "DOM Virtualization Instability" investigation) each scroll step now
+    does before collecting.
 
     ``login_flow``: same reasoning, order, and success/failure decision
     (real-response-status-driven, not assumed) as
@@ -163,9 +171,30 @@ def _default_patchright_solve(
     """
     from patchright.sync_api import Error as PatchrightError
     from patchright.sync_api import Response as PatchrightResponse
+    from patchright.sync_api import TimeoutError as PatchrightTimeoutError
     from patchright.sync_api import sync_playwright
 
     logger = get_logger(__name__)
+
+    def _wait_for_network_idle(target_page: Any, timeout_ms: int) -> None:
+        """Same reasoning as
+        :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
+        identical helper -- a real "no fetch currently in flight" signal
+        for ``scroll_and_collect``'s ``settle_fn``, instead of guessing a
+        fixed sleep duration. A timeout here is expected and tolerated,
+        not an error: the caller's own ``pause_ms`` wait still runs right
+        after this, unchanged, as a last-resort buffer. Caught
+        specifically as ``PatchrightTimeoutError`` (a ``PatchrightError``
+        subclass) so it is *not* swallowed by this function's own
+        outer ``except PatchrightError`` -- that one is reserved for
+        genuinely unexpected failures, which should still fail the solve.
+        """
+        try:
+            target_page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        except PatchrightTimeoutError:
+            logger.debug(
+                "patchright_provider.network_idle_timeout", extra={"timeout_ms": timeout_ms}
+            )
     with sync_playwright() as p:
         try:
             browser = p.chromium.launch(headless=True)
@@ -258,12 +287,18 @@ def _default_patchright_solve(
                             extraction_selectors.fields,
                             DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                             DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                            settle_fn=lambda: _wait_for_network_idle(
+                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                            ),
                         )
                     elif progressive_extraction:
                         html_snapshots = collect_html_snapshots(
                             page,
                             DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                             DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                            settle_fn=lambda: _wait_for_network_idle(
+                                page, DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
+                            ),
                         )
                     else:
                         scroll_to_load_lazy_content(

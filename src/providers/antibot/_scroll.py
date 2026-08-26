@@ -68,6 +68,55 @@ on every attempt. :func:`scroll_to_load_lazy_content` is, again,
 completely unaffected by any of this -- every other, already
 CI-confirmed lazy-load target that relies on it keeps its exact prior
 behavior.
+
+**Second revision (docs/REQUIREMENTS.md section 9's "DOM Virtualization
+Instability" investigation -- a real, CI-confirmed race the "more
+generous constants" fix above only narrowed, never closed):** even
+after ``DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS`` was raised to 1500ms, the
+exact same test family kept failing intermittently across later CI runs
+-- different item counts every time (21, 20, 0, 24 of an expected 25,
+across 7 separate CI attempts), always strictly *below* 25, never above
+or exactly on some other fixed number. That shape is the signature of a
+**race, not a shortage**: ``templates/feed.html``'s own ``loadMore()``
+guards itself with a ``loading`` flag and silently *drops* (not queues,
+not retries) any call that arrives while the previous fetch is still in
+flight. ``scroll_and_collect`` dispatches the synthetic ``'scroll'``
+event and then sleeps a *fixed* ``pause_ms`` before reading/collecting
+-- a guess at "how long one fetch+render+trim round trip takes", not a
+real synchronization signal. Any time that guess is wrong (real,
+variable CI network/CPU load), one of two things happens: the collect
+runs *before* that step's fetch has actually landed (a stale read), or
+the *next* step's dispatched event fires while the previous fetch is
+still in flight and gets silently dropped -- and if that drop happens
+to land on the *last* attempt (no further step left to re-trigger it),
+that window's items are permanently lost. Both produce exactly the
+observed pattern: a random, always-partial count, since it depends on
+which attempt(s) the race happens to hit under whatever load that
+specific CI run experienced -- not a deterministic, reproducible
+shortfall the way the *first* revision's bug was (that one was 100%
+reproducible: one scroll step, every time, regardless of load).
+
+The fix is to stop guessing a duration and instead wait for a real
+completion signal before collecting. :func:`scroll_and_collect` now
+accepts an optional ``settle_fn`` callback, invoked immediately after
+the scroll+dispatch step and *before* the existing ``pause_ms`` wait
+(which still runs afterward, unchanged, as a final settle buffer for
+whatever ``settle_fn`` itself doesn't cover) -- deliberately **not**
+implemented inside this module itself: the natural tool for it
+(Playwright's ``page.wait_for_load_state("networkidle", ...)``) can
+raise a timeout error, and this module stays genuinely engine-agnostic
+(the same duck-typed ``Any`` tradeoff its own module docstring already
+documents for Camoufox's real Playwright objects vs. Patchright's
+structurally-identical-but-distinct ones) -- it has no business
+importing either library's own exception type just to catch one. Each
+provider supplies its own ``settle_fn`` built around *its own*
+precisely-typed timeout exception instead (see
+``camoufox_provider.py``/``patchright_provider.py``'s own
+``_wait_for_network_idle``). ``settle_fn`` defaults to ``None`` (a
+no-op) -- every existing caller that doesn't pass one (including every
+unit test written before this revision) keeps its exact prior behavior,
+the same backward-compatibility guarantee this module has kept at every
+prior revision.
 """
 
 from __future__ import annotations
@@ -117,7 +166,11 @@ _SCROLL_AND_DISPATCH_SCRIPT = (
 
 
 def scroll_and_collect(
-    page: Any, max_attempts: int, pause_ms: int, collect_fn: Callable[[], None]
+    page: Any,
+    max_attempts: int,
+    pause_ms: int,
+    collect_fn: Callable[[], None],
+    settle_fn: Callable[[], None] | None = None,
 ) -> None:
     """Calls ``collect_fn()`` after *every* read of the page -- including
     the very first, pre-scroll one -- so a caller can capture or extract
@@ -140,6 +193,15 @@ def scroll_and_collect(
     special handling either way, since it was already captured on an
     earlier step).
 
+    ``settle_fn`` (docs/REQUIREMENTS.md section 9's "DOM Virtualization
+    Instability" investigation, this module's own docstring's "Second
+    revision"): an optional caller-supplied callback invoked right after
+    the scroll+dispatch step, before the ``pause_ms`` wait below --
+    intended to be a *real* wait-for-completion signal (e.g.
+    ``page.wait_for_load_state("networkidle", ...)``) rather than a fixed
+    guessed duration. ``None`` (the default) skips it entirely -- the
+    exact prior behavior, unchanged.
+
     Raises:
         ValueError: if ``max_attempts`` is not positive, or ``pause_ms``
             is negative -- both are meaningless configurations.
@@ -152,11 +214,18 @@ def scroll_and_collect(
     collect_fn()
     for _ in range(max_attempts):
         page.evaluate(_SCROLL_AND_DISPATCH_SCRIPT)
+        if settle_fn is not None:
+            settle_fn()
         page.wait_for_timeout(pause_ms)
         collect_fn()
 
 
-def collect_html_snapshots(page: Any, max_attempts: int, pause_ms: int) -> list[str]:
+def collect_html_snapshots(
+    page: Any,
+    max_attempts: int,
+    pause_ms: int,
+    settle_fn: Callable[[], None] | None = None,
+) -> list[str]:
     """The ``"parsed_html"`` half of docs/REQUIREMENTS.md section 9 entry
     14's progressive-collection fix: captures ``page.content()`` after
     *every* scroll step via :func:`scroll_and_collect`, instead of just
@@ -166,7 +235,12 @@ def collect_html_snapshots(page: Any, max_attempts: int, pause_ms: int) -> list[
     to parse and merge itself -- this module only captures the raw
     strings, since only the caller knows which field is the real identity
     key to deduplicate by.
+
+    ``settle_fn`` is passed straight through to :func:`scroll_and_collect`
+    -- see its own docstring.
     """
     snapshots: list[str] = []
-    scroll_and_collect(page, max_attempts, pause_ms, lambda: snapshots.append(page.content()))
+    scroll_and_collect(
+        page, max_attempts, pause_ms, lambda: snapshots.append(page.content()), settle_fn
+    )
     return snapshots
