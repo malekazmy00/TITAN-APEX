@@ -129,6 +129,19 @@ pytest tests/contract -v
 pytest tests/unit tests/integration tests/contract -v
 ```
 
+### تحذير حقيقي، مسجّل بعد غلطة اتكررت مرتين (docs/REQUIREMENTS.md
+section 9 entry 17): تشغيل `pytest tests/unit tests/contract` **مع
+بعض** بـ`--cov-fail-under=85` بيدّي رقم coverage **أعلى وغير دقيق** من
+بوابة الـCI الحقيقية — `.github/workflows/ci.yml`'s "Unit tests
+(coverage gate >= 85%)" step بيشغّل `pytest tests/unit` **لوحدها**
+(الـcontract tests خطوة منفصلة بعدها، من غير `--cov`). الفرق مش نظري:
+حصل فعليًا (run 32977436823) إن رقم محلي 85.13% (unit+contract مع بعض)
+كان في الحقيقة 84.89% (unit لوحدها، نفس أمر CI بالحرف) — ده فشل CI
+حقيقي مسبّبه غلطة تحقق محلي، مش الكود نفسه. **`scripts/verify-like-ci.sh`**
+بيشغّل بالظبط نفس الأوامر اللي `.github/workflows/{lint,ci}.yml`
+بتشغّلها (بنفس الترتيب، الأجزاء اللي مش محتاجة Docker/متصفح حقيقي بس)
+— شغّله قبل أي push، مش الأوامر فوق منفردة بإيدك.
+
 ### قاعدة "No Silent Failure":
 كل test في `tests/unit` لازم يغطي:
 1. الحالة الناجحة (happy path)
