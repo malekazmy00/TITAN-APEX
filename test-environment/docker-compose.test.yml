@@ -94,6 +94,7 @@ services:
       INTERSTITIAL_FEED_TOTAL_BATCHES: ${INTERSTITIAL_FEED_TOTAL_BATCHES:-3}
       HONEYPOT_LOG_PATH: /logs/honeypot_triggers.log
       BOTD_LOG_PATH: /logs/botd_flags.log
+      JA4_LOG_PATH: /logs/ja4_fingerprints.log
     volumes:
       - ./logs:/logs
     networks:

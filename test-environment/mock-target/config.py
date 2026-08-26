@@ -97,6 +97,15 @@ class MockTargetConfig:
         self.botd_log_path: str = os.environ.get(
             "BOTD_LOG_PATH", "test-environment/mock-target/security/botd_flags.log"
         )
+        # docs/REQUIREMENTS.md section 9 entry 17 (F5-class multi-signal
+        # layer, claude/ja4-experiment branch): the real JA4 fingerprint
+        # arrives as a header set upstream by test-environment/ja4-proxy
+        # (real TLS termination + FriendlyCaptcha's ja4.lua) -- this app
+        # only logs it, log-only like BotD, never enforces anything by
+        # itself.
+        self.ja4_log_path: str = os.environ.get(
+            "JA4_LOG_PATH", "test-environment/mock-target/security/ja4_fingerprints.log"
+        )
 
 
 def get_config() -> MockTargetConfig:

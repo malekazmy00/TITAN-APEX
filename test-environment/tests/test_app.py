@@ -23,6 +23,7 @@ def config(tmp_path: Path) -> MockTargetConfig:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.feed_rate_limit_threshold = 3
     cfg.feed_rate_limit_window_seconds = 60
     cfg.feed_page_size = 4
@@ -168,6 +169,7 @@ def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.enable_dom_virtualization = False
     app = create_app(cfg)
@@ -184,6 +186,7 @@ def test_feed_page_window_size_is_configurable(tmp_path: Path) -> None:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.dom_virtualization_window_size = 3
     app = create_app(cfg)
@@ -200,6 +203,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_markup_randomizer = False
     cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
@@ -218,6 +222,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_honeypots = False
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
@@ -237,6 +242,7 @@ def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
@@ -277,6 +283,7 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False
@@ -299,6 +306,7 @@ def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     app = create_app(cfg)
@@ -318,6 +326,7 @@ def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path)
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_placeholder_content = False
@@ -336,6 +345,7 @@ def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.placeholder_delay_ms = 2000
@@ -351,6 +361,7 @@ def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = True
     cfg.enable_shadow_dom = False  # isolate the cookie-wall layer alone
     app = create_app(cfg)
@@ -405,6 +416,7 @@ def _shadow_dom_client(tmp_path: Path) -> FlaskClient:
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False  # isolate the shadow-DOM layer alone
     cfg.enable_shadow_dom = True
     app = create_app(cfg)
@@ -448,6 +460,7 @@ def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> 
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     app = create_app(cfg)
@@ -471,6 +484,7 @@ def _auth_client(
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False  # isolate the login/session layer alone
     cfg.enable_shadow_dom = False
     cfg.protected_feed_total_pages = protected_feed_total_pages
@@ -673,6 +687,7 @@ def _interstitial_client(
     cfg = MockTargetConfig()
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.enable_cookie_wall = False  # isolate the interstitial layer alone
     cfg.enable_shadow_dom = False
     cfg.interstitial_trigger = trigger
@@ -755,3 +770,33 @@ def test_api_feed_interstitial_rejects_a_malformed_cursor(tmp_path: Path) -> Non
     response = client.get("/api/feed-interstitial?after=not-a-page")
 
     assert response.status_code == 400
+
+
+# --- JA4 fingerprint logging (docs/REQUIREMENTS.md section 9 entry 17,
+# claude/ja4-experiment branch) -----------------------------------------
+
+
+def test_ja4_header_present_is_logged_on_any_route(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    """The real header the JA4 proxy sets (test-environment/ja4-proxy/
+    haproxy.cfg) is logged, on any route -- this is a global
+    before_request hook, not something wired into individual routes
+    one at a time. /healthz is used here specifically because it's the
+    simplest possible route, proving this isn't route-specific logic."""
+    response = client.get("/healthz", headers={"X-JA4-Fingerprint": "t13d1516h2_abc_def"})
+
+    assert response.status_code == 200
+    log_content = Path(config.ja4_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["ja4_fingerprint"] == "t13d1516h2_abc_def"
+
+
+def test_ja4_header_absent_logs_nothing(client: FlaskClient, config: MockTargetConfig) -> None:
+    """Every existing route, reached the normal way (no JA4 proxy in
+    front) -- the log file must not even gain a line for this, matching
+    security/ja4_integration.py's own "silent by default" docstring."""
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert not Path(config.ja4_log_path).read_text(encoding="utf-8").strip()
