@@ -2195,6 +2195,68 @@ test PASSED، 159 test-environment unit test PASSED (100% coverage —
 الخطوة الأولى هتبقى فتح كل الأدلة الخمسة مع بعض لنفس الـrun، مش
 تخمين حل رابع من غير دليل مباشر.
 
+**✅ CI run [33007271916](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33007271916)
+(commit `caedc92`) — المحاولة الأولى نجحت بالكامل (37/37)** — كل خطوات
+المراقبة الخمسة اشتغلت فعليًا (Start/Stop resource monitors، Check for
+kernel OOM activity، Upload CI diagnostics) — أول تأكيد حقيقي إن
+البنية التحتية دي شغّالة، مش مجرد كود بيعدي محليًا. الـrun ده نجح
+(37/37)، فمفيش load_more_dropped data منه.
+
+**بطلب المستخدم الصريح، اتعمل rerun فوري** (`rerun_workflow_run` على
+نفس الـrun) عشان نمسك فشل حقيقي بالتشخيص الكامل، مع تكرار تلقائي لو
+نجح تاني — **المحاولة الثانية فشلت فعليًا**، وده **مسك حقيقي**، بس
+لفئة فشل مختلفة عن الـrace (20/25) اللي كنا بندوّر عليه: كراش متصفح
+حقيقي (`Page.wait_for_timeout: Target page, context or browser has
+been closed`)، `test_progressive_parsed_html_recovers_every_virtualization_window`
+رجع **صفر** بدل 25 — نفس فئة الكراش الموثّقة قبل كده (25→0)، مش نفس
+فئة الـ"20 من 25 هادئة". بما إن الكراش حصل قبل حتى ما الـprogressive
+collection يبدأ (أثناء `page.wait_for_timeout(post_load_wait_ms)` بعد
+الـnavigation مباشرة)، `load_more_calls`/`load_more_dropped` معندهمش
+فرصة يتسجّلوا خالص — مفيش دليل عن فرضية الـrace من الـcatch ده تحديدًا.
+
+**لكن ده أعطى دليل حقيقي جديد ومهم لفئة الكراش نفسها، لأول مرة** —
+اتنزّل الـartifact (`ci-diagnostics-33007271916-2`، 21.6MB) فعليًا
+وانفتح:
+
+- **`trace.trace` بتاع الـsolve اللي فشل** (`camoufox_..._1787786893629...zip`)
+  بيوري بالظبط اللحظة: navigation نجح (`call@10` goto)، الـ
+  `wait_for_timeout(5000)` بدأ (`call@12`)، Anubis's الـJS الحقيقي بدأ
+  يشتغل فعليًا (console logs: `"fast algo"`، `"Firefox detected, using
+  pure-JS fallback"`) — وبعدها بـ~900ms بالظبط، `BrowserContext.pageClosed`
+  event اتسجّل **مرتين** من غير أي إغلاق من الكود بتاعنا، والـ
+  `wait_for_timeout` نفسه فشل بـ`TargetClosedError`. يعني المتصفح
+  اتقفل **لوحده** أثناء تنفيذ الـchallenge JS الحقيقي، مش بسبب أي
+  timeout أو كود من عندنا.
+- **`runner-stats.log` وقت الكراش بالظبط (23:28:12-23:28:15 UTC):**
+  Memory: 7938MB total، **available فضل فوق 6GB طول الوقت** (فوق
+  75%)، **صفر swap استخدام خالص**. Load average ~2.0 (مش مرتفع). يعني
+  **مفيش ضغط ذاكرة حقيقي وقت الكراش** — فرضية "نقص الذاكرة" القديمة
+  **متنفاة بدليل مباشر**، مش تخمين تاني.
+- **`docker-stats.log` نفس اللحظة:** كل الـcontainers (mock-target,
+  anubis, byparr, redis) بعيدين جدًا عن أي memory limit بتاعهم (أعلى
+  رقم كان byparr بـ15.4% من الـ1GB limit بتاعه). صفر ضغط على مستوى
+  الـcontainers كمان.
+- **`oom-check.txt` (`dmesg` الحقيقي) — اكتشاف حقيقي جديد لأول مرة،
+  مش OOM لكن حاجة تانية مهمة:** **36 سطر audit من AppArmor بيرفض
+  (`DENIED`) طلب `camoufox-bin` لصلاحية `sys_admin` وقت عمل
+  `userns_create`** (unprivileged user namespace)، متكرر على طول
+  الـjob كله (مش مرتبط بلحظة الكراش تحديدًا — بيحصل مع كل launch
+  لـcamoufox تقريبًا). صفر رسائل OOM-killer فعلية في الـdmesg كله
+  (اتأكّد بالـgrep، 0 نتيجة). **فرضية جديدة غير مؤكدة (مش تأكيد
+  نهائي، دليل واعد بس مش سبب مثبت):** Firefox/Camoufox بيحاول ينشئ
+  user namespace لعزل الـsandbox بتاعه، AppArmor على runner دي
+  (Ubuntu 24.04 + kernel 6.17) بيرفضه، فـFirefox غالبًا بيرجع لوضع
+  sandbox أضعف (تدهور تلقائي معروف عن Firefox، مش كراش فوري) — وده
+  ممكن يفسّر ليه **كل** الكراشات الملاحظة كانت CamoufoxProvider
+  (Firefox) تحديدًا، مالوش علاقة بالكراشات صفر عبر PatchrightProvider
+  (Chromium، sandboxing مختلف) — بس ده لسه تخمين محتاج تأكيد إضافي،
+  مش نتيجة نهائية.
+
+**القرار:** التقاط ده قيّم لكنه مش الـcatch المطلوب (الـrace، مش
+الكراش) — بطلب المستخدم الصريح ("استمر لحد ما تمسك واحد")، اتعمل
+rerun تالت فورًا (مفيش انتظار) على نفس الـrun، هدفه يمسك فشل من فئة
+الـrace تحديدًا (20/25، مش صفر) عشان نشوف `load_more_dropped` الفعلي.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
