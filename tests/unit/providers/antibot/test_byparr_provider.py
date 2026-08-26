@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from src.core.exceptions import AntibotError
-from src.core.interfaces.antibot_provider import LiveDomSelectors
+from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
 from src.providers.antibot.byparr_provider import ByparrProvider
 
 VALID_RESPONSE = json.dumps(
@@ -161,6 +161,77 @@ def test_extraction_selectors_logs_a_warning_and_still_solves() -> None:
     assert solution.items is None  # no live-DOM extraction actually happened
     message, extra = logged[0]
     assert message == "byparr_provider.extraction_selectors_unsupported"
+    assert extra["url"] == "https://example.com/"
+
+
+def test_login_flow_logs_a_warning_and_still_solves() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 15: Byparr's /v1 API has no
+    form-fill/interact capability at all -- passing login_flow must not
+    crash or silently drop it; it must log clearly and still solve
+    without ever attempting the login."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    login_flow = LoginFlow(
+        login_url="https://example.com/login",
+        username="alice",
+        password="secret",
+        username_field="#username",
+        password_field="#password",
+        submit_selector="#submit",
+    )
+    solution = provider.solve("https://example.com/", login_flow=login_flow)
+
+    assert solution.status_code == 200  # still solves despite the unsupported login
+    message, extra = logged[0]
+    assert message == "byparr_provider.login_flow_unsupported"
+    assert extra["url"] == "https://example.com/"
+
+
+def test_progressive_extraction_logs_a_warning_and_still_solves() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 14: Byparr's /v1 API returns
+    HTML only, no live page to scroll -- passing progressive_extraction
+    must not crash or silently drop it; it must log clearly and still
+    solve via a single, non-progressive read."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    solution = provider.solve("https://example.com/", progressive_extraction=True)
+
+    assert solution.status_code == 200  # still solves despite the unsupported progression
+    assert solution.html_snapshots is None  # no progressive collection actually happened
+    message, extra = logged[0]
+    assert message == "byparr_provider.progressive_extraction_unsupported"
     assert extra["url"] == "https://example.com/"
 
 

@@ -172,6 +172,18 @@ def test_rejects_a_field_expression_without_a_recognized_pseudo() -> None:
         extract_live_dom_items(page, '[data-role="post"]', {"author": "plain-selector-no-pseudo"})
 
 
+def test_rejects_a_field_expression_with_an_unrecognized_pseudo_after_a_real_separator() -> None:
+    """Failure case 5: distinct from the no-separator case above -- a
+    real '::' separator is present, but the part after it is neither
+    'text' nor 'attr(name)' (e.g. a typo'd pseudo). Same rejection, a
+    different code path (the one after target resolution, not the
+    upfront no-separator check)."""
+    page = _FakePage([_post_row("p1", "alice", "hi")])
+
+    with pytest.raises(ValueError, match="unsupported field expression"):
+        extract_live_dom_items(page, '[data-role="post"]', {"author": "span::bogus"})
+
+
 # --- collect_live_dom_items_progressively (docs/REQUIREMENTS.md section
 # 9 entry 14 -- the real fix for entry 13's confirmed DOM Virtualization
 # gap) --------------------------------------------------------------

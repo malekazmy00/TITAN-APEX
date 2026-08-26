@@ -2046,6 +2046,41 @@ coverage، `poll_until_idle`/`RequestCounter` الاتنين مُختبَرين 
 اتأكّدت فعليًا إنها مش كافية — النتيجة الفعلية للإصلاح المُصحَّح
 هتتسجّل هنا بمجرد ما الـrun(s) تخلص، عبر عدة محاولات زي ما اتفق).
 
+**❌ push الإصلاح المُصحَّح فشل فعليًا — بس مش في التحقيق نفسه، غلطة
+عملية مني في التحقق المحلي (مسجّلة صراحة، مش ممسوحة):** CI run
+[32977436823](https://github.com/malekazmy00/TITAN-APEX/actions/runs/32977436823)
+(commit `523da12`) فشل في خطوة الـ**unit tests + coverage gate نفسها**
+— **قبل حتى ما يوصل لاختبارات الـDOM Virtualization الحية خالص**، يعني
+الـrun ده معندوش أي دليل عن نجاح/فشل الإصلاح الفعلي. السبب الجذري
+الحقيقي (اتأكّد بمقارنة أمر CI الفعلي في `.github/workflows/ci.yml`
+حرفيًا): CI بيشغّل `pytest tests/unit -v --cov=src --cov-fail-under=85`
+**لوحده** (مش مع `tests/contract`)، لكن التحقق المحلي بتاعي كان
+`pytest tests/unit tests/contract --cov-fail-under=85` **مع بعض** —
+اختبارات الـcontract بتغطي كذا سطر في `src` مش مغطى من unit tests
+لوحدها، فالرقم المحلي اللي شفته (85.13%) كان مُتفائل زيادة عن الحقيقة؛
+الرقم الحقيقي (unit لوحدها، نفس أمر CI بالحرف) كان **84.89%** — أعادة
+إنتاجه محليًا أكّدت الرقم ده بالظبط، مش تخمين. الكود نفسه (منطق
+الـsettle_fn المُصحَّح) سليم ومعندوش أي مشكلة — الفجوة كانت في عدد
+اختبارات الـunit وحدها، اتوسّعت لأن الكود الجديد في
+`camoufox_provider.py`/`patchright_provider.py` (الـlistener wiring
+اللي محتاج متصفح حقيقي) زوّد المساحة غير القابلة للاختبار محليًا.
+**الإصلاح:** اتضافوا اختبارات حقيقية جديدة (مش gaming للرقم) لفجوات
+تغطية موجودة من الأول ومالهاش أي علاقة بالتحقيق ده، لكن كانت قابلة
+للاختبار ومكنتش متغطية:
+`test_login_flow_logs_a_warning_and_still_solves`/
+`test_progressive_extraction_logs_a_warning_and_still_solves`
+(`test_byparr_provider.py`، بيغطوا `byparr_provider.py`'s
+`login_flow_unsupported`/`progressive_extraction_unsupported` warning
+branches اللي معندهاش أي اختبار خالص من الأول) و
+`test_rejects_a_field_expression_with_an_unrecognized_pseudo_after_a_real_separator`
+(`test_live_dom.py`، بيغطي `_extract_field`'s الـraise الأخير لما
+الـ`'::'` separator موجود بس الـpseudo نفسه مش معروف — مسار مختلف عن
+الـ"no separator at all" الاختبار القديم). **اتّحقّق محليًا بنفس أمر CI
+بالحرف هالمرة (`pytest tests/unit --cov=src --cov-fail-under=85`)**:
+283 test PASSED، **85.26%** — فوق الـgate بهامش حقيقي (0.26%)، مش على
+الحافة زي المرة اللي فاتت. `ruff`/`mypy --strict` نظيفين، 312
+unit+contract test PASSED مع بعض كمان.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
