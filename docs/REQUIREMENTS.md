@@ -2322,6 +2322,61 @@ output بس للاختبارات اللي فشلت** (السلوك الافتر�
 فشل)، مش بس عند الفشل. من دلوقتي، كل CI run (حتى النضيف) بيبقى نقطة
 بيانات baseline حقيقية للمقارنة، مش بس الـruns اللي فشلت.
 
+**❌ CI run [33029625940](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33029625940)
+(commit `0958eb1`, `--log-cli-level=INFO` فعّال) — مسك فشل من فئة
+الـrace فعلًا (المطلوب)، بس كشف إن الإصلاح السابق ماشتغلش زي المتوقع:**
+
+- **نتيجة الـrun:** `2 failed, 35 passed` — فشل واحد race-class
+  (`test_progressive_parsed_html_recovers_every_virtualization_window`،
+  20 من 25) وفشل واحد تاني كراش-class
+  (`test_live_dom_also_only_recovers_the_final_virtualization_window`،
+  0 من 5 — سطر `camoufox_provider.solve_crashed` ظهر في نفس اللحظة
+  بالظبط، يبقى فشل حقيقي في الـbrowser نفسه، مش نتيجة منطقية عادية —
+  اتفرّق عن الـrace عمدًا، مش نفس الفئة).
+- **`--log-cli-level=INFO` مانفعش — اتفحص السبب فعليًا، مش تخمين
+  تاني:** قراءة `tests/integration/_live_helpers.py` أكّدت إن كل
+  الـstructured solve logs (بما فيها `apparmor_denials_during_solve`)
+  بتتكتب جوه **subprocess منفصل تمامًا** (`scrapy runspider`، بيتشغّل
+  عبر `subprocess.run(capture_output=True)`) — والطريقة الوحيدة اللي
+  دي بتوصل بيها لسطر الـCI هي `print()` غير مشروط بتاع
+  `_live_helpers.py` نفسه بعد ما الـsubprocess يخلص. لكن pytest —
+  بغض النظر عن `--log-cli-level` (اللي بيتحكم بس في logging جوه
+  process الـpytest نفسه، مالوش أي تأثير على stdout/stderr subprocess
+  تاني) — بيعرض الـcaptured stdout بتاعه بس للاختبارات اللي **فشلت**.
+  اتأكّد عمليًا: الـrun ده فيه اختبارات Camoufox تانية عدّت
+  (`test_mock_target_camoufox_live.py` مرتين،
+  `test_progressive_live_dom_recovers_every_virtualization_window`
+  نفسها PASSED) — وكلهم صفر سطر log في الملف كله، غير الفشلتين
+  بس. يعني **لسه معندناش أي baseline من اختبار ناجح** — القرار اللي
+  اتاخد على run `33027674104` (كل run بقى نقطة بيانات) كان غلط في
+  التنفيذ، مش في الفكرة.
+- **الإصلاح الحقيقي:** إضافة `-s` (== `--capture=no`) لأمر
+  `pytest tests/integration` — ده بيوقف الـcapturing بتاع pytest
+  خالص، فـ`print()` غير المشروط بتاع `_live_helpers.py` بيوصل للـconsole
+  لكل اختبار، نجح أو فشل — اتعمل في نفس الكوميت ده.
+- **النتيجة الفعلية المتاحة من الـrun ده (نقطتين بس، الاتنين فشل):**
+  `apparmor_denials_during_solve: 1` لكل من الفشل الكراش-class والفشل
+  الـrace-class. **الفحص الكمّي اللي طلبه المستخدم (هل الرقم وقت
+  الـrace أعلى من المتوسط) **لسه مش ممكن يتجاوب عليه بصدق** — معندناش
+  ولا نقطة بيانات واحدة من solve ناجح (كراش أو ناجح) نقارن بيها. لازم
+  run جديد بعد إصلاح `-s` عشان نجيب baseline حقيقي من الاختبارات
+  الناجحة في نفس الـrun.
+- **فجوة إضافية اتلاحظت، لسه مش متفسّرة — موثّقة بصراحة مش متجاهَلة:**
+  سطر `camoufox_provider.solved` بتاع الفشل الـrace-class نفسه سجّل
+  `load_more_calls: 0` و`load_more_dropped: 0` — رغم إن `html_snapshot_count`
+  كان 11 والعناصر المستردة كانت 20 (مش 0)، يعني محتوى حقيقي جديد
+  اتحمّل بعد الصفحة الأولى فعلًا (`loadMore()` لازم يكون نادى أكتر من
+  مرة عشان كده يحصل — فيه استدعاء تلقائي واحد على الأقل وقت تحميل
+  الصفحة، `templates/feed.html` سطر 153). القراءة صفر مع محتوى نما
+  فعليًا تناقض حقيقي غير مفسَّر لسه — مش هيتفسَّر بتخمين، محتاج دليل
+  إضافي (مثلاً trace الـPlaywright بتاع نفس الـsolve ده، أو mock-target's
+  own access log) قبل أي استنتاج.
+
+**الخطوة الجاية:** بعد push الإصلاح ده، تشغيل run جديد (بيتشغّل تلقائي
+مع الـpush، حسب `on: [push, pull_request]`) — الهدف: أول run فيه فعليًا
+baseline من solves ناجحة **وكمان** فشل، عشان المقارنة الكمّية المطلوبة
+تبقى ممكنة فعلًا، مش مجرد نقطتين فشل بس.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

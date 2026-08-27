@@ -101,18 +101,28 @@ jobs:
         run: |
           mkdir -p "$TITAN_TRACE_DIR"
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
-            # --log-cli-level=INFO: docs/REQUIREMENTS.md section 9's "DOM
-            # Virtualization Instability" investigation -- pytest only
-            # shows captured log output for *failing* tests by default,
-            # so a clean run gave zero apparmor_denials_during_solve/
-            # network_idle_timeouts/load_more_* baseline to compare a
-            # future failure against (confirmed for real: run
-            # 33027674104 passed 37/37 and produced none of this
-            # diagnostic evidence in its own log, only in a future
-            # failure's captured output). This streams every solve's
-            # structured log line live, pass or fail, so every run from
-            # here on is itself a baseline data point.
-            pytest tests/integration -v --log-cli-level=INFO
+            # docs/REQUIREMENTS.md section 9's "DOM Virtualization
+            # Instability" investigation -- baseline-data attempt, take 2.
+            # --log-cli-level=INFO (added for run 33027674104) turned out
+            # not to fix the actual gap: every live test's structured
+            # solve logs are emitted inside a separate `scrapy runspider`
+            # *subprocess* (tests/integration/_live_helpers.py), captured
+            # via `subprocess.run(capture_output=True)` and only reach
+            # this console through that helper's own unconditional
+            # `print(...)` of the subprocess's stderr tail -- and pytest
+            # itself only *displays* a test's captured stdout for a
+            # *failing* test by default. That display rule is completely
+            # unrelated to `--log-cli-level` (which only governs logging
+            # emitted inside the pytest process itself, never a child
+            # subprocess's own output) -- confirmed for real: run
+            # 33029625940 ran with --log-cli-level=INFO active and still
+            # showed structured solve logs for its 2 *failing* tests only,
+            # zero for any of the other 35 (passing) tests, including
+            # several other Camoufox-driven ones in the very same run.
+            # `-s` (== `--capture=no`) is the real fix -- it turns off
+            # pytest's output capturing entirely, so that unconditional
+            # print() reaches this console for every test, pass or fail.
+            pytest tests/integration -v --log-cli-level=INFO -s
           else
             echo "No integration tests yet (added from Phase 2 onward)."
           fi
