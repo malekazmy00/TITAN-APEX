@@ -101,7 +101,18 @@ jobs:
         run: |
           mkdir -p "$TITAN_TRACE_DIR"
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
-            pytest tests/integration -v
+            # --log-cli-level=INFO: docs/REQUIREMENTS.md section 9's "DOM
+            # Virtualization Instability" investigation -- pytest only
+            # shows captured log output for *failing* tests by default,
+            # so a clean run gave zero apparmor_denials_during_solve/
+            # network_idle_timeouts/load_more_* baseline to compare a
+            # future failure against (confirmed for real: run
+            # 33027674104 passed 37/37 and produced none of this
+            # diagnostic evidence in its own log, only in a future
+            # failure's captured output). This streams every solve's
+            # structured log line live, pass or fail, so every run from
+            # here on is itself a baseline data point.
+            pytest tests/integration -v --log-cli-level=INFO
           else
             echo "No integration tests yet (added from Phase 2 onward)."
           fi

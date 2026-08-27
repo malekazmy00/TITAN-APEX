@@ -2307,6 +2307,21 @@ after)` (نقي، `None` لو أي قراءة فشلت — صفر حقيقي م�
 بـ`# pragma: no cover`، فمأثّرش على الرقم خالص). **لسه محتاجين تأكيد
 CI حقيقي** يجمع بين هذا الحقل الجديد وأرقام الـrace الفعلية.
 
+**✅ CI run [33027674104](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33027674104)
+(commit `65fe65c`) نجح بالكامل (37/37)** — بس ده كشف مشكلة حقيقية في
+منهج جمع الأدلة نفسه، مش في الكود: **pytest بيعرض الـcaptured log
+output بس للاختبارات اللي فشلت** (السلوك الافتراضي بتاعه) — يعني الـrun
+النضيف ده رجّع **صفر** بيانات `apparmor_denials_during_solve` (ولا
+`network_idle_timeouts` ولا `load_more_calls/dropped`) رغم إن كل
+الـcamoufox solves اتنفّذت وسجّلت فعليًا. من غير baseline من الـruns
+النضيفة، مفيش طريقة نقول "الرقم وقت الـrace كان أعلى من المتوسط" —
+معندناش متوسط أصلًا.
+
+**الإصلاح:** `.github/workflows/ci.yml`'s "Integration tests" step
+كسبت `--log-cli-level=INFO` — pytest بقى بيعرض كل سطر log حي (نجح أو
+فشل)، مش بس عند الفشل. من دلوقتي، كل CI run (حتى النضيف) بيبقى نقطة
+بيانات baseline حقيقية للمقارنة، مش بس الـruns اللي فشلت.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
