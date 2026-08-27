@@ -81,7 +81,12 @@ from src.providers.antibot._scroll import (
     poll_until_idle,
     scroll_to_load_lazy_content,
 )
-from src.providers.antibot._tracing import build_trace_path, trace_dir_from_env
+from src.providers.antibot._tracing import (
+    apparmor_denial_delta,
+    build_trace_path,
+    count_apparmor_camoufox_denials,
+    trace_dir_from_env,
+)
 
 DEFAULT_TIMEOUT_MS = 30_000
 # How long to wait after the page's `load` event before reading content
@@ -287,6 +292,33 @@ def _default_camoufox_solve(  # pragma: no cover
     # is set -- see _tracing.py's own module docstring for the full
     # reasoning.
     trace_dir = trace_dir_from_env()
+
+    def _apparmor_denial_count() -> int | None:
+        """A snapshot of how many AppArmor DENIED entries for
+        camoufox-bin exist in dmesg *right now* -- ``None`` if dmesg
+        can't be read at all (no sudo, not Linux, ...). Called once
+        before this browser session starts and once right after it
+        ends; the caller logs the delta as
+        ``apparmor_denials_during_solve`` (docs/REQUIREMENTS.md section
+        9's monitoring-infrastructure investment, the AppArmor
+        follow-up -- see _tracing.py's own module docstring). Never
+        raises: a diagnostic reading that fails is a `None`, not a
+        crawl failure.
+        """
+        import subprocess
+
+        for cmd in (["sudo", "-n", "dmesg"], ["dmesg"]):
+            try:
+                result = subprocess.run(  # noqa: S603, S607
+                    cmd, capture_output=True, text=True, timeout=5
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if result.returncode == 0:
+                return count_apparmor_camoufox_denials(result.stdout)
+        return None
+
+    apparmor_denials_before = _apparmor_denial_count()
     try:
         # camoufox ships no py.typed marker / inline stubs, so mypy sees
         # this constructor call itself (not objects it returns -- those
@@ -508,6 +540,19 @@ def _default_camoufox_solve(  # pragma: no cover
                         html = html_snapshots[-1]
                     status = final_response.status if final_response is not None else 200
                     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
+                    # docs/REQUIREMENTS.md section 9's "DOM Virtualization
+                    # Instability" investigation, the AppArmor follow-up:
+                    # a real, user-requested quantitative link between
+                    # this specific solve's AppArmor denial count and
+                    # whether *this* solve hit the race -- see
+                    # _apparmor_denial_count's own docstring and
+                    # _tracing.py's module docstring for the full
+                    # reasoning. `None` (not 0) when dmesg couldn't be
+                    # read at all, so a genuine zero-denials solve is
+                    # never confused with "couldn't check".
+                    apparmor_denials_during_solve = apparmor_denial_delta(
+                        apparmor_denials_before, _apparmor_denial_count()
+                    )
                     # Always logged (not just on failure): the one piece of
                     # evidence that actually distinguishes "got real
                     # content" from "still stuck on a challenge/interstitial
@@ -551,6 +596,7 @@ def _default_camoufox_solve(  # pragma: no cover
                             "network_idle_timeouts": network_idle_timeouts,
                             "load_more_calls": load_more_calls,
                             "load_more_dropped": load_more_dropped,
+                            "apparmor_denials_during_solve": apparmor_denials_during_solve,
                         },
                     )
                     return _RawSolve(
@@ -573,6 +619,20 @@ def _default_camoufox_solve(  # pragma: no cover
             "(run: python -m camoufox fetch)"
         ) from exc
     except PlaywrightError as exc:
+        # docs/REQUIREMENTS.md section 9's "DOM Virtualization
+        # Instability" investigation, the AppArmor follow-up: this is
+        # exactly the branch a real spontaneous browser crash
+        # (TargetClosedError) goes through -- the "solved" log line
+        # above never gets a chance to run, so the same
+        # apparmor_denials_during_solve evidence is logged here too,
+        # on the one path where it matters most.
+        apparmor_denials_during_solve = apparmor_denial_delta(
+            apparmor_denials_before, _apparmor_denial_count()
+        )
+        logger.error(
+            "camoufox_provider.solve_crashed",
+            extra={"url": url, "apparmor_denials_during_solve": apparmor_denials_during_solve},
+        )
         raise AntibotError(f"camoufox failed to solve {url}: {exc}") from exc
 
 

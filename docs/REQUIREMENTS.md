@@ -2257,6 +2257,56 @@ collection يبدأ (أثناء `page.wait_for_timeout(post_load_wait_ms)` بع�
 rerun تالت فورًا (مفيش انتظار) على نفس الـrun، هدفه يمسك فشل من فئة
 الـrace تحديدًا (20/25، مش صفر) عشان نشوف `load_more_dropped` الفعلي.
 
+**تحقّق إضافي مطلوب من المستخدم قبل أي rerun خامس — مش تخمين، مراجعة
+فعلية للتاريخ:** هل الـrace (20/25) بيحصل بس في runs "ملوّثة" بكراش
+Camoufox سابق في نفس الـjob، ولا بيحصل في runs "نضيفة" تمامًا كمان؟
+وهل عزل الاختبارات كامل فعلًا؟
+
+- **العزل: اتأكّد فعليًا، مش افتراض.** كل اختبار في `tests/integration`
+  بيستدعي `run_spider_live` (`_live_helpers.py`)، وده بيشغّل
+  `scrapy runspider` كـ**subprocess جديد كليًا** لكل اختبار — و
+  `Camoufox(headless=True)` (بدون `new_persistent_context`) بيرجع
+  profile مؤقت جديد كل launch (اتأكّد من قراءة كود حزمة `camoufox`
+  المُثبَّتة فعليًا — مفيش `user_data_dir`/`profile_dir` خالص). يعني
+  عزل الـprocess والـbrowser **حقيقي وكامل** — صفر state مشترك في
+  الذاكرة أو على الديسك بين اختبار وتاني. **المكان الوحيد اللي العزل
+  مش كامل فيه:** AppArmor/kernel namespace state — دي مورد نظام حقيقي
+  مشترك عبر الـjob كله، مش بيتصفّر بين الاختبارات.
+- **التاريخ (3 نقاط بيانات حقيقية، مش نمط واحد نضيف):** run
+  `33004033105` — كراش Camoufox حصل (19:18:51) **قبل** الـrace
+  (19:20:12)، بس بينهم **3 launches ناجحة تمامًا** (اختبارين DOM
+  virt القدام + `progressive_parsed_html`). run `32973393111` —
+  الـrace حصل **قبل** أي كراش (الترتيب العكسي). run `32912093420`
+  محاولة 1 — الـrace حصل **لوحده تمامًا**، صفر كراش تاني في نفس
+  المحاولة. **الخلاصة الصريحة: مش نمط ثابت** — الفرضية ("الـrace بس
+  في runs ملوّثة") مش متأكّدة، بس مش متنفية تمامًا برضه (نقطة بيانات
+  واحدة بتدعمها جزئيًا).
+
+**قرار المستخدم بناءً على النتيجة المختلطة دي:** قبل أي rerun خامس،
+أضف تسجيل صريح لعدد AppArmor denials (من `dmesg`) لكل اختبار حي بتاع
+Camoufox — نفس نمط `load_more_dropped` بالظبط، مش تخمين تاني. لو
+الـrace بيحصل مع عدد denials أعلى من المتوسط، ده أول ربط كمي حقيقي.
+لو مفيش فرق، فرضية AppArmor بتتستبعد نهائيًا كسبب للـrace.
+
+**المُنفَّذ:** `src/providers/antibot/_tracing.py` كسب
+`count_apparmor_camoufox_denials(dmesg_text)` (نقي، بيعدّ سطور
+`DENIED`+`camoufox-bin` في نص `dmesg` خام) و`apparmor_denial_delta(before,
+after)` (نقي، `None` لو أي قراءة فشلت — صفر حقيقي معندوش أي لبس مع
+"معرفناش نتحقق"). `camoufox_provider.py`: helper داخلي
+`_apparmor_denial_count()` بيقرا `dmesg` فعليًا (`sudo -n dmesg` أو
+`dmesg` عادي) — بينادى **قبل** ما الـbrowser يفتح و**بعد** ما القراءة
+تخلص (أو في لحظة الكراش نفسه، عبر `except PlaywrightError`، اللي هو
+بالظبط المسار اللي كراش `TargetClosedError` بيعدي منه — الفشل ده
+هيكون بينه سطر log جديد `camoufox_provider.solve_crashed` حتى لو
+الـ"solved" الطبيعي معملش). النتيجة بتتسجّل كـ
+`apparmor_denials_during_solve` في الاتنين (نجاح وفشل). مش مربوط
+بـ`patchright_provider.py` خالص — الفحص Camoufox-specific بالتصميم
+(binary اسمه مختلف، sandboxing model مختلف). **اتّحقّق محليًا:**
+`ruff`/`mypy --strict` نظيفين، 301 unit test PASSED (94.74% coverage،
+لسه فوق الـgate بهامش حقيقي — الكود الجديد داخل نفس الدالة المُستبعَدة
+بـ`# pragma: no cover`، فمأثّرش على الرقم خالص). **لسه محتاجين تأكيد
+CI حقيقي** يجمع بين هذا الحقل الجديد وأرقام الـrace الفعلية.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

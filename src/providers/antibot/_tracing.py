@@ -27,6 +27,28 @@ both are fully unit-testable without a real browser -- the
 ``page.context.tracing.start()``/``.stop()`` calls themselves stay
 inline in each provider's own solve function, right next to the
 ``Page``/``BrowserContext`` objects they need.
+
+**AppArmor denial counting (same investigation, a follow-up real user
+request):** the monitoring infrastructure's own ``dmesg`` check (
+``scripts/ci-check-oom.sh``) found something real but job-wide, not
+per-test: 36 AppArmor ``DENIED`` entries for ``camoufox-bin``'s
+``userns_create``/``sys_admin`` capability request, recurring through
+an entire CI job -- correlated with *a* crash somewhere in that job,
+but not attributable to any *one* test from a whole-job count alone.
+:func:`count_apparmor_camoufox_denials` is the same "extract the pure,
+testable part" split as the rest of this module: it only counts
+matching lines in a raw ``dmesg`` text blob handed to it -- reading
+``dmesg`` itself (needs ``sudo``, a real Linux kernel ring buffer) is
+each provider's own concern, calling this once right before launching
+the browser and once right after closing it, logging the delta as
+``apparmor_denials_during_solve`` -- the same before/after-delta shape
+:class:`~src.providers.antibot._scroll.RequestCounter` already uses,
+just for a kernel log instead of network events. Camoufox
+(Firefox)-specific on purpose: Patchright's Chromium binary has a
+different name and a different sandboxing model, so this pattern
+would never match anything for it anyway -- not wired into
+``patchright_provider.py`` at all, to avoid a meaningless always-zero
+field there.
 """
 
 from __future__ import annotations
@@ -69,3 +91,39 @@ def build_trace_path(trace_dir: str, url: str, provider_name: str) -> str:
     slug = "".join(char if char.isalnum() else "_" for char in url)[:80]
     unique = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
     return str(Path(trace_dir) / f"{provider_name}_{slug}_{unique}.zip")
+
+
+def count_apparmor_camoufox_denials(dmesg_text: str) -> int:
+    """Counts AppArmor ``DENIED`` entries for ``camoufox-bin`` in a raw
+    ``dmesg`` text blob -- see this module's own docstring for why this
+    exists and why it stays Camoufox-specific.
+
+    A real ``dmesg`` line looks like (wrapped here for readability; a
+    genuine one is a single line)::
+
+        [  566.812451] audit: type=1400 audit(...): apparmor="DENIED"
+        operation="capable" class="cap" profile="unprivileged_userns"
+        pid=10915 comm="camoufox-bin" capability=21 capname="sys_admin"
+
+    Matched by plain substring, not a full audit-line parser -- the
+    exact field order/spacing across kernel versions isn't a contract
+    worth depending on for a diagnostic counter; ``"camoufox-bin"`` and
+    ``"DENIED"`` both appearing on the same line is a good enough
+    signal, and a false positive here would need another process
+    coincidentally named exactly ``camoufox-bin`` also being denied
+    something in the same dmesg buffer.
+    """
+    return sum(1 for line in dmesg_text.splitlines() if "camoufox-bin" in line and "DENIED" in line)
+
+
+def apparmor_denial_delta(before: int | None, after: int | None) -> int | None:
+    """``after - before``, or ``None`` if either snapshot itself is
+    ``None`` (dmesg couldn't be read at that point) -- a genuine zero
+    delta must never be confused with "couldn't check". Shared by both
+    of ``camoufox_provider.py``'s log sites (the normal "solved" path
+    and the ``PlaywrightError``/crash path) so the same not-both-None
+    guard isn't duplicated at each call site.
+    """
+    if before is None or after is None:
+        return None
+    return after - before
