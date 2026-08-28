@@ -98,8 +98,26 @@ jobs:
           # Playwright trace (screenshots, DOM snapshots, network,
           # console, source-mapped stack traces), uploaded below.
           TITAN_TRACE_DIR: ${{ github.workspace }}/ci-diagnostics/traces
+          # docs/REQUIREMENTS.md section 9 entry 17's "expand the
+          # diagnostic tool" phase: off everywhere else (same
+          # off-by-default principle as TITAN_TRACE_DIR above) -- active
+          # here so this specific investigation gets its
+          # enter/blocked/fetch_start/fetch_done/reset_loading timeline
+          # (camoufox_provider.py's own data-load-event-log read,
+          # _tracing.py's module docstring) from a *real* CI run, not
+          # just local reproductions -- this project's own "no assume
+          # environment constraint" rule applies here exactly as
+          # everywhere else. TITAN_DEBUG_LOADING_RACE also gates the
+          # other entry-17 diagnostics already wired into
+          # camoufox_provider.py (loading_flag_at_network_idle,
+          # main_frame_navigations_during_progressive,
+          # load_more_calls_samples) -- all of them start reporting real
+          # data in this step's own console output the moment this is
+          # set, no separate toggle needed.
+          TITAN_DEBUG_LOADING_RACE: "1"
+          TITAN_LOAD_EVENT_LOG_DIR: ${{ github.workspace }}/ci-diagnostics/load-events
         run: |
-          mkdir -p "$TITAN_TRACE_DIR"
+          mkdir -p "$TITAN_TRACE_DIR" "$TITAN_LOAD_EVENT_LOG_DIR"
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
             # docs/REQUIREMENTS.md section 9's "DOM Virtualization
             # Instability" investigation -- baseline-data attempt, take 2.
