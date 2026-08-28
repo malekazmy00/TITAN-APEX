@@ -144,13 +144,56 @@
       // property, is the one that actually survives the read.
       container.setAttribute("data-loading-flag", "false");
 
+      // TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md section 9 entry 17,
+      // "expand the diagnostic tool" phase -- requested after the
+      // network-idle-vs-loading-flag hypothesis was falsified and the
+      // separate load_more_calls=0 mystery was closed, both by real
+      // evidence, not guessing).
+      //
+      // **First attempt (real, confirmed not to work, not erased):**
+      // `page.expose_function()`, called on `camoufox_provider.py`'s
+      // side before navigation -- Playwright's own documented mechanism
+      // for letting page-authored JS call back into the controlling
+      // process. Confirmed by hand (two separate control cases: a
+      // synthetic `page.set_content()` page, and a real `page.goto()`
+      // navigation) that the exposed function *is* visible from
+      // `page.evaluate()` (`typeof window.__titanLogLoadEvent ===
+      // "function"`) but reads back as `undefined` from *inside the
+      // page's own inline `<script>`* -- the exact mirror image of the
+      // `window.__loadMoreCalls` bug above, just in the opposite
+      // crossing direction. Same Xray-vision family of realm
+      // separation, apparently cutting both ways on this Camoufox
+      // build.
+      //
+      // **Corrected approach (this version):** since a DOM attribute
+      // set by the page's own script *does* survive a `page.evaluate()`
+      // read (confirmed above, and re-confirmed with a JSON-string
+      // payload specifically before writing this), the timeline is
+      // accumulated in a plain in-page array and mirrored as one
+      // `JSON.stringify`-ed DOM attribute on every event -- no
+      // cross-realm function call needed at all.
+      // `camoufox_provider.py` reads and parses it *once*, after
+      // progressive collection finishes, via the same `_read_feed_attr`
+      // used for `data-load-more-calls`/`data-loading-flag`. No
+      // synchronous I/O and no cross-process call here -- `loadEventLog`
+      // is a local array, `JSON.stringify` of a handful of tiny objects
+      // is microseconds, nowhere near an observable delay to
+      // `loadMore()` itself.
+      const loadEventLog = [];
+      function logLoadEvent(name) {
+        loadEventLog.push({ event: name, t: performance.now() });
+        container.setAttribute("data-load-event-log", JSON.stringify(loadEventLog));
+      }
+
       function loadMore() {
+        logLoadEvent("enter");
         if (loading || !hasNext) {
           if (loading) {
             container.setAttribute(
               "data-load-more-dropped",
               String(Number(container.getAttribute("data-load-more-dropped")) + 1)
             );
+            logLoadEvent("blocked");
           }
           return;
         }
@@ -161,23 +204,27 @@
         loading = true;
         container.setAttribute("data-loading-flag", "true");
         loadingEl.style.display = "block";
+        logLoadEvent("fetch_start");
         const url = cursor ? "/api/feed?after=" + encodeURIComponent(cursor) : "/api/feed";
         fetch(url)
           .then(function (response) {
             return response.json();
           })
           .then(function (data) {
+            logLoadEvent("fetch_done");
             appendEdges(data.edges || []);
             const pageInfo = data.page_info || {};
             cursor = pageInfo.end_cursor;
             hasNext = Boolean(pageInfo.has_next_page);
             loading = false;
             container.setAttribute("data-loading-flag", "false");
+            logLoadEvent("reset_loading");
             loadingEl.style.display = "none";
           })
           .catch(function () {
             loading = false;
             container.setAttribute("data-loading-flag", "false");
+            logLoadEvent("reset_loading_error");
             loadingEl.style.display = "none";
           });
       }

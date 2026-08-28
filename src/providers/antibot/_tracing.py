@@ -28,6 +28,67 @@ both are fully unit-testable without a real browser -- the
 inline in each provider's own solve function, right next to the
 ``Page``/``BrowserContext`` objects they need.
 
+**Load-event timeline (same investigation, the "expand the diagnostic
+tool" phase explicitly requested after the network-idle-vs-loading-flag
+hypothesis was falsified and the separate load_more_calls=0 mystery was
+closed -- both by real evidence, not guessing):** neither
+``network_idle_timeouts`` nor the ``data-load-more-calls``/
+``data-loading-flag`` DOM-attribute samples (camoufox_provider.py's own
+``_read_feed_attr``) can see the *exact instant* ``templates/feed.html``'s
+``loadMore()`` enters, gets blocked by its own ``loading`` guard, starts
+a fetch, the fetch resolves, or the ``loading`` flag actually resets --
+they only ever sample state *after* the fact, at whatever moment
+``settle_fn`` happens to run. This closes that gap with a real,
+in-the-act timeline instead of point samples.
+
+**First attempt, confirmed not to work, not erased:** Playwright's
+``page.expose_function()`` (registered on ``page`` before navigation,
+its own documented use case for letting page-authored JS call back into
+the controlling process) looked like the right crossing direction --
+fundamentally different from a plain ``window.*`` expando property, so
+it seemed like it should sidestep the Xray-vision isolation this same
+entry already confirmed and fixed for ``data-load-more-calls`` (a
+*different* crossing direction: this code reading page-set state back,
+not the page calling code-provided state). Confirmed by hand with two
+separate control cases (a synthetic ``page.set_content()`` page, and a
+real ``page.goto()`` navigation) that this assumption was wrong: the
+exposed function *is* visible from ``page.evaluate()`` (running in the
+same automation-privileged realm ``expose_function`` injects into) but
+reads back as ``undefined`` from *inside the page's own inline
+``<script>``* -- the mirror image of the original bug, apparently the
+same Xray-vision wall cutting both ways on this Camoufox build.
+
+**Corrected approach (this version):** since a DOM attribute set by the
+page's own script *does* survive a ``page.evaluate()`` read (the same
+confirmed-working channel ``data-load-more-calls``/``data-loading-flag``
+already use), the timeline is accumulated in a plain in-page array and
+mirrored as one ``JSON.stringify``-ed DOM attribute
+(``data-load-event-log``) on every event -- no cross-realm function call
+at all. Two deliberate design choices remain, both from an explicit
+user instruction to avoid turning the diagnostic into a Heisenbug: (1)
+the page's own five call sites (``templates/feed.html``) do nothing but
+push into a local array and re-stringify it -- no network/disk I/O, a
+handful of tiny objects, microseconds of cost, so no observable delay
+is added to ``loadMore()``'s own execution; (2) ``camoufox_provider.py``
+reads and parses the attribute *once*, only after progressive collection
+is fully done, and writes it to disk (if configured) in that same single
+pass -- never a per-event read or write while the race is actually being
+timed. A crash mid-collection genuinely has no timeline to report
+(the page/browser is gone by the time the crash handler runs) --
+documented as a known, accepted gap rather than invented data.
+
+Off by default (``TITAN_DEBUG_LOADING_RACE`` unset, same gate as the
+rest of this investigation's diagnostics) -- the file dump itself is
+further gated behind ``TITAN_LOAD_EVENT_LOG_DIR`` so a debug run that
+only wants the summarized counts in the structured log line doesn't pay
+for disk writes it won't read. :func:`load_event_log_dir_from_env`
+(reads one env var) and :func:`build_load_event_log_path`/
+:func:`render_load_event_log` (pure path/string building) live here for
+the same "extract what's testable without a browser" reason as this
+module's other functions -- reading/parsing ``data-load-event-log``
+itself stays inline in ``camoufox_provider.py``, right next to
+``_read_feed_attr``.
+
 **AppArmor denial counting (same investigation, a follow-up real user
 request):** the monitoring infrastructure's own ``dmesg`` check (
 ``scripts/ci-check-oom.sh``) found something real but job-wide, not
@@ -53,10 +114,12 @@ field there.
 
 from __future__ import annotations
 
+import json
 import os
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 
 def trace_dir_from_env() -> str | None:
@@ -91,6 +154,54 @@ def build_trace_path(trace_dir: str, url: str, provider_name: str) -> str:
     slug = "".join(char if char.isalnum() else "_" for char in url)[:80]
     unique = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
     return str(Path(trace_dir) / f"{provider_name}_{slug}_{unique}.zip")
+
+
+def load_event_log_dir_from_env() -> str | None:
+    """Reads ``TITAN_LOAD_EVENT_LOG_DIR`` -- ``None`` (no file dump) when
+    unset or empty. Deliberately a *separate* env var from
+    ``TITAN_DEBUG_LOADING_RACE`` (the gate that decides whether the
+    timeline is collected at all) -- collecting the in-memory timeline
+    and writing it to disk are two independent decisions, the same way
+    ``TITAN_TRACE_DIR`` is independent of whatever else a run happens to
+    be diagnosing.
+    """
+    value = os.environ.get("TITAN_LOAD_EVENT_LOG_DIR")
+    return value if value else None
+
+
+def build_load_event_log_path(log_dir: str, url: str, provider_name: str) -> str:
+    """A unique ``.jsonl`` path for one ``solve()`` call's load-event
+    timeline, inside ``log_dir`` -- same uniqueness scheme as
+    :func:`build_trace_path` (millisecond timestamp + random suffix;
+    the embedded ``url``/``provider_name`` slug is only for a human
+    skimming the uploaded artifact, not the uniqueness guarantee
+    itself), so many separate crawls can share one directory without
+    colliding.
+
+    Raises:
+        ValueError: if ``url`` is empty -- meaningless to name a log
+            after nothing.
+    """
+    if not url:
+        raise ValueError("url must be non-empty")
+    slug = "".join(char if char.isalnum() else "_" for char in url)[:80]
+    unique = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    return str(Path(log_dir) / f"{provider_name}_{slug}_{unique}_load_events.jsonl")
+
+
+def render_load_event_log(events: list[dict[str, Any]]) -> str:
+    """Renders the accumulated in-memory load-event timeline as JSONL
+    (one JSON object per line) -- pure string building, no filesystem
+    access, so this is unit-testable without a browser or a real disk.
+    Each provider's own callback appends one plain dict per event as it
+    arrives (docs/REQUIREMENTS.md section 9 entry 17's own explicit
+    instruction: accumulate in memory, flush to disk *once* after the
+    whole solve is over, never per-event I/O while the race is actually
+    being timed) -- this is that one flush's own rendering, called
+    right before the single ``Path.write_text()`` call. An empty list
+    renders as an empty string, not a single blank line.
+    """
+    return "".join(json.dumps(event, sort_keys=True) + "\n" for event in events)
 
 
 def count_apparmor_camoufox_denials(dmesg_text: str) -> int:

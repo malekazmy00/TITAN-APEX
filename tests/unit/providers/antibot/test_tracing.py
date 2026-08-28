@@ -6,12 +6,17 @@ real browser or filesystem write involved.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.providers.antibot._tracing import (
     apparmor_denial_delta,
+    build_load_event_log_path,
     build_trace_path,
     count_apparmor_camoufox_denials,
+    load_event_log_dir_from_env,
+    render_load_event_log,
     trace_dir_from_env,
 )
 
@@ -95,6 +100,87 @@ def test_build_trace_path_rejects_an_empty_url() -> None:
     """Failure case 3: nothing meaningful to name a trace after."""
     with pytest.raises(ValueError, match="url must be non-empty"):
         build_trace_path("/tmp/traces", "", "camoufox")
+
+
+# --- load_event_log_dir_from_env / build_load_event_log_path /
+# render_load_event_log (docs/REQUIREMENTS.md section 9 entry 17's
+# "expand the diagnostic tool" phase -- the performance.now()/
+# page.expose_function() load-event timeline) --------------------------
+
+
+def test_load_event_log_dir_from_env_returns_none_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path (the default, common case): no file dump unless
+    explicitly turned on."""
+    monkeypatch.delenv("TITAN_LOAD_EVENT_LOG_DIR", raising=False)
+
+    assert load_event_log_dir_from_env() is None
+
+
+def test_load_event_log_dir_from_env_returns_none_when_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failure-adjacent case 1: an empty string is treated the same as
+    unset, not as a (meaningless) empty directory path."""
+    monkeypatch.setenv("TITAN_LOAD_EVENT_LOG_DIR", "")
+
+    assert load_event_log_dir_from_env() is None
+
+
+def test_load_event_log_dir_from_env_returns_the_configured_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: a real value is read back unchanged."""
+    monkeypatch.setenv("TITAN_LOAD_EVENT_LOG_DIR", "/tmp/ci-diagnostics/load-events")
+
+    assert load_event_log_dir_from_env() == "/tmp/ci-diagnostics/load-events"
+
+
+def test_build_load_event_log_path_lives_under_the_given_directory() -> None:
+    path = build_load_event_log_path("/tmp/load-events", "https://example.com/feed", "camoufox")
+
+    assert path.startswith("/tmp/load-events/")
+    assert path.endswith(".jsonl")
+
+
+def test_build_load_event_log_path_is_unique_across_two_calls_for_the_same_url() -> None:
+    """Failure-adjacent case 2: many crawls against the exact same url
+    within one CI job must never collide and silently overwrite an
+    earlier timeline."""
+    first = build_load_event_log_path("/tmp/load-events", "https://example.com/feed", "camoufox")
+    second = build_load_event_log_path("/tmp/load-events", "https://example.com/feed", "camoufox")
+
+    assert first != second
+
+
+def test_build_load_event_log_path_rejects_an_empty_url() -> None:
+    """Failure case 3: nothing meaningful to name a timeline after."""
+    with pytest.raises(ValueError, match="url must be non-empty"):
+        build_load_event_log_path("/tmp/load-events", "", "camoufox")
+
+
+def test_render_load_event_log_writes_one_json_line_per_event() -> None:
+    """Happy path: each event dict becomes its own JSON line, in order."""
+    events = [
+        {"event": "enter", "js_performance_now_ms": 1.0},
+        {"event": "fetch_start", "js_performance_now_ms": 2.5},
+    ]
+
+    rendered = render_load_event_log(events)
+
+    lines = rendered.splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[0]) == events[0]
+    assert json.loads(lines[1]) == events[1]
+
+
+def test_render_load_event_log_returns_empty_string_for_no_events() -> None:
+    """Failure-adjacent case: a solve that never triggered a single
+    load-event (e.g. progressive_extraction wasn't used at all) renders
+    as an empty string, not a stray blank line a naive ``"\\n".join``
+    would produce."""
+    assert render_load_event_log([]) == ""
 
 
 # --- count_apparmor_camoufox_denials (docs/REQUIREMENTS.md section 9's

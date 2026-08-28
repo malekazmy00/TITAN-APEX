@@ -57,10 +57,12 @@ called unconditionally here now, the identical logic and justification
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging import Logger
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from src.core.exceptions import AntibotError
@@ -84,8 +86,11 @@ from src.providers.antibot._scroll import (
 )
 from src.providers.antibot._tracing import (
     apparmor_denial_delta,
+    build_load_event_log_path,
     build_trace_path,
     count_apparmor_camoufox_denials,
+    load_event_log_dir_from_env,
+    render_load_event_log,
     trace_dir_from_env,
 )
 
@@ -293,6 +298,17 @@ def _default_camoufox_solve(  # pragma: no cover
     # is set -- see _tracing.py's own module docstring for the full
     # reasoning.
     trace_dir = trace_dir_from_env()
+    # TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md section 9 entry 17,
+    # "expand the diagnostic tool" phase -- requested after the
+    # network-idle-vs-loading-flag hypothesis was falsified and the
+    # separate load_more_calls=0 mystery was closed, both by real
+    # evidence, not guessing). Computed here, before the browser even
+    # launches, so it's always a bound local name.
+    debug_loading_race = bool(os.environ.get("TITAN_DEBUG_LOADING_RACE"))
+    # A *separate* gate from `debug_loading_race` (_tracing.py's own
+    # module docstring explains why) -- collecting the timeline and
+    # dumping it to disk are two independent decisions.
+    load_event_log_dir = load_event_log_dir_from_env() if debug_loading_race else None
 
     def _apparmor_denial_count() -> int | None:
         """A snapshot of how many AppArmor DENIED entries for
@@ -510,8 +526,11 @@ def _default_camoufox_solve(  # pragma: no cover
                         # page's own loadMore().then() callback has
                         # actually finished and reset `loading`" are
                         # really two different completion signals that
-                        # can be observed apart.
-                        debug_loading_race = bool(os.environ.get("TITAN_DEBUG_LOADING_RACE"))
+                        # can be observed apart. ``debug_loading_race``
+                        # itself is computed once, right after
+                        # ``browser.new_page()`` above (needed there
+                        # too, to gate ``page.expose_function()`` before
+                        # any navigation) -- reused here unchanged.
                         loading_flag_samples: list[bool] = []
                         # TEMPORARY DIAGNOSTIC, same review: samples
                         # data-load-more-calls itself at every settle_fn
@@ -649,6 +668,40 @@ def _default_camoufox_solve(  # pragma: no cover
                         if progressive_extraction and debug_loading_race
                         else None
                     )
+                    # TEMPORARY DIAGNOSTIC (entry 17's "expand the
+                    # diagnostic tool" phase -- corrected approach, see
+                    # templates/feed.html's own comment for the full
+                    # story of why `page.expose_function()`, the first
+                    # attempt, didn't work): `data-load-event-log` is a
+                    # single JSON-encoded DOM attribute
+                    # (`container.setAttribute`) the page's own script
+                    # updates on every `loadMore()` checkpoint
+                    # (enter/blocked/fetch_start/fetch_done/
+                    # reset_loading), read *once* here, after
+                    # progressive collection is fully done -- not
+                    # per-event, so this read itself can never perturb
+                    # the timing it's reporting on. Malformed/missing
+                    # JSON (any page that isn't this one, or a solve
+                    # that errored before the script ever ran) yields an
+                    # empty list, not a crash -- this is a diagnostic,
+                    # never allowed to fail the actual crawl.
+                    load_event_log: list[dict[str, Any]] = []
+                    if progressive_extraction and debug_loading_race:
+                        raw_load_event_log = _read_feed_attr("data-load-event-log")
+                        if raw_load_event_log:
+                            try:
+                                parsed_load_event_log = json.loads(raw_load_event_log)
+                            except (ValueError, TypeError):
+                                parsed_load_event_log = []
+                            if isinstance(parsed_load_event_log, list):
+                                load_event_log = parsed_load_event_log
+                    load_event_log_path = (
+                        build_load_event_log_path(load_event_log_dir, url, "camoufox")
+                        if load_event_log_dir is not None and load_event_log
+                        else None
+                    )
+                    if load_event_log_path is not None:
+                        Path(load_event_log_path).write_text(render_load_event_log(load_event_log))
                     final_response = last_main_frame_response or initial_response
                     content_type = (
                         final_response.headers.get("content-type", "")
@@ -747,6 +800,18 @@ def _default_camoufox_solve(  # pragma: no cover
                                 main_frame_navigations_during_progressive_result
                             ),
                             "load_more_calls_samples": load_more_calls_samples_result,
+                            # TEMPORARY DIAGNOSTIC (entry 17's "expand the
+                            # diagnostic tool" phase): a summary, not the
+                            # full timeline (which can be long) -- the
+                            # complete per-event data lives in
+                            # `load_event_log_path`'s file when
+                            # TITAN_LOAD_EVENT_LOG_DIR is set, or nowhere
+                            # (still collected in memory, just not
+                            # persisted) if that dir isn't configured.
+                            "load_event_count": (
+                                len(load_event_log) if debug_loading_race else None
+                            ),
+                            "load_event_log_path": load_event_log_path,
                         },
                     )
                     return _RawSolve(
@@ -779,6 +844,14 @@ def _default_camoufox_solve(  # pragma: no cover
         apparmor_denials_during_solve = apparmor_denial_delta(
             apparmor_denials_before, _apparmor_denial_count()
         )
+        # Entry 17's "expand the diagnostic tool" phase load-event
+        # timeline is deliberately *not* logged on this path: it's read
+        # from the page's own DOM (`_read_feed_attr`) only once,
+        # normally, right before the "solved" log line below -- exactly
+        # the read this crash means never got a chance to happen
+        # (`page`/the browser itself may already be gone by the time
+        # this branch runs). Nothing meaningful to report here, so
+        # nothing invented.
         logger.error(
             "camoufox_provider.solve_crashed",
             extra={"url": url, "apparmor_denials_during_solve": apparmor_denials_during_solve},
