@@ -2468,6 +2468,82 @@ mock-target` وأُعيدت كل التجارب من الصفر.
    race condition) — لازم يفضل أخف حاجة ممكنة. **لسه معملتش الخطوة دي —
    pending، بعد لغز العداد.**
 
+**✅ لغز `load_more_calls=0` — اتحل بالكامل بدليل تحكّم مباشر (control
+test)، مش تخمين. الجواب: (أ) — بق حقيقي في القراءة، مش في التحميل
+(الفرضية ب اتنفت):**
+
+قبل أي تعديل تاني، اتعمل اختبار تحكّم مستقل تمامًا عن `feed.html` نفسها،
+بـCamoufox مباشرة (سكريبت Python صغير، مش pytest)، تلات حالات:
+
+| الحالة | آلية الكتابة | آلية القراءة | النتيجة |
+|---|---|---|---|
+| Control 1 | `page.evaluate("window.__testProp = 42")` | `page.evaluate("window.__testProp")` | `42` (صح) |
+| Control 2 | `<script>window.__scriptProp = 7</script>` (عبر `page.set_content`) | `page.evaluate("window.__scriptProp")` | `None`/`undefined` |
+| Control 3 (نفس صفحة `/feed` الحقيقية) | `<script>` بتاع `feed.html` نفسها | `page.evaluate("window.__loadMoreCalls")` | `None`/`undefined`، رغم `posts_in_dom: 5` حقيقية في الـDOM |
+
+اختبار رابع أكّد إن المشكلة مقصورة على `window.*` تحديدًا، مش أي حاجة
+كتبتها الصفحة: DOM attribute و`document.title` مكتوبين من **نفس** الـ
+`<script>` جوه نفس الصفحة رجعوا صح تمامًا (`page.evaluate` و`page.title()`
+الاتنين قروهم صح).
+
+**الاستنتاج القاطع:** `page.evaluate()` في Camoufox/Firefox **مايقدرش
+يشوف** أي `window.*` property اتضافت بواسطة الـ`<script>` بتاع الصفحة
+نفسها — بيرجع `undefined` كل مرة (اللي كان بيتحوّل لـ`0` مضلِّل عبر
+`|| 0` القديمة)، حتى لو الصفحة شغّالة فعليًا وبتضيف محتوى حقيقي طول
+الوقت. الأرجح إنها آلية Xray-vision بتاعة Firefox (بتفصل عالم الصفحة
+عن العالم اللي `evaluate()` بيشتغل فيه) — مش مشكلة في `loadMore()`
+خالص، ومش مسار تاني بيجيب البيانات (الفرضية ب اتنفت بالكامل: نفس
+الـ`loadMore()` اللي إحنا فاهمينها هي اللي شغّالة، اتأكّد من شكل
+الـDOM الناتج `[data-role="post"]` + author/text/likes/comments بالظبط
+زي `appendEdges` بترسمه).
+
+**الإصلاح:** `templates/feed.html`'s `window.__loadMoreCalls`/
+`__loadMoreDropped`/`__loadingFlagDebug` اتحوّلوا لـDOM attributes على
+`container` (`[data-role="feed"]`) بدل خواص `window` —
+`data-load-more-calls`/`data-load-more-dropped`/`data-loading-flag`.
+`camoufox_provider.py`/`patchright_provider.py` بقوا بيقروا من الـDOM
+attribute دي (`_read_feed_attr` helper جديد في `camoufox_provider.py`،
+موثّق بالتفصيل). `test-environment/tests/test_app.py`'s
+`test_feed_page_ships_the_progressive_diagnostic_counters` اتعدّل ليطابق.
+
+**النتيجة الحقيقية بعد الإصلاح (10 تشغيلات محلية، بعد إعادة بناء
+docker image):** الأرقام بقت **حقيقية ومنطقية** لأول مرة —
+`load_more_calls: 5` ثابت (5 صفحات بالظبط، زي ما `MAX_FEED_PAGES`
+بيقول)، **`load_more_dropped: 2` أو `3` — مش صفر خالص أي تشغيلة.**
+`load_more_calls_samples` بيتصاعد فعليًا مع كل خطوة (`[3, 4, 5, 5, ...]`)
+بدل ما يفضل صفر. هذا **دليل مباشر إن آلية الـdrop الأصلية (بند 14/17:
+`loading` guard بيتجاهل نداء بصمت) لسه فعليًا بتحصل**، حتى مع
+`RequestCounter`/`poll_until_idle` شغّالين ومؤكّدين (`network_idle_timeouts: 0`
+لسه في كل تشغيلة).
+
+**تفسير مهم، منبثق من نفس الدليل (فرضية جديدة، لسه محتاجة تأكيد
+مباشر عبر أداة الـtimeline في المرحلة الجاية، مش نتيجة نهائية):**
+`loading_flag_at_network_idle` **لسه `[false, ...]` في كل التشغيلات
+العشرة، حتى بعد تصحيح آلية القراءة** — يعني الفرضية الأصلية (race بين
+"الشبكة خلصت" و"الـ`.then()` خلص") **متأكّد نفيها فعليًا بدليل موثوق
+هالمرة**، مش بس بقناة قراءة معطوبة زي المرة اللي فاتت. لكن بما إن
+drops حقيقية بتحصل رغم كده، لازم يبقى فيه لحظة تانية غير مُراقَبة: كود
+`scroll_and_collect` الحالي بينادي `settle_fn` **بعد** الـdispatch
+مباشرة في نفس الخطوة، مش قبلها — فلو `loading` كانت لسه `true` **في
+لحظة الـdispatch نفسها** (بسبب fetch سابق لسه ماخلصش، أو نداء `loadMore()`
+التلقائي الأول اللي بيحصل قبل حتى ما `RequestCounter`'s listeners
+تتوصّل)، الـdrop بيحصل فورًا وبشكل متزامن **قبل** ما أي `settle_fn` في
+نفس الخطوة يتنفّذ خالص — فمفيش عيّنة موجودة أصلًا تقدر تمسك اللحظة دي.
+هذا يفسّر بدقة ليه `network_idle_timeouts` يفضل صفر و`loading_flag_at_network_idle`
+يفضل `false` رغم وجود drops حقيقية: العيّنة بتتاخد في التوقيت الغلط،
+مش إن مفيش مشكلة. **ده بالظبط النوع اللي أداة الـtimeline
+(`performance.now()` + `page.expose_function()`) المُتفَق عليها هتأكّده
+أو تنفيه بدليل مباشر، مش استنتاج نهائي دلوقتي.**
+
+**ملحوظة توثيقية:** التناقض القديم المُسجَّل (CI run 33029625940:
+`load_more_calls: 0`/`load_more_dropped: 0` رغم 20 عنصر اتجمعوا) كان
+على الأرجح **نفس هذا البق بالظبط**، مش تناقض منفصل غير مفسَّر — بيتفسّر
+الآن بالكامل بنفس آلية عزل `window.*`، مش لغز إضافي.
+
+**اتّحقّق محليًا:** `ruff`/`mypy --strict` نظيفين، 301 unit + 29
+contract + 159 test-environment unit test PASSED. **لسه محتاج تأكيد CI
+حقيقي** — بند "لا افتراض قيد بيئة" سارٍ زي العادة.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
