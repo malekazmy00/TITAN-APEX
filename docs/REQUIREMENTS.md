@@ -2541,8 +2541,52 @@ drops حقيقية بتحصل رغم كده، لازم يبقى فيه لحظة 
 الآن بالكامل بنفس آلية عزل `window.*`، مش لغز إضافي.
 
 **اتّحقّق محليًا:** `ruff`/`mypy --strict` نظيفين، 301 unit + 29
-contract + 159 test-environment unit test PASSED. **لسه محتاج تأكيد CI
-حقيقي** — بند "لا افتراض قيد بيئة" سارٍ زي العادة.
+contract + 159 test-environment unit test PASSED.
+
+**✅ تأكيد CI حقيقي أول مرة (commit `5e8ba49`، run
+[33171419026](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33171419026)):**
+`conclusion: failure` على مستوى الـrun ككل، لكن فُحص كل فشل بالتفصيل —
+فشلين، الاتنين فئتين قديمتين موثّقتين ومالهمش أي علاقة بإصلاح العداد:
+`test_progressive_live_dom_recovers_every_virtualization_window` (20/25،
+نفس الـrace قيد التحقيق) و`test_mock_target_camoufox_misses_every_shadow_dom_wrapped_post`
+(كراش Camoufox حقيقي على `/`، `apparmor_denials_during_solve: 1`، مالوش
+علاقة بـ`/feed`). **العداد نفسه اشتغل صح فعليًا على CI حقيقي لأول مرة:**
+`parsed_html` (نجح): `load_more_calls: 5, load_more_dropped: 0`.
+`live_dom` (فشل بالـrace، مش بسبب العداد): `load_more_calls: 5,
+load_more_dropped: 3` — drops حقيقية بتفسّر النقص بدقة، مش صفر مضلِّل
+زي الأول.
+
+**✅✅ تأكيد إحصائي: 5 محاولات CI متتالية إضافية (نفس commit `5e8ba49`،
+نفس run 33171419026، attempts 2-6، بطلب المستخدم صراحة — تأكيد واحد
+مش كافي)، بيانات كل الاختبارين الاتنين مسجّلة كاملة:**
+
+| Attempt | نتيجة الـrun ككل | `parsed_html` | calls/dropped | `live_dom` | calls/dropped |
+|---|---|---|---|---|---|
+| 2 | success | PASSED | 5/0 | PASSED | 5/0 |
+| 3 | success | PASSED | 5/1 | PASSED | 5/0 |
+| 4 | success | PASSED | 5/0 | PASSED | 5/0 |
+| 5 | failure (فشل تاني منفصل) | PASSED | 5/0 | PASSED | 5/0 |
+| 6 | failure (فشل تاني منفصل) | PASSED | 5/0 | PASSED | 5/0 |
+
+الفشلين في attempt 5 و6 (اللي خلّوا الـrun ككل "failure") فُحصوا
+بالتفصيل: الاتنين نفس فئة الكراش القديمة تمامًا
+(`Page.wait_for_timeout: ... browser has been closed` /
+`Page.click: Target crashed`، `apparmor_denials_during_solve: 1`)، على
+اختبارات تانية خالص (`test_parsed_html_only_recovers_the_final_virtualization_window`
+على `/`، `test_mock_target_camoufox_crawl_gets_real_posts_and_never_reaches_a_real_honeypot`
+على `/`) — **صفر علاقة بالعداد أو بـ`/feed`'s progressive path.**
+
+**النتيجة الإحصائية القاطعة:** `parsed_html` و`live_dom` **الاتنين
+PASSED في كل الخمس محاولات بلا استثناء (5/5)** — الـrace (20/25) نفسه
+معملش ظهور واحد في الدفعة دي (صدفة إحصائية، مش دليل إنه اتحل). **`load_more_calls`
+كان `5` بالظبط في كل محاولة، بلا استثناء واحد (deterministic، زي
+المتوقع من 5 صفحات)، و`load_more_dropped` كان رقم صغير منطقي (0 أو 1)
+كل مرة — ولا مرة واحدة رجع الرقم القديم المضلِّل `0/0` زي قبل الإصلاح.**
+
+**لغز `load_more_calls=0` مُقفَل رسميًا بثقة إحصائية حقيقية (control
+test + 6 تأكيدات CI منفصلة مجتمعة، مش تخمين محلي).** الجواب النهائي:
+**(أ)** — بق حقيقي في القراءة (عزل `window.*` بتاع Camoufox/Firefox)،
+`loadMore()` نفسها كانت دايمًا سليمة.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
