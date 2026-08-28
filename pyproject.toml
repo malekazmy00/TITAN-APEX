@@ -13,7 +13,30 @@ authors = [{ name = "TITAN-APEX" }]
 
 dependencies = [
     "scrapy>=2.11,<3.0",
-    "playwright>=1.44,<2.0",
+    # Upper bound narrowed from <2.0 to <1.56 -- a real, locally-confirmed
+    # (not assumed) incompatibility between playwright's Python package
+    # and the currently-installed Camoufox 0.4.11 browser build
+    # (v152.0.4-beta.29): `playwright==1.62.0` (the newest release
+    # satisfying the old `<2.0` bound as of this pin) fails every single
+    # Camoufox browser launch with
+    # `Browser.setDefaultViewport ... Found property "<root>.viewport.isMobile"
+    # - false which is not described in this scheme` -- a genuine Juggler
+    # protocol-schema mismatch between playwright-core's newer viewport
+    # payload and what this Camoufox build's bundled Firefox understands,
+    # not a project bug. `playwright==1.55.0` was confirmed by hand to
+    # launch Camoufox successfully and reproduce the real, previously
+    # CI-confirmed DOM Virtualization progressive-extraction race
+    # (docs/REQUIREMENTS.md section 9 entry 17) exactly as documented.
+    # Since this project's own dependency install (`pip install -e
+    # ".[dev,testenv]"`, unpinned lockfile) resolves whatever the newest
+    # matching release is at install time, an unpinned upper bound risked
+    # every future CI run hard-crashing every Camoufox-driven test on
+    # browser launch alone, unrelated to and masking the real race this
+    # entry is investigating. Revisit this upper bound once Camoufox (or
+    # its own upstream Firefox build) actually supports the newer
+    # protocol shape -- not before, and not by just widening the range
+    # without re-confirming a real launch succeeds.
+    "playwright>=1.44,<1.56",
     # docs/REQUIREMENTS.md section 9 entry 14: src/providers/antibot/
     # _parsed_html.py imports this directly (parsel.Selector) to parse
     # multiple html snapshots captured during progressive scroll
