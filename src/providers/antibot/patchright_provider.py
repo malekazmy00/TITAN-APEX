@@ -349,13 +349,38 @@ def _default_patchright_solve(  # pragma: no cover
                     # Same reasoning as camoufox_provider.py's identical
                     # block (docs/REQUIREMENTS.md section 9's "DOM
                     # Virtualization Instability" investigation).
+                    # **Revision, same entry 17 (real bug fix, not just
+                    # camoufox_provider.py's concern):** templates/feed.html
+                    # no longer sets `window.__loadMoreCalls`/
+                    # `__loadMoreDropped` at all -- confirmed by hand
+                    # that Camoufox/Firefox cannot read a `window.*`
+                    # property back once it's set by the page's own
+                    # inline `<script>` (see camoufox_provider.py's
+                    # `_read_feed_attr` docstring for the full
+                    # three-control-case confirmation), so the counters
+                    # now live as `container`'s (`[data-role="feed"]`)
+                    # `data-load-more-calls`/`data-load-more-dropped`
+                    # DOM attributes instead. Patchright drives Chromium,
+                    # not Firefox, so it may never have shared Camoufox's
+                    # specific read-back bug -- but since the page no
+                    # longer exposes the old `window.*` properties at
+                    # all, this read must follow the same rename
+                    # regardless, or it would silently regress to always
+                    # reading 0 for an unrelated reason (the property
+                    # simply not existing any more).
                     load_more_calls = (
-                        page.evaluate("window.__loadMoreCalls || 0")
+                        page.evaluate(
+                            "Number(document.querySelector('[data-role=\"feed\"]')"
+                            "?.getAttribute('data-load-more-calls')) || 0"
+                        )
                         if progressive_extraction
                         else None
                     )
                     load_more_dropped = (
-                        page.evaluate("window.__loadMoreDropped || 0")
+                        page.evaluate(
+                            "Number(document.querySelector('[data-role=\"feed\"]')"
+                            "?.getAttribute('data-load-more-dropped')) || 0"
+                        )
                         if progressive_extraction
                         else None
                     )

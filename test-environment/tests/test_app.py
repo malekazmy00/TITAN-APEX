@@ -162,18 +162,30 @@ def test_feed_page_ships_the_virtualization_config_when_enabled(client: FlaskCli
 
 def test_feed_page_ships_the_progressive_diagnostic_counters(client: FlaskClient) -> None:
     """docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
-    investment: window.__loadMoreCalls/__loadMoreDropped must ship on
-    every /feed render, unconditionally (not gated behind
-    virtualization/any other toggle) -- camoufox_provider.py/
+    investment: the `container`'s data-load-more-calls/data-load-more-dropped
+    attributes must ship on every /feed render, unconditionally (not
+    gated behind virtualization/any other toggle) -- camoufox_provider.py/
     patchright_provider.py read these back for real, live diagnostic
     evidence distinguishing "loadMore() actually ran" from "silently
-    dropped by the loading guard"."""
+    dropped by the loading guard".
+
+    **Revision (same entry 17, a real bug in the original version of
+    this diagnostic, not in this test):** originally plain
+    `window.__loadMoreCalls`/`__loadMoreDropped` expando properties --
+    confirmed by hand that Camoufox/Firefox's automation protocol
+    cannot read a `window.*` property back once it's set by the page's
+    own inline `<script>` (`page.evaluate()` sees `undefined` every
+    time, silently coerced to a misleadingly plausible `0` by the old
+    `|| 0` fallback), even while loadMore() keeps running for real. A
+    DOM attribute set by that same inline script does not have this
+    problem -- see camoufox_provider.py's own `_read_feed_attr`
+    docstring for the full three-control-case confirmation."""
     body = client.get("/feed").get_data(as_text=True)
 
-    assert "window.__loadMoreCalls = 0;" in body
-    assert "window.__loadMoreDropped = 0;" in body
-    assert "window.__loadMoreDropped += 1;" in body
-    assert "window.__loadMoreCalls += 1;" in body
+    assert 'container.setAttribute("data-load-more-calls", "0");' in body
+    assert 'container.setAttribute("data-load-more-dropped", "0");' in body
+    assert '"data-load-more-dropped",' in body
+    assert '"data-load-more-calls",' in body
 
 
 def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -> None:

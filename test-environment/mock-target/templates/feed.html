@@ -108,34 +108,58 @@
       // shortfall happened anyway). Deliberately does *not* count a
       // no-op caused by `!hasNext` (pagination genuinely finished) as a
       // "drop" -- that is normal, expected behavior, not a race.
-      // camoufox_provider.py/patchright_provider.py read these back via
-      // page.evaluate() when progressive_extraction is used, and log
-      // them -- harmless (stays undefined, read back as 0) on any page
-      // that isn't this one.
-      window.__loadMoreCalls = 0;
-      window.__loadMoreDropped = 0;
-      // TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md section 9 entry 17,
-      // unconfirmed hypothesis review before any third fix attempt):
-      // mirrors the `loading` closure variable onto `window` so an
-      // outside page.evaluate() can read its *current* value at an
-      // arbitrary instant (e.g. right when a Playwright-side
-      // network-idle check says "settled"). Purely additive, read-only
-      // from the outside, same synchronous assignment cost as the
-      // existing `loading = ...` lines it sits next to -- zero timing
-      // impact on loadMore() itself. Not a fix; remove once entry 17's
-      // real root cause is confirmed either way.
-      window.__loadingFlagDebug = false;
+      //
+      // **Revision, same entry 17 (a real, CI-confirmed bug in this
+      // diagnostic itself, not in loadMore()):** these were originally
+      // plain `window.__loadMoreCalls`/`__loadMoreDropped` expando
+      // properties, read back via `page.evaluate("window.__loadMoreCalls
+      // || 0")`. Confirmed by hand with three separate control cases
+      // (a fresh `about:blank` page, a synthetic `page.set_content()`
+      // page, and this exact live page) that Camoufox/Firefox's
+      // automation protocol cannot see a plain `window.*` property once
+      // it's set by the *page's own* inline `<script>` execution --
+      // `page.evaluate()` reads it back as `undefined` every time
+      // (silently coerced to a misleadingly plausible-looking `0` by the
+      // old `|| 0` fallback), even though `loadMore()` itself was
+      // running and appending real content the whole time. The same
+      // three controls confirmed a DOM *attribute* set by that same
+      // inline script, or `document.title`, reads back correctly --
+      // this is specifically a `window` expando-property isolation
+      // (almost certainly Firefox's Xray-vision wrapper separating the
+      // page's own script realm from the automation-privileged one
+      // `evaluate()` runs in), not a DOM-content isolation. Mirrored
+      // onto `container` (`[data-role="feed"]`, already queried above,
+      // never itself evicted by DOM Virtualization) as plain string
+      // attributes instead -- camoufox_provider.py/patchright_provider.py
+      // now read these, not a `window.*` property. Harmless (`?.`
+      // short-circuits to `undefined`, `Number(undefined) || 0` is `0`)
+      // on any page that isn't this one, same fallback shape as before.
+      container.setAttribute("data-load-more-calls", "0");
+      container.setAttribute("data-load-more-dropped", "0");
+      // Same revision: mirrors the `loading` closure variable as a DOM
+      // attribute so an outside page.evaluate() can read its *current*
+      // value at an arbitrary instant (e.g. right when a Playwright-side
+      // network-idle check says "settled") -- see this block's own
+      // comment above for why a DOM attribute, not a `window.*`
+      // property, is the one that actually survives the read.
+      container.setAttribute("data-loading-flag", "false");
 
       function loadMore() {
         if (loading || !hasNext) {
           if (loading) {
-            window.__loadMoreDropped += 1;
+            container.setAttribute(
+              "data-load-more-dropped",
+              String(Number(container.getAttribute("data-load-more-dropped")) + 1)
+            );
           }
           return;
         }
-        window.__loadMoreCalls += 1;
+        container.setAttribute(
+          "data-load-more-calls",
+          String(Number(container.getAttribute("data-load-more-calls")) + 1)
+        );
         loading = true;
-        window.__loadingFlagDebug = true;
+        container.setAttribute("data-loading-flag", "true");
         loadingEl.style.display = "block";
         const url = cursor ? "/api/feed?after=" + encodeURIComponent(cursor) : "/api/feed";
         fetch(url)
@@ -148,12 +172,12 @@
             cursor = pageInfo.end_cursor;
             hasNext = Boolean(pageInfo.has_next_page);
             loading = false;
-            window.__loadingFlagDebug = false;
+            container.setAttribute("data-loading-flag", "false");
             loadingEl.style.display = "none";
           })
           .catch(function () {
             loading = false;
-            window.__loadingFlagDebug = false;
+            container.setAttribute("data-loading-flag", "false");
             loadingEl.style.display = "none";
           });
       }

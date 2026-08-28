@@ -448,6 +448,50 @@ def _default_camoufox_solve(  # pragma: no cover
                         # principle entry 14 already established for this
                         # module).
                         request_counter = RequestCounter()
+
+                        def _read_feed_attr(attr: str) -> str | None:
+                            """Reads one of templates/feed.html's own
+                            `container` diagnostic attributes
+                            (``data-load-more-calls``/``data-load-more-dropped``/
+                            ``data-loading-flag``) -- a DOM attribute,
+                            not a ``window.*`` property. **Real, CI-confirmed
+                            fix (docs/REQUIREMENTS.md section 9 entry
+                            17's `load_more_calls`/`load_more_dropped`
+                            mystery):** these were originally plain
+                            ``window.__loadMoreCalls``/``__loadMoreDropped``
+                            expando properties -- confirmed by hand
+                            (three separate control cases: a fresh
+                            ``about:blank`` page, a synthetic
+                            ``page.set_content()`` page, and this exact
+                            live page) that Camoufox/Firefox's
+                            automation protocol cannot see a plain
+                            ``window.*`` property once it is set by the
+                            *page's own* inline ``<script>`` execution
+                            -- ``page.evaluate()`` reads it back as
+                            ``undefined`` every single time (silently
+                            coerced to a misleadingly plausible-looking
+                            ``0`` by the old ``|| 0`` fallback), even
+                            though ``loadMore()`` itself was running and
+                            appending real content the whole time
+                            (posts kept arriving; the counter alone was
+                            unreadable). The same three controls
+                            confirmed a DOM *attribute* set by that same
+                            inline script reads back correctly -- this
+                            is specifically a ``window`` expando-property
+                            isolation (almost certainly Firefox's
+                            Xray-vision wrapper separating the page's
+                            own script realm from the
+                            automation-privileged one ``evaluate()``
+                            runs in), not a DOM-content isolation.
+                            ``None`` on any page that isn't this one (no
+                            matching element at all) -- the same
+                            harmless fallback shape the old ``|| 0`` had.
+                            """
+                            return page.evaluate(  # type: ignore[no-any-return]
+                                "document.querySelector('[data-role=\"feed\"]')"
+                                f"?.getAttribute('{attr}') ?? null"
+                            )
+
                         # TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md
                         # section 9 entry 17, unconfirmed hypothesis
                         # review requested before any third fix attempt):
@@ -455,10 +499,10 @@ def _default_camoufox_solve(  # pragma: no cover
                         # -- zero behavior/timing change for every
                         # existing caller, same pattern as
                         # TITAN_TRACE_DIR/_tracing.py). When set, samples
-                        # templates/feed.html's own window.__loadingFlagDebug
-                        # (a direct mirror of the page's real `loading`
-                        # closure variable, added purely for this
-                        # investigation) at the *exact instant*
+                        # templates/feed.html's own ``data-loading-flag``
+                        # attribute (a direct mirror of the page's real
+                        # `loading` closure variable, added purely for
+                        # this investigation) at the *exact instant*
                         # poll_until_idle reports the network settled --
                         # answering with direct evidence, not another
                         # guess, whether "network idle" (what
@@ -470,7 +514,7 @@ def _default_camoufox_solve(  # pragma: no cover
                         debug_loading_race = bool(os.environ.get("TITAN_DEBUG_LOADING_RACE"))
                         loading_flag_samples: list[bool] = []
                         # TEMPORARY DIAGNOSTIC, same review: samples
-                        # window.__loadMoreCalls itself at every settle_fn
+                        # data-load-more-calls itself at every settle_fn
                         # call (not just once at the very end) -- direct
                         # evidence for whether it is ever nonzero *during*
                         # the run (and something later resets it back to
@@ -515,10 +559,10 @@ def _default_camoufox_solve(  # pragma: no cover
                                 network_idle_timeouts += 1
                             elif debug_loading_race:
                                 loading_flag_samples.append(
-                                    bool(page.evaluate("window.__loadingFlagDebug || false"))
+                                    _read_feed_attr("data-loading-flag") == "true"
                                 )
                                 load_more_calls_samples.append(
-                                    int(page.evaluate("window.__loadMoreCalls || 0"))
+                                    int(_read_feed_attr("data-load-more-calls") or 0)
                                 )
 
                         page.on("request", request_counter.on_start)
@@ -563,23 +607,25 @@ def _default_camoufox_solve(  # pragma: no cover
                             )
                     # docs/REQUIREMENTS.md section 9's "DOM Virtualization
                     # Instability" investigation, monitoring-infrastructure
-                    # investment: window.__loadMoreCalls/__loadMoreDropped
-                    # (templates/feed.html) directly answer "did the page's
-                    # own loadMore() guard actually drop a call", something
-                    # network_idle_timeouts above cannot -- confirmed for
-                    # real (CI run 32997246624) that a network-side wait
-                    # succeeding on every poll does *not* rule out a
-                    # page-side drop. Harmless (reads back 0/0) on any page
-                    # that isn't this one -- `|| 0` covers both `undefined`
-                    # (the property was never defined) and a page that
-                    # errored before its own script ran at all.
+                    # investment: data-load-more-calls/data-load-more-dropped
+                    # (templates/feed.html's `container` attributes --
+                    # see _read_feed_attr's own docstring above for why
+                    # these are DOM attributes, not `window.*`
+                    # properties, after a real, CI-confirmed bug in the
+                    # original window-property version) directly answer
+                    # "did the page's own loadMore() guard actually drop
+                    # a call", something network_idle_timeouts above
+                    # cannot -- confirmed for real (CI run 32997246624)
+                    # that a network-side wait succeeding on every poll
+                    # does *not* rule out a page-side drop. Harmless
+                    # (reads back 0/0) on any page that isn't this one.
                     load_more_calls = (
-                        page.evaluate("window.__loadMoreCalls || 0")
+                        int(_read_feed_attr("data-load-more-calls") or 0)
                         if progressive_extraction
                         else None
                     )
                     load_more_dropped = (
-                        page.evaluate("window.__loadMoreDropped || 0")
+                        int(_read_feed_attr("data-load-more-dropped") or 0)
                         if progressive_extraction
                         else None
                     )
@@ -688,7 +734,7 @@ def _default_camoufox_solve(  # pragma: no cover
                             "apparmor_denials_during_solve": apparmor_denials_during_solve,
                             # TEMPORARY DIAGNOSTIC (entry 17 hypothesis
                             # review, TITAN_DEBUG_LOADING_RACE-gated):
-                            # `window.__loadingFlagDebug`'s value sampled
+                            # `data-loading-flag`'s value sampled
                             # at every settle_fn call that reported
                             # network-idle, in order. Any `true` in this
                             # list is direct, in-the-act evidence that
