@@ -1,6 +1,18 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  push: {}
+  pull_request: {}
+  # docs/REQUIREMENTS.md section 9 entry 17's "expand the diagnostic
+  # tool" phase, final batch: lets this exact workflow be dispatched
+  # many times in parallel via the API (10 independent runs, not
+  # sequential reruns of one run_id) -- each dispatch gets its own,
+  # completely independent ci-diagnostics artifact, sidestepping the
+  # real, confirmed-by-hand constraint that a *rerun* of an existing
+  # run_id can make an earlier attempt's own artifact unavailable
+  # before it's downloaded. No inputs -- every dispatch runs the exact
+  # same job this branch already runs on push.
+  workflow_dispatch: {}
 
 jobs:
   test:
