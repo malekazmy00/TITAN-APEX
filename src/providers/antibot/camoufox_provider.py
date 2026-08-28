@@ -57,6 +57,7 @@ called unconditionally here now, the identical logic and justification
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from logging import Logger
@@ -447,6 +448,63 @@ def _default_camoufox_solve(  # pragma: no cover
                         # principle entry 14 already established for this
                         # module).
                         request_counter = RequestCounter()
+                        # TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md
+                        # section 9 entry 17, unconfirmed hypothesis
+                        # review requested before any third fix attempt):
+                        # off by default (TITAN_DEBUG_LOADING_RACE unset
+                        # -- zero behavior/timing change for every
+                        # existing caller, same pattern as
+                        # TITAN_TRACE_DIR/_tracing.py). When set, samples
+                        # templates/feed.html's own window.__loadingFlagDebug
+                        # (a direct mirror of the page's real `loading`
+                        # closure variable, added purely for this
+                        # investigation) at the *exact instant*
+                        # poll_until_idle reports the network settled --
+                        # answering with direct evidence, not another
+                        # guess, whether "network idle" (what
+                        # RequestCounter/poll_until_idle track) and "the
+                        # page's own loadMore().then() callback has
+                        # actually finished and reset `loading`" are
+                        # really two different completion signals that
+                        # can be observed apart.
+                        debug_loading_race = bool(os.environ.get("TITAN_DEBUG_LOADING_RACE"))
+                        loading_flag_samples: list[bool] = []
+                        # TEMPORARY DIAGNOSTIC, same review: samples
+                        # window.__loadMoreCalls itself at every settle_fn
+                        # call (not just once at the very end) -- direct
+                        # evidence for whether it is ever nonzero *during*
+                        # the run (and something later resets it back to
+                        # 0 before the final read) or whether it never
+                        # leaves 0 at all, which would point at the
+                        # counter/increment itself, not at a late reset.
+                        load_more_calls_samples: list[int] = []
+                        # TEMPORARY DIAGNOSTIC, follow-up to the same
+                        # entry-17 review: load_more_calls/load_more_dropped
+                        # reading 0/0 on *every* local repro run so far
+                        # (including two clean 25/25 passes) is itself
+                        # unexplained -- loadMore()'s own automatic
+                        # first call increments __loadMoreCalls
+                        # synchronously, before any fetch, so it should
+                        # never read back 0 if the same document that ran
+                        # it is still the one page.evaluate() reads from
+                        # at the end. Counts real main-frame navigations
+                        # during the progressive-collection window itself
+                        # -- direct evidence for/against a hidden
+                        # mid-collection reset (e.g. a second,
+                        # later-than-expected Anubis redirect) silently
+                        # replacing the document (and therefore its
+                        # window state) partway through, which the
+                        # existing one-navigation assumption baked into
+                        # this whole block never checks for.
+                        main_frame_navigations_during_progressive = 0
+
+                        def _count_main_frame_navigation(frame: Any) -> None:
+                            nonlocal main_frame_navigations_during_progressive
+                            if debug_loading_race and frame == page.main_frame:
+                                main_frame_navigations_during_progressive += 1
+
+                        if debug_loading_race:
+                            page.on("framenavigated", _count_main_frame_navigation)
 
                         def _wait_for_network_idle(timeout_ms: int) -> None:
                             nonlocal network_idle_timeouts
@@ -455,6 +513,13 @@ def _default_camoufox_solve(  # pragma: no cover
                             )
                             if not settled:
                                 network_idle_timeouts += 1
+                            elif debug_loading_race:
+                                loading_flag_samples.append(
+                                    bool(page.evaluate("window.__loadingFlagDebug || false"))
+                                )
+                                load_more_calls_samples.append(
+                                    int(page.evaluate("window.__loadMoreCalls || 0"))
+                                )
 
                         page.on("request", request_counter.on_start)
                         page.on("requestfinished", request_counter.on_settle)
@@ -484,6 +549,10 @@ def _default_camoufox_solve(  # pragma: no cover
                             page.remove_listener("request", request_counter.on_start)
                             page.remove_listener("requestfinished", request_counter.on_settle)
                             page.remove_listener("requestfailed", request_counter.on_settle)
+                            if debug_loading_race:
+                                page.remove_listener(
+                                    "framenavigated", _count_main_frame_navigation
+                                )
                     else:
                         scroll_to_load_lazy_content(
                             page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
@@ -512,6 +581,26 @@ def _default_camoufox_solve(  # pragma: no cover
                     load_more_dropped = (
                         page.evaluate("window.__loadMoreDropped || 0")
                         if progressive_extraction
+                        else None
+                    )
+                    # TEMPORARY DIAGNOSTIC, same entry 17 review as above:
+                    # `None` (not logged as a list) unless
+                    # TITAN_DEBUG_LOADING_RACE was set for this solve --
+                    # avoids a meaningless always-empty field on every
+                    # normal run.
+                    loading_flag_at_network_idle = (
+                        loading_flag_samples
+                        if progressive_extraction and debug_loading_race
+                        else None
+                    )
+                    main_frame_navigations_during_progressive_result = (
+                        main_frame_navigations_during_progressive
+                        if progressive_extraction and debug_loading_race
+                        else None
+                    )
+                    load_more_calls_samples_result = (
+                        load_more_calls_samples
+                        if progressive_extraction and debug_loading_race
                         else None
                     )
                     final_response = last_main_frame_response or initial_response
@@ -597,6 +686,21 @@ def _default_camoufox_solve(  # pragma: no cover
                             "load_more_calls": load_more_calls,
                             "load_more_dropped": load_more_dropped,
                             "apparmor_denials_during_solve": apparmor_denials_during_solve,
+                            # TEMPORARY DIAGNOSTIC (entry 17 hypothesis
+                            # review, TITAN_DEBUG_LOADING_RACE-gated):
+                            # `window.__loadingFlagDebug`'s value sampled
+                            # at every settle_fn call that reported
+                            # network-idle, in order. Any `true` in this
+                            # list is direct, in-the-act evidence that
+                            # "network idle" and "loadMore()'s `loading`
+                            # flag actually reset" are observably
+                            # different instants -- not inferred from the
+                            # final item count.
+                            "loading_flag_at_network_idle": loading_flag_at_network_idle,
+                            "main_frame_navigations_during_progressive": (
+                                main_frame_navigations_during_progressive_result
+                            ),
+                            "load_more_calls_samples": load_more_calls_samples_result,
                         },
                     )
                     return _RawSolve(

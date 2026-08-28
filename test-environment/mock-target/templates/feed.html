@@ -114,6 +114,17 @@
       // that isn't this one.
       window.__loadMoreCalls = 0;
       window.__loadMoreDropped = 0;
+      // TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md section 9 entry 17,
+      // unconfirmed hypothesis review before any third fix attempt):
+      // mirrors the `loading` closure variable onto `window` so an
+      // outside page.evaluate() can read its *current* value at an
+      // arbitrary instant (e.g. right when a Playwright-side
+      // network-idle check says "settled"). Purely additive, read-only
+      // from the outside, same synchronous assignment cost as the
+      // existing `loading = ...` lines it sits next to -- zero timing
+      // impact on loadMore() itself. Not a fix; remove once entry 17's
+      // real root cause is confirmed either way.
+      window.__loadingFlagDebug = false;
 
       function loadMore() {
         if (loading || !hasNext) {
@@ -124,6 +135,7 @@
         }
         window.__loadMoreCalls += 1;
         loading = true;
+        window.__loadingFlagDebug = true;
         loadingEl.style.display = "block";
         const url = cursor ? "/api/feed?after=" + encodeURIComponent(cursor) : "/api/feed";
         fetch(url)
@@ -136,10 +148,12 @@
             cursor = pageInfo.end_cursor;
             hasNext = Boolean(pageInfo.has_next_page);
             loading = false;
+            window.__loadingFlagDebug = false;
             loadingEl.style.display = "none";
           })
           .catch(function () {
             loading = false;
+            window.__loadingFlagDebug = false;
             loadingEl.style.display = "none";
           });
       }
