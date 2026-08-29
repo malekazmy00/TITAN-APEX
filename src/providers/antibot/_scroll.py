@@ -142,10 +142,167 @@ one backed by its *own* live request-tracking (``page.on("request"/
 the whole progressive collection so it can't miss a request that starts
 and finishes between two separate polls), a genuinely reusable signal
 ``wait_for_load_state`` cannot provide for this shape of page.
+
+**Fourth revision (docs/REQUIREMENTS.md section 9 entry 17, the actual
+root-caused fix -- real, in-the-act evidence from 4 separate failed
+solves across a 10-run parallel CI batch, not another guess):** the
+``network_idle_timeouts``/`data-load-more-calls`/load-event-timeline
+diagnostics (all still active, all unchanged by this revision) proved
+the shortfall was never the network settling too slowly -- it was
+``templates/feed.html``'s own ``loadMore()`` getting called *twice* for
+one scroll step, 1-3ms apart, blocking the second call. Root cause,
+confirmed by reading exactly what the old ``_SCROLL_AND_DISPATCH_SCRIPT``
+did: ``window.scrollTo(0, document.body.scrollHeight)`` followed by a
+*synthetic* ``window.dispatchEvent(new Event('scroll'))`` -- added
+originally (this module's own "Revision" paragraph above) because a
+plain ``scrollTo()`` alone doesn't reliably fire a real ``'scroll'``
+event once a virtualized list's content is short enough to already fit
+the viewport. That reasoning was correct on its own, but incomplete: it
+assumed the real browser event *never* fires once content is short --
+the real-CI timelines proved that assumption wrong. Sometimes a genuine
+native ``'scroll'`` event *also* fires (there's still real, if small,
+scrollable distance at the exact moment ``scrollTo()`` runs, before
+eviction has fully caught up) -- landing on the same
+``window.addEventListener("scroll", ...)`` listener as the synthetic
+one, so ``loadMore()`` runs twice for what was meant to be one logical
+step. The fix removes the synthetic dispatch entirely rather than
+trying to suppress the "extra" native one (there is no reliable way to
+tell in advance which of the two would have been the "real" one) --
+:func:`scroll_and_collect` now drives scrolling with
+``page.mouse.wheel(0, delta)``, a genuine Playwright/Patchright
+input-level API both engines share identically: it dispatches one real,
+trusted wheel/scroll input, the same shape a real mouse produces, with
+no separate synthetic JS event to ever race against. ``delta`` and the
+pause between scroll steps are both randomized per attempt (via
+:func:`randomized_scroll_delta`/:func:`randomized_pause_ms`, both pure
+and independently unit-tested with an injected, seedable
+``random.Random`` -- no real randomness or browser needed to test
+them) rather than the old fixed jump-to-bottom and fixed ``pause_ms``
+sleep -- more realistic per-step behavior, and no longer a single
+suspiciously-identical timing signature repeated ``max_attempts``
+times in a row. :func:`randomized_pause_ms` also folds in a simple,
+deliberately early "fatigue"/attention-span model (the mean pause
+itself drifts upward as a session progresses, not just i.i.d. jitter
+around a constant) -- added now rather than deferred, since harder
+future test rounds already anticipated will need the same idea and
+retrofitting it later would mean re-deriving this same timing model
+twice. ``rng`` defaults to a fresh, unseeded ``random.Random()`` for
+every real caller (genuine per-run randomness) -- only this module's
+own tests inject a seeded one.
+
+:func:`scroll_to_load_lazy_content` is, again, completely untouched --
+it never had the synthetic-dispatch problem in the first place (no
+virtualized-list callers use it), and every other already-proven
+lazy-load target that relies on it keeps its exact prior behavior.
+
+**Fifth revision (docs/REQUIREMENTS.md section 9 entry 17, real local
+evidence gathered right after the "Fourth revision" above, before ever
+pushing it): even with the double-dispatch race gone, the shortfall
+persisted -- confirmed the real cause is one level deeper.** A source
+documenting Playwright's own "trigger-and-wait" pattern for testing
+infinite-scroll/lazy-loading pages (a real, cited source, not an
+invented justification) names the exact mistake the "Second"/"Third"
+revisions' ``settle_fn`` design made: registering a wait *after* the
+scroll trigger has already run is itself a race whenever the response
+is fast enough to have already arrived. Real, local evidence backed
+this up independent of that source: a single ``page.mouse.wheel()``
+call was directly observed producing *more than one* genuine, actually
+distinct native ``'scroll'`` event (not one -- Firefox headless
+appears to animate/replay a large wheel input across more than one
+event, confirmed by hand with a bare ``deltaY`` and a live scroll-event
+counter), each independently capable of triggering ``loadMore()`` --
+so even a perfectly real, single-input wheel scroll could still race a
+``settle_fn`` armed only after it, the same way the synthetic dispatch
+used to.
+
+``settle_fn`` is removed (not just renamed) in favor of
+``trigger_and_wait_fn: Callable[[Callable[[], None]], bool] | None`` --
+an injected callable that takes the *actual trigger action itself*
+(the ``page.mouse.wheel()`` call this module builds) as an argument,
+so the caller can arm whatever real completion listener it needs
+*before* invoking it, exactly matching Playwright's own
+``page.expect_response()`` context-manager contract (arm, then run the
+code that triggers the response, all inside one ``with`` block) --
+the same reason this module never built ``settle_fn``'s own concrete
+implementation either (:func:`scroll_and_collect`'s own "Second
+revision" paragraph above): a provider's concrete wait needs its own
+precisely-typed timeout exception, which this module has no business
+importing just to catch one. Returns ``True`` once a real response
+arrived (scrolling should keep going) or ``False`` on timeout (no new
+request was ever sent -- a real, direct signal that pagination has
+already ended, not a guess) -- :func:`scroll_and_collect` now stops
+its loop early on ``False`` rather than burning through the rest of
+``max_attempts`` on guaranteed no-ops. ``None`` (the default) skips
+this entirely and just calls the trigger directly, unchanged from
+every prior revision's backward-compatibility guarantee.
+:func:`poll_until_idle`/:class:`RequestCounter` below stay in this
+module as independently-tested, still potentially reusable utilities
+for a different future need -- just no longer wired into
+:func:`scroll_and_collect` itself, which has no business trusting a
+general "is anything happening on the network" signal over the
+specific response its own trigger actually caused.
+
+**Sixth revision (docs/REQUIREMENTS.md section 9 entry 17, a real,
+confirmed bug in the "Fifth revision" above -- not a race, a plain
+ordering mistake, caught by hand against a real load-event timeline
+where all 5 pages loaded cleanly and sequentially yet the item count
+was still short by exactly one window every time):**
+:func:`scroll_and_collect` used to ``break`` on ``trigger_and_wait_fn``
+returning ``False`` *before* running that same step's ``pause_ms``
+wait and ``collect_fn()`` call. That is wrong whenever the response
+that finally reports "no more pages" (e.g. a real provider-side
+``page_info.has_next_page: false``) is the *same* response whose own
+new content this exact step's trigger just caused to load -- which is
+exactly what happens on the last page of a real, finite list: the
+final page's own window was successfully appended to the DOM, but the
+loop broke before ever calling ``collect_fn()`` again to read it,
+silently losing it every single time. The fix: the pause+collect for
+the current step always runs regardless of what
+``trigger_and_wait_fn`` returned; only the *next* iteration is skipped
+when it returns ``False``. This is what this function's own opening
+paragraph already promised (``collect_fn()`` runs after *every*
+attempted step) -- the "Fifth revision" simply hadn't kept that
+promise for its own new early-exit path.
+
+**Seventh revision (docs/REQUIREMENTS.md section 9 entry 17, a real,
+user-review-driven follow-up -- not a bug in the "Fourth revision"
+above, a real gap in it):** that revision's one-time
+``page.mouse.move(200, 200)`` (needed at all only because a bare
+``page.mouse.wheel()`` produces zero real scroll with no cursor
+positioned somewhere in the viewport first -- see this module's own
+comment at that call site) assumed the fixed absolute point
+``(200, 200)`` would keep meaning "somewhere sensible over the
+scrollable content" for the *entire* crawl. A real, quantified
+diagnostic batch (60+ real local runs, docs/REQUIREMENTS.md section 9
+entry 17) confirmed this fixed point is *not* what actually causes the
+"why does wheel() sometimes need several attempts" pattern (real,
+measurable scroll progress -- ~670-682px per attempt -- happens
+regardless of what's directly under the fixed point), but it did
+confirm a real, separate realism gap: the cursor sits over the same
+fixed pixel, almost always the invisible ``virtualization-spacer``
+element rather than any real rendered content, for the *entire* crawl
+-- not something a real human scrolling a real feed would ever do, and
+not guaranteed safe on any real (non-mock) target whose own layout can
+shift for reasons this project's own mock target's fixed-shape design
+never exercises (a scrollbar appearing/disappearing, a real
+re-render moving the scrollable container itself). ``container_selector``
+(optional, defaults to ``None``) is the fix: when given, ``page.locator(
+container_selector).hover()`` runs immediately before *every* single
+scroll attempt -- not once, before the loop -- so the cursor is
+re-positioned against the container's own real, current bounding box
+every time, the same way a real user's cursor tracks whatever they're
+actually looking at rather than staying pinned to one fixed screen
+coordinate for an entire session. ``container_selector=None`` (the
+default) keeps the exact prior one-time ``page.mouse.move(200, 200)``
+behavior unchanged -- every existing caller that hasn't been updated to
+supply a selector (and every test written before this revision) keeps
+its exact prior behavior, the same backward-compatibility guarantee
+this module has kept at every prior revision.
 """
 
 from __future__ import annotations
 
+import random
 import time
 from collections.abc import Callable
 from typing import Any
@@ -185,10 +342,92 @@ def scroll_to_load_lazy_content(page: Any, max_attempts: int, pause_ms: int) -> 
         previous_height = current_height
 
 
-_SCROLL_AND_DISPATCH_SCRIPT = (
-    "window.scrollTo(0, document.body.scrollHeight);"
-    "window.dispatchEvent(new Event('scroll'));"
-)
+#: Real-mouse-wheel scroll delta range, in pixels (docs/REQUIREMENTS.md
+#: section 9 entry 17's "Fourth revision" -- see this module's own
+#: module docstring). Deliberately generous at the low end: virtualized
+#: content (``DOM_VIRTUALIZATION_WINDOW_SIZE`` posts' worth) is short
+#: enough that even the smallest delta in this range reliably clears
+#: ``templates/feed.html``'s own "within 200px of the bottom" trigger
+#: threshold -- confirmed by hand against the real test-environment
+#: stack, not assumed. A fixed jump-to-bottom (the old behavior) would
+#: also clear it every time, but always by the exact same, identical
+#: amount -- this range keeps that guarantee while no longer producing
+#: a single suspiciously-repeated scroll signature.
+DEFAULT_SCROLL_DELTA_RANGE_PX = (1500.0, 3000.0)
+#: Per-step pause jitter, as a multiplier on the (fatigue-adjusted) mean
+#: -- +/-30%.
+DEFAULT_PAUSE_JITTER_RANGE = (0.7, 1.3)
+#: How much the *mean* pause grows from the first scroll attempt to the
+#: last, expressed as a fraction of ``pause_ms`` (0.6 == up to 60% longer
+#: by the final attempt) -- the "fatigue"/attention-span model docs/
+#: REQUIREMENTS.md section 9 entry 17's "Fourth revision" describes.
+DEFAULT_FATIGUE_FACTOR = 0.6
+
+
+def randomized_scroll_delta(
+    rng: random.Random, delta_range: tuple[float, float] = DEFAULT_SCROLL_DELTA_RANGE_PX
+) -> float:
+    """A random wheel-scroll ``deltaY`` (pixels) for one scroll step --
+    replaces the old fixed ``scrollTo(0, document.body.scrollHeight)``
+    jump (see this module's own docstring's "Fourth revision"). Pure
+    (no browser, no real randomness needed to test -- callers inject a
+    seeded ``random.Random`` for deterministic tests).
+
+    Raises:
+        ValueError: if ``delta_range``'s low end is negative, or its
+            high end is below its low end -- both meaningless.
+    """
+    low, high = delta_range
+    if low < 0:
+        raise ValueError(f"delta_range's low end must be >= 0, got {low}")
+    if high < low:
+        raise ValueError(f"delta_range's high end ({high}) must be >= its low end ({low})")
+    return rng.uniform(low, high)
+
+
+def randomized_pause_ms(
+    base_pause_ms: int,
+    step_index: int,
+    total_steps: int,
+    rng: random.Random,
+    fatigue_factor: float = DEFAULT_FATIGUE_FACTOR,
+    jitter_range: tuple[float, float] = DEFAULT_PAUSE_JITTER_RANGE,
+) -> int:
+    """A randomized pause (milliseconds) for scroll step ``step_index``
+    of ``total_steps`` (both 0-based/plain counts) -- replaces the old
+    fixed ``pause_ms`` sleep repeated identically every attempt (see
+    this module's own docstring's "Fourth revision"). Two layers, both
+    real, not decorative:
+
+    1. A simple cumulative "fatigue"/attention-span model: the *mean*
+       pause grows linearly from ``base_pause_ms`` at the first attempt
+       to ``base_pause_ms * (1 + fatigue_factor)`` at the last one --
+       a session-long drift, not just independent per-step noise.
+    2. Independent per-step jitter on top of that mean (uniform within
+       ``jitter_range``), so no two attempts -- even at the same
+       ``step_index`` across different runs -- land on the same value.
+
+    ``total_steps <= 1`` (no meaningful "progress through the session"
+    to model) skips the fatigue drift entirely -- every step uses
+    ``base_pause_ms`` as its mean, jitter still applied. Pure (no
+    browser, no real time/randomness needed to test).
+
+    Raises:
+        ValueError: if ``base_pause_ms`` is negative, ``total_steps`` is
+            not positive, or ``step_index`` is outside
+            ``[0, total_steps)`` -- all meaningless configurations.
+    """
+    if base_pause_ms < 0:
+        raise ValueError(f"base_pause_ms must be >= 0, got {base_pause_ms}")
+    if total_steps <= 0:
+        raise ValueError(f"total_steps must be > 0, got {total_steps}")
+    if not (0 <= step_index < total_steps):
+        raise ValueError(f"step_index ({step_index}) must be in [0, {total_steps})")
+
+    progress = step_index / (total_steps - 1) if total_steps > 1 else 0.0
+    mean = base_pause_ms * (1 + fatigue_factor * progress)
+    jitter = rng.uniform(*jitter_range)
+    return max(0, round(mean * jitter))
 
 
 def scroll_and_collect(
@@ -196,7 +435,9 @@ def scroll_and_collect(
     max_attempts: int,
     pause_ms: int,
     collect_fn: Callable[[], None],
-    settle_fn: Callable[[], None] | None = None,
+    trigger_and_wait_fn: Callable[[Callable[[], None]], bool] | None = None,
+    rng: random.Random | None = None,
+    container_selector: str | None = None,
 ) -> None:
     """Calls ``collect_fn()`` after *every* read of the page -- including
     the very first, pre-scroll one -- so a caller can capture or extract
@@ -219,14 +460,36 @@ def scroll_and_collect(
     special handling either way, since it was already captured on an
     earlier step).
 
-    ``settle_fn`` (docs/REQUIREMENTS.md section 9's "DOM Virtualization
-    Instability" investigation, this module's own docstring's "Second
-    revision"): an optional caller-supplied callback invoked right after
-    the scroll+dispatch step, before the ``pause_ms`` wait below --
-    intended to be a *real* wait-for-completion signal (e.g.
-    ``page.wait_for_load_state("networkidle", ...)``) rather than a fixed
-    guessed duration. ``None`` (the default) skips it entirely -- the
-    exact prior behavior, unchanged.
+    ``trigger_and_wait_fn`` (docs/REQUIREMENTS.md section 9 entry 17's
+    "Fifth revision" -- see this module's own module docstring for the
+    full reasoning, including the cited "trigger-and-wait" source):
+    an optional caller-supplied callable, given the actual scroll
+    trigger itself (a zero-arg callable this function builds around
+    ``page.mouse.wheel()``) to invoke however it needs -- typically by
+    arming a real completion listener (e.g.
+    ``page.expect_response(...)``) *before* calling it, so the trigger
+    and the wait for its own effect can never race. Returns ``True`` if
+    scrolling should continue, ``False`` to stop the loop early (a
+    real signal -- e.g. no matching response within some timeout --
+    that there is nothing left to scroll to, not a guess). ``None``
+    (the default) just calls the trigger directly with no wait at
+    all -- the exact prior behavior every caller had before this
+    parameter existed.
+
+    ``rng`` (docs/REQUIREMENTS.md section 9 entry 17's "Fourth
+    revision"): the ``random.Random`` :func:`randomized_scroll_delta`/
+    :func:`randomized_pause_ms` draw from. Defaults to a fresh, unseeded
+    ``random.Random()`` -- genuine per-call randomness for every real
+    caller; only this module's own tests inject a seeded one.
+
+    ``container_selector`` (docs/REQUIREMENTS.md section 9 entry 17's
+    "Seventh revision" -- see this module's own module docstring for
+    the full reasoning): when given, ``page.locator(container_selector)
+    .hover()`` re-positions the cursor against the container's own real,
+    current position immediately before *every* scroll attempt, instead
+    of the fixed ``page.mouse.move(200, 200)`` every caller used before
+    this parameter existed. ``None`` (the default) keeps that exact
+    prior one-time behavior unchanged.
 
     Raises:
         ValueError: if ``max_attempts`` is not positive, or ``pause_ms``
@@ -237,20 +500,74 @@ def scroll_and_collect(
     if pause_ms < 0:
         raise ValueError(f"pause_ms must be >= 0, got {pause_ms}")
 
+    rng = rng if rng is not None else random.Random()
+
+    if container_selector is None:
+        # A real, empirically-confirmed requirement, not a stylistic
+        # choice: page.mouse.wheel() alone (no prior page.mouse.move())
+        # produced zero real scroll at all in a headless Camoufox
+        # session (confirmed by hand -- window.scrollY stayed 0 across
+        # repeated wheel() calls with no preceding move()) -- the
+        # input-level wheel event needs the (virtual) cursor actually
+        # positioned somewhere inside the viewport first, the same way
+        # a real mouse would already be somewhere on screen before a
+        # person starts scrolling. Once, not per attempt -- the cursor
+        # stays wherever it's put. Only when no ``container_selector``
+        # is given at all -- see this function's own "Seventh revision"
+        # docstring paragraph for why a real caller should prefer
+        # supplying one instead.
+        page.mouse.move(200, 200)
+
     collect_fn()
-    for _ in range(max_attempts):
-        page.evaluate(_SCROLL_AND_DISPATCH_SCRIPT)
-        if settle_fn is not None:
-            settle_fn()
-        page.wait_for_timeout(pause_ms)
+    for step in range(max_attempts):
+        if container_selector is not None:
+            # Re-computed fresh on every attempt -- unlike the fixed
+            # coordinate above, this stays correct even if the
+            # container's own real position shifts between scroll
+            # steps (new content appended, old content evicted, a
+            # scrollbar appearing/disappearing on a real, non-mock
+            # target). See this function's own "Seventh revision"
+            # docstring paragraph.
+            page.locator(container_selector).hover()
+        delta = randomized_scroll_delta(rng)
+
+        def _wheel_trigger(delta: float = delta) -> None:
+            page.mouse.wheel(0, delta)
+
+        keep_going = True
+        if trigger_and_wait_fn is not None:
+            # See this module's own docstring's "Fifth revision" for
+            # why the trigger is handed to the caller instead of being
+            # run first and waited on afterward -- that ordering is
+            # exactly the race this revision closes.
+            keep_going = trigger_and_wait_fn(_wheel_trigger)
+        else:
+            _wheel_trigger()
+        # **Sixth revision, a real bug in the "Fifth revision" above,
+        # confirmed by hand (docs/REQUIREMENTS.md section 9 entry 17):**
+        # the pause+collect for *this* attempt must still run even when
+        # `keep_going` is `False` -- the one response that finally says
+        # "no more pages" (e.g. a real `has_next_page: false`) is often
+        # the exact same response whose own new content this step's
+        # trigger just caused to load. Breaking *before* collecting it
+        # was a real, confirmed-in-CI-evidence bug: it silently dropped
+        # the final page's own window every single time, not a race --
+        # this function's own opening paragraph already promises
+        # collect_fn() runs after *every* attempted step, no exceptions,
+        # and this revision actually keeps that promise.
+        page.wait_for_timeout(randomized_pause_ms(pause_ms, step, max_attempts, rng))
         collect_fn()
+        if not keep_going:
+            break
 
 
 def collect_html_snapshots(
     page: Any,
     max_attempts: int,
     pause_ms: int,
-    settle_fn: Callable[[], None] | None = None,
+    trigger_and_wait_fn: Callable[[Callable[[], None]], bool] | None = None,
+    rng: random.Random | None = None,
+    container_selector: str | None = None,
 ) -> list[str]:
     """The ``"parsed_html"`` half of docs/REQUIREMENTS.md section 9 entry
     14's progressive-collection fix: captures ``page.content()`` after
@@ -262,12 +579,19 @@ def collect_html_snapshots(
     strings, since only the caller knows which field is the real identity
     key to deduplicate by.
 
-    ``settle_fn`` is passed straight through to :func:`scroll_and_collect`
-    -- see its own docstring.
+    ``trigger_and_wait_fn``/``rng``/``container_selector`` are passed
+    straight through to :func:`scroll_and_collect` -- see its own
+    docstring for all three.
     """
     snapshots: list[str] = []
     scroll_and_collect(
-        page, max_attempts, pause_ms, lambda: snapshots.append(page.content()), settle_fn
+        page,
+        max_attempts,
+        pause_ms,
+        lambda: snapshots.append(page.content()),
+        trigger_and_wait_fn,
+        rng,
+        container_selector,
     )
     return snapshots
 

@@ -58,9 +58,7 @@ from src.providers.antibot._live_dom import (
 )
 from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
 from src.providers.antibot._scroll import (
-    RequestCounter,
     collect_html_snapshots,
-    poll_until_idle,
     scroll_to_load_lazy_content,
 )
 from src.providers.antibot._tracing import build_trace_path, trace_dir_from_env
@@ -85,6 +83,14 @@ DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
 # investigation) -- see camoufox_provider.py's own comment for the full
 # explanation.
 DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS = 5_000
+# Same value and same reasoning as CamoufoxProvider's identical constant
+# (docs/REQUIREMENTS.md section 9 entry 17's "Sixth revision") -- see
+# camoufox_provider.py's own comment for the full explanation.
+DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS = 3
+# Same value and same reasoning as CamoufoxProvider's identical constant
+# (docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision") -- see
+# camoufox_provider.py's own comment for the full explanation.
+_FEED_CONTAINER_SELECTOR = '[data-role="feed"]'
 
 
 class _RawSolve(NamedTuple):
@@ -183,6 +189,7 @@ def _default_patchright_solve(  # pragma: no cover
     """
     from patchright.sync_api import Error as PatchrightError
     from patchright.sync_api import Response as PatchrightResponse
+    from patchright.sync_api import TimeoutError as PatchrightTimeoutError
     from patchright.sync_api import sync_playwright
 
     logger = get_logger(__name__)
@@ -278,66 +285,122 @@ def _default_patchright_solve(  # pragma: no cover
                     # camoufox_provider.py's identical block.
                     items: list[dict[str, Any]] | None = None
                     html_snapshots: list[str] | None = None
-                    network_idle_timeouts = 0
+                    progressive_scroll_ended_early: bool | None = None
                     if progressive_extraction:
                         # docs/REQUIREMENTS.md section 9's "DOM
-                        # Virtualization Instability" investigation --
-                        # same real, CI-confirmed correction as
-                        # camoufox_provider.py's identical block: a first
-                        # attempt using page.wait_for_load_state("networkidle")
-                        # made no measurable difference (confirmed via CI
-                        # run 32973393111 -- same shortfall as before it
-                        # existed), since that call is a per-*navigation*
-                        # lifecycle flag that resolves immediately once
-                        # reached, not a live "is anything in flight right
-                        # now" check -- useless for resynchronizing
-                        # against a *repeated* same-page fetch like this
-                        # one. See camoufox_provider.py's identical block
-                        # for the full explanation. This tracks in-flight
-                        # requests directly instead, maintained
-                        # continuously across the whole progressive
-                        # collection. RequestCounter and poll_until_idle
-                        # (_scroll.py) are pure, unit-tested functions --
-                        # only this listener wiring, which needs a real
-                        # Page, lives here untested.
-                        request_counter = RequestCounter()
+                        # Virtualization Instability" investigation,
+                        # "Fifth revision" -- same real, CI-confirmed
+                        # correction as camoufox_provider.py's identical
+                        # block: registering a wait *after* the scroll
+                        # trigger (this file's own previous
+                        # RequestCounter/poll_until_idle-based settle_fn,
+                        # like camoufox_provider.py's) is itself a race
+                        # whenever the response is fast -- confirmed for
+                        # real that even a single, genuine
+                        # page.mouse.wheel() call can produce more than
+                        # one native scroll-triggered loadMore(), each
+                        # capable of racing a settle_fn armed only
+                        # afterward. page.expect_response() fixes this by
+                        # construction (arms its listener *before* the
+                        # code inside its `with` block runs) -- see
+                        # camoufox_provider.py's own identical helper for
+                        # the full reasoning; this is the same pattern,
+                        # just built around Patchright's own
+                        # TimeoutError.
+                        consecutive_scroll_stalls = 0
+                        # docs/REQUIREMENTS.md section 9 entry 17, same
+                        # user-review-driven addition as
+                        # camoufox_provider.py's identical variable: the
+                        # API's own ground truth of every post_id it ever
+                        # confirmed sending, across every successful
+                        # trigger-and-wait call -- see camoufox_provider.py's
+                        # own comment for the full reasoning on why this
+                        # stays a raw count, not a "missing ids" diff.
+                        progressive_page_post_ids: list[str] = []
 
-                        def _wait_for_network_idle(timeout_ms: int) -> None:
-                            nonlocal network_idle_timeouts
-                            settled = poll_until_idle(
-                                request_counter.is_idle, page.wait_for_timeout, timeout_ms
+                        def _trigger_and_wait_for_feed_response(
+                            trigger_fn: Callable[[], None],
+                        ) -> bool:
+                            """**Sixth revision (docs/REQUIREMENTS.md
+                            section 9 entry 17), same real, CI-confirmed
+                            correction as camoufox_provider.py's
+                            identical helper:** stopping unconditionally
+                            on the first timeout was itself wrong --
+                            page.mouse.wheel() sometimes produces no
+                            scroll event at all for reasons unrelated to
+                            how much real content is left. Two real
+                            signals now, preferred in this order: (1)
+                            the actual /api/feed response body's own
+                            page_info.has_next_page -- the authoritative
+                            source of truth, not an inference from
+                            timing; (2) only when no response arrives at
+                            all, tolerate up to
+                            DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS
+                            consecutive timeouts before giving up. See
+                            camoufox_provider.py's own identical helper
+                            for the full reasoning.
+                            """
+                            nonlocal progressive_scroll_ended_early, consecutive_scroll_stalls
+                            try:
+                                with page.expect_response(
+                                    lambda response: "/api/feed" in response.url
+                                    and response.status == 200,
+                                    timeout=DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS,
+                                ) as response_info:
+                                    trigger_fn()
+                                consecutive_scroll_stalls = 0
+                                has_next_page = None
+                                page_post_ids: list[str] = []
+                                try:
+                                    body = response_info.value.json()
+                                    has_next_page = body.get("page_info", {}).get(
+                                        "has_next_page"
+                                    )
+                                    page_post_ids = [
+                                        edge["post"]["id"]
+                                        for edge in body.get("edges", [])
+                                        if isinstance(edge, dict)
+                                        and isinstance(edge.get("post"), dict)
+                                        and "id" in edge["post"]
+                                    ]
+                                except (ValueError, AttributeError, TypeError, KeyError) as exc:
+                                    logger.debug(
+                                        "patchright_provider.progressive_response_not_feed_json",
+                                        extra={"url": url, "reason": str(exc)},
+                                    )
+                                progressive_page_post_ids.extend(page_post_ids)
+                                if has_next_page is False:
+                                    progressive_scroll_ended_early = True
+                                    return False
+                                return True
+                            except PatchrightTimeoutError:
+                                consecutive_scroll_stalls += 1
+                                if (
+                                    consecutive_scroll_stalls
+                                    >= DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS
+                                ):
+                                    progressive_scroll_ended_early = True
+                                    return False
+                                return True
+
+                        if extraction_selectors is not None:
+                            items = collect_live_dom_items_progressively(
+                                page,
+                                extraction_selectors.item,
+                                extraction_selectors.fields,
+                                DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
+                                container_selector=_FEED_CONTAINER_SELECTOR,
                             )
-                            if not settled:
-                                network_idle_timeouts += 1
-
-                        page.on("request", request_counter.on_start)
-                        page.on("requestfinished", request_counter.on_settle)
-                        page.on("requestfailed", request_counter.on_settle)
-                        try:
-                            if extraction_selectors is not None:
-                                items = collect_live_dom_items_progressively(
-                                    page,
-                                    extraction_selectors.item,
-                                    extraction_selectors.fields,
-                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                                    settle_fn=lambda: _wait_for_network_idle(
-                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                                    ),
-                                )
-                            else:
-                                html_snapshots = collect_html_snapshots(
-                                    page,
-                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                                    settle_fn=lambda: _wait_for_network_idle(
-                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                                    ),
-                                )
-                        finally:
-                            page.remove_listener("request", request_counter.on_start)
-                            page.remove_listener("requestfinished", request_counter.on_settle)
-                            page.remove_listener("requestfailed", request_counter.on_settle)
+                        else:
+                            html_snapshots = collect_html_snapshots(
+                                page,
+                                DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
+                                container_selector=_FEED_CONTAINER_SELECTOR,
+                            )
                     else:
                         scroll_to_load_lazy_content(
                             page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
@@ -383,6 +446,15 @@ def _default_patchright_solve(  # pragma: no cover
                         )
                         if progressive_extraction
                         else None
+                    )
+                    # docs/REQUIREMENTS.md section 9 entry 17, same
+                    # user-review-driven addition as camoufox_provider.py's
+                    # identical block.
+                    progressive_api_reported_post_id_count = (
+                        len(progressive_page_post_ids) if progressive_extraction else None
+                    )
+                    progressive_api_reported_post_id_count_unique = (
+                        len(set(progressive_page_post_ids)) if progressive_extraction else None
                     )
                     final_response = last_main_frame_response or initial_response
                     content_type = (
@@ -434,10 +506,18 @@ def _default_patchright_solve(  # pragma: no cover
                             ),
                             "login_flow_used": login_flow is not None,
                             # Same reasoning as camoufox_provider.py's
-                            # identical field.
-                            "network_idle_timeouts": network_idle_timeouts,
+                            # identical field ("Fifth revision").
+                            "progressive_scroll_ended_early": (
+                                progressive_scroll_ended_early if progressive_extraction else None
+                            ),
                             "load_more_calls": load_more_calls,
                             "load_more_dropped": load_more_dropped,
+                            "progressive_api_reported_post_id_count": (
+                                progressive_api_reported_post_id_count
+                            ),
+                            "progressive_api_reported_post_id_count_unique": (
+                                progressive_api_reported_post_id_count_unique
+                            ),
                         },
                     )
                     return _RawSolve(

@@ -6,15 +6,51 @@ scripted sequence of scrollHeight values -- no real browser involved.
 
 from __future__ import annotations
 
+import random
+from collections.abc import Callable
+
 import pytest
 
 from src.providers.antibot._scroll import (
     RequestCounter,
     collect_html_snapshots,
     poll_until_idle,
+    randomized_pause_ms,
+    randomized_scroll_delta,
     scroll_and_collect,
     scroll_to_load_lazy_content,
 )
+
+
+class _FakeMouse:
+    """Stands in for a real Playwright/Patchright ``Page.mouse`` --
+    :func:`scroll_and_collect` only ever calls ``.move()`` (once) and
+    ``.wheel(delta_x, delta_y)`` (per attempt) on it (docs/REQUIREMENTS.md
+    section 9 entry 17's "Fourth revision"), never anything else."""
+
+    def __init__(self) -> None:
+        self.wheel_calls: list[tuple[float, float]] = []
+        self.move_calls: list[tuple[float, float]] = []
+
+    def move(self, x: float, y: float) -> None:
+        self.move_calls.append((x, y))
+
+    def wheel(self, delta_x: float, delta_y: float) -> None:
+        self.wheel_calls.append((delta_x, delta_y))
+
+
+class _FakeLocator:
+    """Stands in for a real Playwright/Patchright ``Page.locator(...)``
+    result -- docs/REQUIREMENTS.md section 9 entry 17's "Seventh
+    revision" only ever calls ``.hover()`` on it, once per scroll
+    attempt."""
+
+    def __init__(self, selector: str, hover_calls: list[str]) -> None:
+        self._selector = selector
+        self._hover_calls = hover_calls
+
+    def hover(self) -> None:
+        self._hover_calls.append(self._selector)
 
 
 class _FakePage:
@@ -24,6 +60,8 @@ class _FakePage:
         self._heights = iter(heights)
         self.evaluate_calls: list[str] = []
         self.wait_calls: list[int] = []
+        self.mouse = _FakeMouse()
+        self.hover_calls: list[str] = []
 
     def evaluate(self, script: str) -> int | None:
         self.evaluate_calls.append(script)
@@ -33,6 +71,9 @@ class _FakePage:
 
     def wait_for_timeout(self, ms: int) -> None:
         self.wait_calls.append(ms)
+
+    def locator(self, selector: str) -> _FakeLocator:
+        return _FakeLocator(selector, self.hover_calls)
 
 
 def test_stops_after_one_attempt_when_height_never_grows() -> None:
@@ -94,6 +135,115 @@ def test_zero_pause_ms_is_allowed() -> None:
     assert page.wait_calls == [0]
 
 
+# --- randomized_scroll_delta / randomized_pause_ms (docs/REQUIREMENTS.md
+# section 9 entry 17's "Fourth revision" -- the real, CI-confirmed fix
+# for the double-dispatch race: page.mouse.wheel() + randomized
+# delta/pause instead of the old scrollTo()+synthetic dispatchEvent
+# pair) --------------------------------------------------------------
+
+
+def test_randomized_scroll_delta_stays_within_the_given_range() -> None:
+    """Happy path: every draw lands inside [low, high], never outside
+    it either direction."""
+    rng = random.Random(0)
+
+    for _ in range(200):
+        delta = randomized_scroll_delta(rng, delta_range=(100.0, 200.0))
+        assert 100.0 <= delta <= 200.0
+
+
+def test_randomized_scroll_delta_varies_across_calls() -> None:
+    """The actual point of randomizing it at all: repeated calls (same
+    rng, same range) don't all return the same value -- unlike the old
+    fixed scrollTo(0, document.body.scrollHeight) jump."""
+    rng = random.Random(0)
+
+    deltas = [randomized_scroll_delta(rng) for _ in range(10)]
+
+    assert len(set(deltas)) > 1
+
+
+def test_randomized_scroll_delta_rejects_a_negative_low_end() -> None:
+    """Failure-adjacent case 1: a negative delta would scroll upward,
+    not a meaningful configuration for this function's own contract."""
+    with pytest.raises(ValueError, match="delta_range's low end must be >= 0"):
+        randomized_scroll_delta(random.Random(0), delta_range=(-1.0, 100.0))
+
+
+def test_randomized_scroll_delta_rejects_a_high_end_below_the_low_end() -> None:
+    """Failure-adjacent case 2: an inverted range is meaningless."""
+    with pytest.raises(ValueError, match="high end .* must be >= its low end"):
+        randomized_scroll_delta(random.Random(0), delta_range=(200.0, 100.0))
+
+
+def test_randomized_pause_ms_drifts_upward_across_a_session() -> None:
+    """The actual "fatigue"/attention-span model: holding jitter fixed
+    (a rng that always draws the same jitter multiplier every time --
+    the midpoint of the default range), the *mean* pause at the last
+    step of a session is measurably longer than at the first, not flat
+    the way a plain per-step-independent jitter alone would be."""
+
+    class _FixedJitterRng:
+        """A minimal stand-in exposing only the .uniform() rng.uniform
+        calls this function actually makes -- always returns the
+        midpoint of whatever range it's asked for, so only the fatigue
+        drift (not jitter noise) affects the result."""
+
+        def uniform(self, low: float, high: float) -> float:
+            return (low + high) / 2
+
+    rng = _FixedJitterRng()
+
+    first_step = randomized_pause_ms(1000, step_index=0, total_steps=10, rng=rng)  # type: ignore[arg-type]
+    last_step = randomized_pause_ms(1000, step_index=9, total_steps=10, rng=rng)  # type: ignore[arg-type]
+
+    assert last_step > first_step
+
+
+def test_randomized_pause_ms_skips_fatigue_drift_for_a_single_step_session() -> None:
+    """Failure-adjacent case: total_steps=1 has no "progress through the
+    session" to model -- the mean pause is just base_pause_ms, jitter
+    still applied on top (not a crash from a division by zero in the
+    progress calculation)."""
+    rng = random.Random(0)
+
+    result = randomized_pause_ms(1000, step_index=0, total_steps=1, rng=rng)
+
+    assert isinstance(result, int)
+    assert result >= 0
+
+
+def test_randomized_pause_ms_never_returns_a_negative_value() -> None:
+    """Happy path: even at the low end of the jitter range, the result
+    is clamped at zero, never negative (a negative wait is meaningless
+    to page.wait_for_timeout())."""
+    rng = random.Random(0)
+
+    for step in range(5):
+        result = randomized_pause_ms(0, step_index=step, total_steps=5, rng=rng)
+        assert result >= 0
+
+
+def test_randomized_pause_ms_rejects_a_negative_base_pause() -> None:
+    """Failure-adjacent case 1: a negative base pause is meaningless."""
+    with pytest.raises(ValueError, match="base_pause_ms must be >= 0"):
+        randomized_pause_ms(-1, step_index=0, total_steps=5, rng=random.Random(0))
+
+
+def test_randomized_pause_ms_rejects_non_positive_total_steps() -> None:
+    """Failure-adjacent case 2: zero/negative total_steps is meaningless
+    -- there's no session to model at all."""
+    with pytest.raises(ValueError, match="total_steps must be > 0"):
+        randomized_pause_ms(1000, step_index=0, total_steps=0, rng=random.Random(0))
+
+
+def test_randomized_pause_ms_rejects_a_step_index_outside_the_session() -> None:
+    """Failure case 3: a step_index at or beyond total_steps (or
+    negative) can't be a real position within the session."""
+    with pytest.raises(ValueError, match=r"step_index \(5\) must be in \[0, 5\)"):
+        randomized_pause_ms(1000, step_index=5, total_steps=5, rng=random.Random(0))
+
+
 # --- scroll_and_collect (docs/REQUIREMENTS.md section 9 entry 14) ------
 #
 # Revised after a real, CI-confirmed failure: the original version
@@ -121,21 +271,107 @@ def test_collect_fn_is_called_once_before_any_scroll_and_once_per_attempt() -> N
     assert calls == 4  # pre-scroll + 3 attempts, unconditionally
 
 
-def test_every_scroll_step_dispatches_a_synthetic_scroll_event() -> None:
-    """The real, separately-discovered fix this revision adds: a plain
-    ``scrollTo()`` alone doesn't reliably fire a 'scroll' event once a
-    virtualized list's rendered content is too short to need scrolling
-    -- so every attempt must also explicitly dispatch one, which
-    ``templates/feed.html``'s own loadMore() trigger listens for
-    regardless of whether the event is browser- or script-generated."""
+def test_every_scroll_step_uses_a_real_mouse_wheel_not_a_synthetic_dispatch() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Fourth revision" --
+    the actual, CI-confirmed fix for the double-dispatch race: no more
+    ``page.evaluate()``/synthetic ``dispatchEvent('scroll')`` at all --
+    every attempt drives a real ``page.mouse.wheel()`` input instead, no
+    exceptions."""
     page = _FakePage([1000, 1000, 1000])
 
-    scroll_and_collect(page, max_attempts=2, pause_ms=700, collect_fn=lambda: None)
+    scroll_and_collect(
+        page, max_attempts=2, pause_ms=700, collect_fn=lambda: None, rng=random.Random(0)
+    )
 
-    assert len(page.evaluate_calls) == 2
-    for script in page.evaluate_calls:
-        assert "dispatchEvent(new Event('scroll'))" in script
-        assert "scrollTo(0, document.body.scrollHeight)" in script
+    assert page.evaluate_calls == []  # no scrollTo()/dispatchEvent() left at all
+    assert len(page.mouse.wheel_calls) == 2
+    for delta_x, delta_y in page.mouse.wheel_calls:
+        assert delta_x == 0
+        assert delta_y > 0  # a real downward scroll every time
+
+
+def test_moves_the_mouse_into_the_viewport_once_before_any_wheel() -> None:
+    """A real, empirically-confirmed requirement (this module's own
+    docstring's "Fourth revision"): page.mouse.wheel() alone produced
+    zero real scroll in a headless Camoufox session without a prior
+    page.mouse.move() -- confirmed by hand, not assumed. Moved once,
+    before the first wheel -- not re-moved every attempt, since the
+    cursor stays wherever it's put."""
+    page = _FakePage([1000, 1000, 1000])
+
+    scroll_and_collect(
+        page, max_attempts=3, pause_ms=700, collect_fn=lambda: None, rng=random.Random(0)
+    )
+
+    assert len(page.mouse.move_calls) == 1
+    assert len(page.mouse.wheel_calls) == 3
+    assert page.hover_calls == []  # no container_selector given -- the fixed-move path only
+
+
+def test_container_selector_hovers_before_every_attempt_not_once() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision",
+    a real, user-requested follow-up to the "Fourth revision" fixed-move
+    above: when a container_selector is given, page.locator(...).hover()
+    replaces the fixed page.mouse.move(200, 200) entirely -- called once
+    per attempt (recomputing the container's own real position every
+    time), never the fixed-coordinate one-time move at all."""
+    page = _FakePage([1000, 1000, 1000, 1000])
+
+    scroll_and_collect(
+        page,
+        max_attempts=4,
+        pause_ms=700,
+        collect_fn=lambda: None,
+        rng=random.Random(0),
+        container_selector='[data-role="feed"]',
+    )
+
+    assert page.hover_calls == ['[data-role="feed"]'] * 4  # once per attempt, not once total
+    assert page.mouse.move_calls == []  # the fixed-coordinate fallback never runs
+    assert len(page.mouse.wheel_calls) == 4
+
+
+def test_container_selector_none_keeps_the_fixed_move_fallback() -> None:
+    """The other half of the same revision: container_selector's default
+    (None) must reproduce the exact prior behavior for every caller that
+    hasn't been updated to supply one -- same guarantee this module has
+    kept at every prior revision."""
+    page = _FakePage([1000, 1000])
+
+    scroll_and_collect(
+        page, max_attempts=1, pause_ms=700, collect_fn=lambda: None, container_selector=None
+    )
+
+    assert page.mouse.move_calls == [(200, 200)]
+    assert page.hover_calls == []
+
+
+def test_scroll_deltas_are_randomized_per_step_not_a_fixed_jump() -> None:
+    """The actual point of switching to page.mouse.wheel(): each step
+    gets its own randomized delta (docs/REQUIREMENTS.md section 9 entry
+    17), not the old identical scrollTo(0, document.body.scrollHeight)
+    jump repeated every time -- confirmed here by reproducing the exact
+    sequence via the same seeded rng and the pure function under test,
+    not by asserting mere inequality (which a flaky one-in-a-billion
+    coincidence could pass)."""
+    rng_for_page = random.Random(1234)
+    page = _FakePage([1000] * 10)
+
+    scroll_and_collect(
+        page, max_attempts=3, pause_ms=700, collect_fn=lambda: None, rng=rng_for_page
+    )
+
+    # Replays scroll_and_collect's own exact per-step draw order (delta,
+    # then randomized_pause_ms's own draw) against an identically-seeded
+    # rng -- not just the delta calls in isolation, which would desync
+    # from the real sequence the moment a pause draw happens in between.
+    rng_for_expected = random.Random(1234)
+    expected_deltas = []
+    for step in range(3):
+        expected_deltas.append(randomized_scroll_delta(rng_for_expected))
+        randomized_pause_ms(700, step, 3, rng_for_expected)
+    assert [delta_y for _, delta_y in page.mouse.wheel_calls] == expected_deltas
+    assert len(set(expected_deltas)) == 3  # genuinely different every step
 
 
 def test_respects_max_attempts_as_the_only_stopping_condition() -> None:
@@ -166,76 +402,146 @@ def test_collect_variant_rejects_negative_pause_ms() -> None:
         scroll_and_collect(_FakePage([1000]), max_attempts=8, pause_ms=-1, collect_fn=lambda: None)
 
 
-# --- settle_fn (docs/REQUIREMENTS.md section 9's "DOM Virtualization
-# Instability" investigation -- the real, CI-confirmed race the
-# "more generous constants" fix above only narrowed, never closed) -----
+# --- trigger_and_wait_fn (docs/REQUIREMENTS.md section 9 entry 17's
+# "Fifth revision" -- replaces settle_fn entirely: a callable given the
+# actual scroll trigger itself, so a caller can arm a real completion
+# listener *before* running it, e.g. page.expect_response(), instead of
+# settle_fn's old "wait after the fact" ordering, which was itself a
+# real, CI-confirmed race once a response is fast enough) --------------
 
 
-def test_settle_fn_defaults_to_none_and_is_never_required() -> None:
+def test_trigger_and_wait_fn_defaults_to_none_and_is_never_required() -> None:
     """Happy path (backward compatibility): every caller written before
-    this revision -- including every other test in this file -- never
-    passes settle_fn, and must keep behaving exactly as before."""
+    trigger_and_wait_fn existed -- including every other test in this
+    file -- never passes it, and must keep working with no separate
+    wait step at all: the trigger just runs directly. The pause itself
+    is randomized per step (docs/REQUIREMENTS.md section 9 entry 17's
+    "Fourth revision" -- no longer a fixed ``pause_ms`` repeated
+    identically), so this locks in the exact randomized_pause_ms
+    sequence for a fixed seed instead of a bare constant."""
     page = _FakePage([1000, 1000, 1000])
 
-    scroll_and_collect(page, max_attempts=2, pause_ms=700, collect_fn=lambda: None)
+    scroll_and_collect(
+        page, max_attempts=2, pause_ms=700, collect_fn=lambda: None, rng=random.Random(99)
+    )
 
-    assert page.wait_calls == [700, 700]
+    rng_for_expected = random.Random(99)
+    expected_waits = []
+    for step in range(2):
+        randomized_scroll_delta(rng_for_expected)
+        expected_waits.append(randomized_pause_ms(700, step, 2, rng_for_expected))
+    assert page.wait_calls == expected_waits
 
 
-def test_settle_fn_runs_once_per_scroll_attempt_before_the_pause() -> None:
-    """The actual fix: a real completion signal (settle_fn) is given a
-    chance to run *before* the fixed pause_ms sleep on every attempt --
-    not just once, not after the pause (which would defeat the point:
-    the pause would still race the same fetch settle_fn is meant to wait
-    for)."""
+def test_trigger_and_wait_fn_receives_the_real_trigger_and_runs_it() -> None:
+    """The actual point of this parameter: it is handed the real scroll
+    trigger (not called automatically) -- a caller that never invokes
+    it gets no scroll at all, and one that does invoke it drives the
+    exact same real page.mouse.wheel() this module always uses."""
     page = _FakePage([1000, 1000, 1000])
     order: list[str] = []
 
-    def settle() -> None:
-        order.append("settle")
+    def trigger_and_wait(trigger: Callable[[], None]) -> bool:
+        order.append("wait_armed")
+        trigger()
+        order.append("wait_resolved")
+        return True
 
     def collect() -> None:
         order.append("collect")
 
-    scroll_and_collect(page, max_attempts=2, pause_ms=700, collect_fn=collect, settle_fn=settle)
+    scroll_and_collect(
+        page, max_attempts=2, pause_ms=700, collect_fn=collect,
+        trigger_and_wait_fn=trigger_and_wait,
+    )
 
-    # pre-scroll collect, then (settle, collect) per attempt -- settle_fn
-    # is not called before the very first, pre-scroll read (there's no
-    # scroll step to settle yet).
-    assert order == ["collect", "settle", "collect", "settle", "collect"]
+    # pre-scroll collect, then (wait_armed, wait_resolved, collect) per
+    # attempt -- trigger_and_wait_fn is not called before the very
+    # first, pre-scroll read (there's no scroll step to wait on yet).
+    assert order == [
+        "collect", "wait_armed", "wait_resolved", "collect",
+        "wait_armed", "wait_resolved", "collect",
+    ]
+    assert len(page.mouse.wheel_calls) == 2
 
 
-def test_settle_fn_is_not_called_when_max_attempts_validation_fails() -> None:
-    """Failure-adjacent case: validation happens before any scroll step
-    (and thus before settle_fn could ever run) -- same ordering
-    guarantee scroll_to_load_lazy_content's own validation already has."""
+def test_trigger_and_wait_fn_returning_false_stops_the_loop_after_its_own_collect() -> None:
+    """The actual new behavior this revision adds: a real "no more
+    pages" signal (e.g. a page.expect_response() timeout, or a real
+    page_info.has_next_page: false) stops scroll_and_collect after the
+    *current* step, instead of burning through the remaining
+    max_attempts on guaranteed no-ops.
+
+    docs/REQUIREMENTS.md section 9 entry 17's "Sixth revision" -- a
+    real, confirmed bug this test used to lock in by mistake: the
+    current step's own pause+collect must still run even when
+    trigger_and_wait_fn returns False, since the response finally
+    reporting "no more pages" is often the same one whose own new
+    content this exact step's trigger just caused to load. Only the
+    *next* step is skipped."""
+    page = _FakePage([1000] * 10)
     calls = 0
 
-    def settle() -> None:
+    def collect() -> None:
         nonlocal calls
         calls += 1
+
+    def trigger_and_wait(trigger: Callable[[], None]) -> bool:
+        trigger()
+        return False  # every attempt reports "nothing more to load"
+
+    scroll_and_collect(
+        page, max_attempts=5, pause_ms=700, collect_fn=collect,
+        trigger_and_wait_fn=trigger_and_wait, rng=random.Random(7),
+    )
+
+    rng_for_expected = random.Random(7)
+    randomized_scroll_delta(rng_for_expected)
+    expected_wait = randomized_pause_ms(700, 0, 5, rng_for_expected)
+
+    assert calls == 2  # pre-scroll collect + this step's own -- not skipped
+    assert len(page.mouse.wheel_calls) == 1  # the trigger still ran once, before stopping
+    assert page.wait_calls == [expected_wait]  # this step's own (randomized) pause still ran too
+
+
+def test_trigger_and_wait_fn_is_not_called_when_max_attempts_validation_fails() -> None:
+    """Failure-adjacent case: validation happens before any scroll step
+    (and thus before trigger_and_wait_fn could ever run) -- same
+    ordering guarantee scroll_to_load_lazy_content's own validation
+    already has."""
+    calls = 0
+
+    def trigger_and_wait(trigger: Callable[[], None]) -> bool:
+        nonlocal calls
+        calls += 1
+        trigger()
+        return True
 
     with pytest.raises(ValueError, match="max_attempts must be > 0"):
         scroll_and_collect(
             _FakePage([1000]), max_attempts=0, pause_ms=700, collect_fn=lambda: None,
-            settle_fn=settle,
+            trigger_and_wait_fn=trigger_and_wait,
         )
 
     assert calls == 0
 
 
-def test_collect_html_snapshots_passes_settle_fn_through() -> None:
-    """collect_html_snapshots is a thin wrapper -- confirms settle_fn
-    reaches scroll_and_collect unchanged through it too, not just when
-    calling scroll_and_collect directly."""
+def test_collect_html_snapshots_passes_trigger_and_wait_fn_through() -> None:
+    """collect_html_snapshots is a thin wrapper -- confirms
+    trigger_and_wait_fn reaches scroll_and_collect unchanged through it
+    too, not just when calling scroll_and_collect directly."""
     page = _FakeContentPage(heights=[1000, 1000], html_per_read=["first", "second"])
     calls = 0
 
-    def settle() -> None:
+    def trigger_and_wait(trigger: Callable[[], None]) -> bool:
         nonlocal calls
         calls += 1
+        trigger()
+        return True
 
-    snapshots = collect_html_snapshots(page, max_attempts=1, pause_ms=700, settle_fn=settle)
+    snapshots = collect_html_snapshots(
+        page, max_attempts=1, pause_ms=700, trigger_and_wait_fn=trigger_and_wait
+    )
 
     assert snapshots == ["first", "second"]
     assert calls == 1
@@ -298,6 +604,21 @@ def test_respects_max_attempts_for_snapshots_too() -> None:
     snapshots = collect_html_snapshots(page, max_attempts=8, pause_ms=100)
 
     assert len(snapshots) == 9  # pre-scroll + all 8 attempts, every time
+
+
+def test_collect_html_snapshots_passes_container_selector_through() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision":
+    collect_html_snapshots is a thin wrapper -- confirms
+    container_selector reaches scroll_and_collect unchanged through it
+    too, not just when calling scroll_and_collect directly."""
+    page = _FakeContentPage(heights=[1000, 1000], html_per_read=["first", "second"])
+
+    collect_html_snapshots(
+        page, max_attempts=1, pause_ms=700, container_selector='[data-role="feed"]'
+    )
+
+    assert page.hover_calls == ['[data-role="feed"]']
+    assert page.mouse.move_calls == []
 
 
 def test_collect_html_snapshots_rejects_non_positive_max_attempts() -> None:

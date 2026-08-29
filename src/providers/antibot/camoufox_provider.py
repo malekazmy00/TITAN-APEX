@@ -79,9 +79,7 @@ from src.providers.antibot._live_dom import (
 )
 from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
 from src.providers.antibot._scroll import (
-    RequestCounter,
     collect_html_snapshots,
-    poll_until_idle,
     scroll_to_load_lazy_content,
 )
 from src.providers.antibot._tracing import (
@@ -130,6 +128,14 @@ DEFAULT_SCROLL_PAUSE_MS = 700
 # already-proven scroll_to_load_lazy_content caller's timing.
 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS = 10
 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
+# docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision": the same
+# selector _read_feed_attr's own JS strings already hardcode (as a
+# querySelector() string there, not reusable directly) -- named here as
+# a real Python constant so scroll_and_collect's container_selector
+# hover-per-attempt (see _scroll.py's own module docstring) targets
+# exactly the same element every other progressive-collection diagnostic
+# in this file already reads from.
+_FEED_CONTAINER_SELECTOR = '[data-role="feed"]'
 # docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
 # investigation: DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS above only narrowed
 # a real race, never closed it -- the same test family kept failing
@@ -147,6 +153,22 @@ DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
 # none, but _scroll.py stays engine/target-agnostic) can't hang a whole
 # crawl step.
 DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS = 5_000
+# docs/REQUIREMENTS.md section 9 entry 17's "Sixth revision": a single
+# page.expect_response() timeout is *not* a reliable "pagination has
+# ended" signal on its own -- confirmed for real that page.mouse.wheel()
+# itself intermittently fails to produce any scroll event at all, for
+# reasons unrelated to how much content is actually left (the earlier
+# "no scroll room" root cause is fixed separately, by
+# templates/feed.html's own virtualization-spacer). Tolerating a run of
+# consecutive timeouts before giving up (rather than the very first one)
+# keeps that resilience without ever burning through *all* of
+# DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS on a target that still has
+# real, unread pages left. Only used as a fallback when the real
+# `/api/feed` response body's own `page_info.has_next_page` -- the
+# authoritative signal, preferred whenever a response actually arrives
+# at all -- doesn't say either way (a timeout means no response arrived
+# to read it from in the first place).
+DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS = 3
 
 
 class _RawSolve(NamedTuple):
@@ -291,6 +313,7 @@ def _default_camoufox_solve(  # pragma: no cover
     from camoufox.sync_api import Camoufox
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import Response as PlaywrightResponse
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
     logger = get_logger(__name__)
     # docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
@@ -428,51 +451,109 @@ def _default_camoufox_solve(  # pragma: no cover
                     # the end -- see this function's own docstring.
                     items: list[dict[str, Any]] | None = None
                     html_snapshots: list[str] | None = None
-                    network_idle_timeouts = 0
+                    progressive_scroll_ended_early: bool | None = None
                     if progressive_extraction:
                         # docs/REQUIREMENTS.md section 9's "DOM
-                        # Virtualization Instability" investigation,
-                        # second attempt: the first fix here used
-                        # page.wait_for_load_state("networkidle"), and a
-                        # real CI run (32973393111) showed it made *no*
-                        # measurable difference -- same exact shortfall
-                        # (20 of 25) as before it existed. Root cause,
-                        # confirmed against Playwright's own load-state
-                        # tracking: "networkidle" is a per-*navigation*
-                        # lifecycle flag -- once reached (which happens
-                        # almost immediately after the very first,
-                        # automatic on-load batch here), every later call
-                        # to wait_for_load_state("networkidle") resolves
-                        # *immediately* without waiting for anything,
-                        # since no new navigation ever happens between
-                        # scroll steps on this page (it's all in-page
-                        # AJAX). It is simply the wrong tool for
-                        # resynchronizing against a *repeated* same-page
-                        # fetch. This tracks in-flight requests directly
-                        # instead (page.on("request"/"requestfinished"/
-                        # "requestfailed")), maintained continuously
-                        # across the whole progressive collection (not
-                        # reconstructed per step, so it can't miss a
-                        # request that starts and finishes between two
-                        # separate calls) -- a real, live "is anything
-                        # actually in flight right now" signal, correctly
-                        # re-armed on every check. RequestCounter and
-                        # poll_until_idle (_scroll.py) are pure,
-                        # unit-tested functions -- only this listener
-                        # wiring, which needs a real Page, lives here
-                        # untested (same "extract what can be tested"
-                        # principle entry 14 already established for this
-                        # module).
-                        request_counter = RequestCounter()
+                        # Virtualization Instability" investigation --
+                        # **Fifth revision (this version), replacing the
+                        # network-idle-polling approach above entirely,
+                        # not just narrowing it:** the "Second"/"Third"
+                        # revisions (page.wait_for_load_state, then
+                        # RequestCounter/poll_until_idle) both shared one
+                        # real, root-caused flaw: they *register the
+                        # wait after the scroll trigger has already run*
+                        # (settle_fn was called *following*
+                        # _SCROLL_AND_DISPATCH_SCRIPT/page.mouse.wheel(),
+                        # never wrapping it). A source documenting
+                        # Playwright's own "trigger-and-wait" pattern for
+                        # exactly this shape of problem (testing
+                        # infinite-scroll/lazy-loading) is explicit that
+                        # this ordering is itself a race whenever the
+                        # response is fast: nothing guarantees the
+                        # listener is armed before the response the
+                        # trigger caused already arrived. Confirmed for
+                        # real (this entry's own "Fourth revision" local
+                        # investigation): a real page.mouse.wheel() call
+                        # can itself produce more than one genuine
+                        # scroll-triggered loadMore(), each racing the
+                        # exact same way against a settle_fn registered
+                        # only afterward. ``page.expect_response()`` is
+                        # Playwright/Patchright's own built-in fix for
+                        # this: a context manager that arms its listener
+                        # *before* the code inside its ``with`` block
+                        # runs, so the trigger and the wait for its own
+                        # response can never race, by construction --
+                        # matched here on the real ``/api/feed`` endpoint
+                        # templates/feed.html's own loadMore() calls. A
+                        # ``TimeoutError`` (no matching response within
+                        # ``DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS``)
+                        # is a real, direct signal that no new request
+                        # was ever sent for this scroll step -- feed.html's
+                        # own ``hasNext`` has already gone ``false`` --
+                        # not a guess, so ``scroll_and_collect`` (_scroll.py)
+                        # stops early rather than wasting the remaining
+                        # ``max_attempts`` on guaranteed no-ops.
+                        # RequestCounter/poll_until_idle (_scroll.py) stay
+                        # in that module as independently-tested, still
+                        # potentially reusable utilities -- just no
+                        # longer wired into this progressive-collection
+                        # loop, which no longer needs (or should trust)
+                        # a general "is anything happening on the
+                        # network" signal instead of the specific
+                        # response its own trigger actually caused.
+                        progressive_scroll_ended_early = False
+                        consecutive_scroll_stalls = 0
+                        # docs/REQUIREMENTS.md section 9 entry 17, a
+                        # real gap a user review found (not a temporary
+                        # investigation artifact -- always on, like
+                        # load_more_calls/load_more_dropped, never
+                        # gated behind TITAN_DEBUG_LOADING_RACE): the
+                        # only verification this whole progressive path
+                        # ever had was the *aggregate* final item
+                        # count -- mathematically sufficient to catch
+                        # any real loss (every post_id is globally
+                        # unique per crawl, so a lost item can never
+                        # hide behind a duplicate), but gives zero
+                        # visibility into *which* page's window was the
+                        # one actually lost. Every real ``/api/feed``
+                        # response's own ``edges`` already names exactly
+                        # which post_ids that page claims to have sent
+                        # -- accumulated here as the crawl's own
+                        # ground truth, independent of whatever
+                        # collect_fn() later manages to read back from
+                        # the DOM/HTML.
+                        progressive_page_post_ids: list[str] = []
+                        # TEMPORARY DIAGNOSTIC, TITAN_DEBUG_LOADING_RACE
+                        # -gated (docs/REQUIREMENTS.md section 9 entry 17,
+                        # a user review's direct follow-up: *why* does
+                        # page.mouse.wheel() sometimes produce zero real
+                        # scroll for 11-17s at a time, when it works fine
+                        # the rest of the time?). See
+                        # _pre_trigger_container_diagnostic's own
+                        # docstring below for what each entry means.
+                        progressive_container_diagnostic_log: list[str] = []
+                        # TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md
+                        # section 9 entry 17, direct-evidence review of
+                        # the "Sixth revision" fix's own remaining
+                        # failures -- explicit user request: "مش بس
+                        # العدد، إيه اللي حصل تحديدًا"). One entry per
+                        # trigger_and_wait_fn call, in order -- answers
+                        # with certainty (not inferred from the final
+                        # item count alone) whether a given attempt
+                        # timed out, or got a real response and exactly
+                        # what has_next_page said. TITAN_DEBUG_LOADING_RACE
+                        # -gated, same as every other exploratory
+                        # diagnostic in this investigation.
+                        progressive_scroll_attempt_log: list[str] = []
 
                         def _read_feed_attr(attr: str) -> str | None:
                             """Reads one of templates/feed.html's own
                             `container` diagnostic attributes
-                            (``data-load-more-calls``/``data-load-more-dropped``/
-                            ``data-loading-flag``) -- a DOM attribute,
-                            not a ``window.*`` property. **Real, CI-confirmed
-                            fix (docs/REQUIREMENTS.md section 9 entry
-                            17's `load_more_calls`/`load_more_dropped`
+                            (``data-load-more-calls``/``data-load-more-dropped``)
+                            -- a DOM attribute, not a ``window.*``
+                            property. **Real, CI-confirmed fix
+                            (docs/REQUIREMENTS.md section 9 entry 17's
+                            `load_more_calls`/`load_more_dropped`
                             mystery):** these were originally plain
                             ``window.__loadMoreCalls``/``__loadMoreDropped``
                             expando properties -- confirmed by hand
@@ -508,114 +589,217 @@ def _default_camoufox_solve(  # pragma: no cover
                                 f"?.getAttribute('{attr}') ?? null"
                             )
 
-                        # TEMPORARY DIAGNOSTIC (docs/REQUIREMENTS.md
-                        # section 9 entry 17, unconfirmed hypothesis
-                        # review requested before any third fix attempt):
-                        # off by default (TITAN_DEBUG_LOADING_RACE unset
-                        # -- zero behavior/timing change for every
-                        # existing caller, same pattern as
-                        # TITAN_TRACE_DIR/_tracing.py). When set, samples
-                        # templates/feed.html's own ``data-loading-flag``
-                        # attribute (a direct mirror of the page's real
-                        # `loading` closure variable, added purely for
-                        # this investigation) at the *exact instant*
-                        # poll_until_idle reports the network settled --
-                        # answering with direct evidence, not another
-                        # guess, whether "network idle" (what
-                        # RequestCounter/poll_until_idle track) and "the
-                        # page's own loadMore().then() callback has
-                        # actually finished and reset `loading`" are
-                        # really two different completion signals that
-                        # can be observed apart. ``debug_loading_race``
-                        # itself is computed once, right after
-                        # ``browser.new_page()`` above (needed there
-                        # too, to gate ``page.expose_function()`` before
-                        # any navigation) -- reused here unchanged.
-                        loading_flag_samples: list[bool] = []
-                        # TEMPORARY DIAGNOSTIC, same review: samples
-                        # data-load-more-calls itself at every settle_fn
-                        # call (not just once at the very end) -- direct
-                        # evidence for whether it is ever nonzero *during*
-                        # the run (and something later resets it back to
-                        # 0 before the final read) or whether it never
-                        # leaves 0 at all, which would point at the
-                        # counter/increment itself, not at a late reset.
-                        load_more_calls_samples: list[int] = []
-                        # TEMPORARY DIAGNOSTIC, follow-up to the same
-                        # entry-17 review: load_more_calls/load_more_dropped
-                        # reading 0/0 on *every* local repro run so far
-                        # (including two clean 25/25 passes) is itself
-                        # unexplained -- loadMore()'s own automatic
-                        # first call increments __loadMoreCalls
-                        # synchronously, before any fetch, so it should
-                        # never read back 0 if the same document that ran
-                        # it is still the one page.evaluate() reads from
-                        # at the end. Counts real main-frame navigations
-                        # during the progressive-collection window itself
-                        # -- direct evidence for/against a hidden
-                        # mid-collection reset (e.g. a second,
-                        # later-than-expected Anubis redirect) silently
-                        # replacing the document (and therefore its
-                        # window state) partway through, which the
-                        # existing one-navigation assumption baked into
-                        # this whole block never checks for.
-                        main_frame_navigations_during_progressive = 0
+                        def _pre_trigger_container_diagnostic() -> str:
+                            """docs/REQUIREMENTS.md section 9 entry 17,
+                            a user review's direct follow-up question:
+                            is ``page.mouse.wheel()``'s intermittent
+                            multi-second silence actually a *container*
+                            problem -- detached from the DOM, moved out
+                            from under the fixed ``(200, 200)`` cursor
+                            position ``scroll_and_collect``'s own
+                            one-time ``page.mouse.move()`` leaves it at
+                            for the *entire* crawl (never re-issued per
+                            step), or momentarily replaced by something
+                            else during a re-render -- rather than
+                            guessed. Deliberately reads, never calls
+                            ``.hover()``: a real ``.hover()`` call moves
+                            the actual (virtual) cursor, which would
+                            itself change the very thing under test;
+                            ``document.elementFromPoint(200, 200)``
+                            answers the identical "is the feed container
+                            actually what's under the fixed cursor
+                            position right now" question with zero side
+                            effect. Called once per scroll attempt,
+                            immediately *before* that attempt's own
+                            trigger -- so a run of consecutive timeouts
+                            can be read back against what the container's
+                            own state looked like at the start of each
+                            one, not just at the end.
 
-                        def _count_main_frame_navigation(frame: Any) -> None:
-                            nonlocal main_frame_navigations_during_progressive
-                            if debug_loading_race and frame == page.main_frame:
-                                main_frame_navigations_during_progressive += 1
+                            Never allowed to fail the actual crawl --
+                            any exception here (a closed page, a
+                            mid-navigation frame) is caught and encoded
+                            into the string itself instead of raised.
+                            """
+                            try:
+                                container = page.locator(_FEED_CONTAINER_SELECTOR).first
+                                count = container.count()
+                                box = container.bounding_box() if count > 0 else None
+                                element_at_cursor = page.evaluate(
+                                    "(() => { const el = document.elementFromPoint(200, 200);"
+                                    " return el ? (el.getAttribute('data-role') || el.tagName)"
+                                    " : null; })()"
+                                )
+                                elapsed_ms = page.evaluate("performance.now()")
+                                return (
+                                    f"count={count}:box={box}:at_cursor={element_at_cursor}:"
+                                    f"t={elapsed_ms:.0f}"
+                                )
+                            except (PlaywrightError, PlaywrightTimeoutError) as exc:
+                                return f"diagnostic_failed:{exc}"
 
-                        if debug_loading_race:
-                            page.on("framenavigated", _count_main_frame_navigation)
+                        def _trigger_and_wait_for_feed_response(
+                            trigger_fn: Callable[[], None],
+                        ) -> bool:
+                            """The actual "trigger-and-wait" pattern
+                            (this block's own comment above has the
+                            full reasoning): arms the response listener
+                            *before* calling ``trigger_fn`` (the real
+                            ``page.mouse.wheel()`` scroll -- built and
+                            passed in by ``_scroll.py``'s
+                            ``scroll_and_collect``, which owns the
+                            engine-agnostic scroll mechanics and stays
+                            unaware of this URL-matching, target-specific
+                            wait).
 
-                        def _wait_for_network_idle(timeout_ms: int) -> None:
-                            nonlocal network_idle_timeouts
-                            settled = poll_until_idle(
-                                request_counter.is_idle, page.wait_for_timeout, timeout_ms
-                            )
-                            if not settled:
-                                network_idle_timeouts += 1
-                            elif debug_loading_race:
-                                loading_flag_samples.append(
-                                    _read_feed_attr("data-loading-flag") == "true"
-                                )
-                                load_more_calls_samples.append(
-                                    int(_read_feed_attr("data-load-more-calls") or 0)
-                                )
+                            **Sixth revision (docs/REQUIREMENTS.md
+                            section 9 entry 17, a real, CI-confirmed
+                            correction to the "Fifth revision" above --
+                            not erased, appended):** stopping
+                            unconditionally on the *first* timeout was
+                            itself wrong, confirmed by real local
+                            evidence -- ``page.mouse.wheel()`` sometimes
+                            produces no scroll event at all for reasons
+                            unrelated to how much real content is left,
+                            so a lone timeout is not proof pagination
+                            has ended. Two real signals now, preferred
+                            in this order:
 
-                        page.on("request", request_counter.on_start)
-                        page.on("requestfinished", request_counter.on_settle)
-                        page.on("requestfailed", request_counter.on_settle)
-                        try:
-                            if extraction_selectors is not None:
-                                items = collect_live_dom_items_progressively(
-                                    page,
-                                    extraction_selectors.item,
-                                    extraction_selectors.fields,
-                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                                    settle_fn=lambda: _wait_for_network_idle(
-                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                                    ),
-                                )
-                            else:
-                                html_snapshots = collect_html_snapshots(
-                                    page,
-                                    DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
-                                    DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
-                                    settle_fn=lambda: _wait_for_network_idle(
-                                        DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                                    ),
-                                )
-                        finally:
-                            page.remove_listener("request", request_counter.on_start)
-                            page.remove_listener("requestfinished", request_counter.on_settle)
-                            page.remove_listener("requestfailed", request_counter.on_settle)
+                            1. The actual ``/api/feed`` response body's
+                               own ``page_info.has_next_page`` --
+                               ``templates/feed.html``'s own
+                               authoritative source of truth for
+                               whether more pages exist, not an
+                               inference from timing at all. ``False``
+                               here means real, confirmed end of
+                               pagination -- stop immediately.
+                            2. Only when no response arrives to read
+                               that field from at all (a genuine
+                               timeout): tolerate up to
+                               ``DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS``
+                               *consecutive* ones (a real, believable
+                               "this specific wheel() attempt just
+                               didn't land" retry budget) before giving
+                               up -- never on the very first one alone.
+                            """
+                            nonlocal progressive_scroll_ended_early, consecutive_scroll_stalls
                             if debug_loading_race:
-                                page.remove_listener(
-                                    "framenavigated", _count_main_frame_navigation
-                                )
+                                pre_trigger_diagnostic = _pre_trigger_container_diagnostic()
+                            try:
+                                with page.expect_response(
+                                    lambda response: "/api/feed" in response.url
+                                    and response.status == 200,
+                                    timeout=DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS,
+                                ) as response_info:
+                                    trigger_fn()
+                                consecutive_scroll_stalls = 0
+                                # `None` (not just False) whenever the body
+                                # isn't real JSON, or lacks this field --
+                                # e.g. a page that isn't this one at all --
+                                # matching this file's own established
+                                # "harmless on any other page" convention.
+                                # Never allowed to fail the actual crawl.
+                                has_next_page = None
+                                page_post_ids: list[str] = []
+                                try:
+                                    body = response_info.value.json()
+                                    has_next_page = body.get("page_info", {}).get(
+                                        "has_next_page"
+                                    )
+                                    # docs/REQUIREMENTS.md section 9 entry 17,
+                                    # answering a user review's Q3: the raw
+                                    # ground truth for exactly which
+                                    # post_ids this one page's response
+                                    # claims to have sent -- deliberately
+                                    # *not* diffed against anything here (a
+                                    # naive "collected this step == this
+                                    # page's own edges count" check would be
+                                    # wrong-by-design: this same file's own
+                                    # test, test_mock_target_dom_
+                                    # virtualization_progressive_live.py,
+                                    # already derived and confirmed that
+                                    # only the *last* window_size of each
+                                    # page's edges ever survive eviction
+                                    # long enough for any read to catch --
+                                    # the rest are correctly gone before
+                                    # collect_fn() next runs, not lost by a
+                                    # bug). What "should" survive depends on
+                                    # test-target-specific trim/window_size
+                                    # math this generic provider has no
+                                    # business knowing -- so this stays raw
+                                    # evidence, aggregated below into a
+                                    # count only, for whichever caller (a
+                                    # test, a human reading this log line)
+                                    # does have that domain knowledge.
+                                    page_post_ids = [
+                                        edge["post"]["id"]
+                                        for edge in body.get("edges", [])
+                                        if isinstance(edge, dict)
+                                        and isinstance(edge.get("post"), dict)
+                                        and "id" in edge["post"]
+                                    ]
+                                except (ValueError, AttributeError, TypeError, KeyError) as exc:
+                                    # Not this page's own JSON shape at all
+                                    # (invalid/absent JSON body, or a body
+                                    # that parsed but isn't the expected
+                                    # dict-of-a-dict) -- logged, not
+                                    # silently swallowed, but genuinely
+                                    # harmless: `has_next_page` staying
+                                    # `None` just means the caller falls
+                                    # through to the consecutive-stalls
+                                    # fallback below instead, same as any
+                                    # page that isn't this one.
+                                    logger.debug(
+                                        "camoufox_provider.progressive_response_not_feed_json",
+                                        extra={"url": url, "reason": str(exc)},
+                                    )
+                                progressive_page_post_ids.extend(page_post_ids)
+                                if debug_loading_race:
+                                    progressive_scroll_attempt_log.append(
+                                        f"success:has_next={has_next_page}:edges={len(page_post_ids)}"
+                                    )
+                                    progressive_container_diagnostic_log.append(
+                                        f"pre={pre_trigger_diagnostic}:outcome=success"
+                                    )
+                                if has_next_page is False:
+                                    progressive_scroll_ended_early = True
+                                    return False
+                                return True
+                            except PlaywrightTimeoutError:
+                                consecutive_scroll_stalls += 1
+                                if debug_loading_race:
+                                    progressive_container_diagnostic_log.append(
+                                        f"pre={pre_trigger_diagnostic}:outcome=timeout"
+                                    )
+                                    progressive_scroll_attempt_log.append(
+                                        f"timeout:consecutive={consecutive_scroll_stalls}"
+                                    )
+                                if (
+                                    consecutive_scroll_stalls
+                                    >= DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS
+                                ):
+                                    progressive_scroll_ended_early = True
+                                    return False
+                                return True
+
+                        if extraction_selectors is not None:
+                            items = collect_live_dom_items_progressively(
+                                page,
+                                extraction_selectors.item,
+                                extraction_selectors.fields,
+                                DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
+                                container_selector=_FEED_CONTAINER_SELECTOR,
+                            )
+                        else:
+                            html_snapshots = collect_html_snapshots(
+                                page,
+                                DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
+                                DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
+                                trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
+                                container_selector=_FEED_CONTAINER_SELECTOR,
+                            )
                     else:
                         scroll_to_load_lazy_content(
                             page, DEFAULT_MAX_SCROLL_ATTEMPTS, DEFAULT_SCROLL_PAUSE_MS
@@ -633,11 +817,10 @@ def _default_camoufox_solve(  # pragma: no cover
                     # properties, after a real, CI-confirmed bug in the
                     # original window-property version) directly answer
                     # "did the page's own loadMore() guard actually drop
-                    # a call", something network_idle_timeouts above
-                    # cannot -- confirmed for real (CI run 32997246624)
-                    # that a network-side wait succeeding on every poll
-                    # does *not* rule out a page-side drop. Harmless
-                    # (reads back 0/0) on any page that isn't this one.
+                    # a call" -- still real, useful evidence regardless
+                    # of which scroll/wait mechanism drives collection.
+                    # Harmless (reads back 0/0) on any page that isn't
+                    # this one.
                     load_more_calls = (
                         int(_read_feed_attr("data-load-more-calls") or 0)
                         if progressive_extraction
@@ -648,25 +831,24 @@ def _default_camoufox_solve(  # pragma: no cover
                         if progressive_extraction
                         else None
                     )
-                    # TEMPORARY DIAGNOSTIC, same entry 17 review as above:
-                    # `None` (not logged as a list) unless
-                    # TITAN_DEBUG_LOADING_RACE was set for this solve --
-                    # avoids a meaningless always-empty field on every
-                    # normal run.
-                    loading_flag_at_network_idle = (
-                        loading_flag_samples
-                        if progressive_extraction and debug_loading_race
-                        else None
+                    # docs/REQUIREMENTS.md section 9 entry 17, answering a
+                    # user review's Q3 (see progressive_page_post_ids's own
+                    # definition above for why this is a count, not a
+                    # "missing ids" diff): the API's own authoritative
+                    # tally of every post_id it ever confirmed sending
+                    # across every successful trigger-and-wait call this
+                    # solve made. `_unique` catches a genuinely different
+                    # class of bug than anything else logged here -- the
+                    # API itself resending an id it already sent on an
+                    # earlier page (a content_generator.py/mock-target bug,
+                    # not a scraper bug, were it ever to happen; content_
+                    # generator.py's own `{seed}-post-{index}` scheme is
+                    # global-index-keyed specifically to rule this out).
+                    progressive_api_reported_post_id_count = (
+                        len(progressive_page_post_ids) if progressive_extraction else None
                     )
-                    main_frame_navigations_during_progressive_result = (
-                        main_frame_navigations_during_progressive
-                        if progressive_extraction and debug_loading_race
-                        else None
-                    )
-                    load_more_calls_samples_result = (
-                        load_more_calls_samples
-                        if progressive_extraction and debug_loading_race
-                        else None
+                    progressive_api_reported_post_id_count_unique = (
+                        len(set(progressive_page_post_ids)) if progressive_extraction else None
                     )
                     # TEMPORARY DIAGNOSTIC (entry 17's "expand the
                     # diagnostic tool" phase -- corrected approach, see
@@ -770,36 +952,55 @@ def _default_camoufox_solve(  # pragma: no cover
                             ),
                             "login_flow_used": login_flow is not None,
                             # docs/REQUIREMENTS.md section 9's "DOM
-                            # Virtualization Instability" investigation:
-                            # how many of this solve's settle_fn calls
-                            # hit DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS
-                            # without ever seeing the network go quiet --
-                            # 0 when progressive_extraction is False (the
-                            # settle_fn/counter never runs at all). Real
-                            # diagnostic evidence for whether this
-                            # mechanism is doing anything, instead of
-                            # having to guess from the item count alone
-                            # (the mistake the first, wait_for_load_state
-                            # -based attempt at this fix made).
-                            "network_idle_timeouts": network_idle_timeouts,
+                            # Virtualization Instability" investigation,
+                            # "Fifth revision": whether scroll_and_collect
+                            # stopped before exhausting
+                            # DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS
+                            # because a trigger-and-wait call timed out
+                            # (no matching /api/feed response -- a real
+                            # signal pagination had already ended, not a
+                            # guess). `None` when progressive_extraction
+                            # is False (the mechanism never runs at all).
+                            "progressive_scroll_ended_early": (
+                                progressive_scroll_ended_early if progressive_extraction else None
+                            ),
+                            # TEMPORARY DIAGNOSTIC, TITAN_DEBUG_LOADING_RACE
+                            # -gated (see this block's own definition
+                            # above): the exact outcome of every single
+                            # trigger_and_wait_fn call, in order -- direct
+                            # evidence for which of "has_next_page came
+                            # back false early", "genuine repeated
+                            # timeouts", or neither (calls=5 but still
+                            # short -- a different mechanism entirely)
+                            # actually happened, instead of inferring it
+                            # from the final item count alone.
+                            "progressive_scroll_attempt_log": (
+                                progressive_scroll_attempt_log
+                                if progressive_extraction and debug_loading_race
+                                else None
+                            ),
+                            # TEMPORARY DIAGNOSTIC, TITAN_DEBUG_LOADING_RACE
+                            # -gated: the feed container's own attachment
+                            # state, bounding box, and whatever DOM
+                            # element is actually under the fixed
+                            # (200, 200) cursor position, read right
+                            # before *every* scroll attempt -- see
+                            # _pre_trigger_container_diagnostic's own
+                            # docstring above for the full reasoning.
+                            "progressive_container_diagnostic_log": (
+                                progressive_container_diagnostic_log
+                                if progressive_extraction and debug_loading_race
+                                else None
+                            ),
                             "load_more_calls": load_more_calls,
                             "load_more_dropped": load_more_dropped,
-                            "apparmor_denials_during_solve": apparmor_denials_during_solve,
-                            # TEMPORARY DIAGNOSTIC (entry 17 hypothesis
-                            # review, TITAN_DEBUG_LOADING_RACE-gated):
-                            # `data-loading-flag`'s value sampled
-                            # at every settle_fn call that reported
-                            # network-idle, in order. Any `true` in this
-                            # list is direct, in-the-act evidence that
-                            # "network idle" and "loadMore()'s `loading`
-                            # flag actually reset" are observably
-                            # different instants -- not inferred from the
-                            # final item count.
-                            "loading_flag_at_network_idle": loading_flag_at_network_idle,
-                            "main_frame_navigations_during_progressive": (
-                                main_frame_navigations_during_progressive_result
+                            "progressive_api_reported_post_id_count": (
+                                progressive_api_reported_post_id_count
                             ),
-                            "load_more_calls_samples": load_more_calls_samples_result,
+                            "progressive_api_reported_post_id_count_unique": (
+                                progressive_api_reported_post_id_count_unique
+                            ),
+                            "apparmor_denials_during_solve": apparmor_denials_during_solve,
                             # TEMPORARY DIAGNOSTIC (entry 17's "expand the
                             # diagnostic tool" phase): a summary, not the
                             # full timeline (which can be long) -- the

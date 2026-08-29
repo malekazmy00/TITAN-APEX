@@ -8,6 +8,8 @@ without ever launching a real browser.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from src.providers.antibot._live_dom import (
@@ -203,17 +205,56 @@ class _FakeVirtualizedPage:
     def __init__(self, row_sets_per_read: list[list[_FakeElement]]) -> None:
         self._row_sets = iter(row_sets_per_read)
         self._current_rows: list[_FakeElement] = []
+        # docs/REQUIREMENTS.md section 9 entry 17's "Fourth revision":
+        # scroll_and_collect drives scrolling via page.mouse.wheel()
+        # now, not page.evaluate() -- this fake only needs to accept the
+        # call, same "nothing to simulate" shape as the wait_for_timeout
+        # stub below.
+        self.mouse = _FakeMouse()
+        # docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision":
+        # scroll_and_collect's own container_selector hover, a *different*
+        # .locator() call than the item-row one above (a different
+        # selector value) -- tracked separately since it's a distinct
+        # concern (cursor positioning, not item extraction).
+        self.hover_calls: list[str] = []
 
-    def locator(self, selector: str) -> _FakeLocator:
-        assert selector == '[data-role="post"]'
-        self._current_rows = next(self._row_sets)
-        return _FakeLocator(self._current_rows)
+    def locator(self, selector: str) -> _FakeLocator | _FakeContainerLocator:
+        if selector == '[data-role="post"]':
+            self._current_rows = next(self._row_sets)
+            return _FakeLocator(self._current_rows)
+        return _FakeContainerLocator(selector, self.hover_calls)
 
     def evaluate(self, script: str) -> None:
         return None
 
     def wait_for_timeout(self, ms: int) -> None:
         pass
+
+
+class _FakeMouse:
+    """Stands in for a real Page.mouse -- scroll_and_collect only ever
+    calls .move() (once) and .wheel() (per attempt) on it (see
+    _FakeVirtualizedPage's own docstring)."""
+
+    def move(self, x: float, y: float) -> None:
+        pass
+
+    def wheel(self, delta_x: float, delta_y: float) -> None:
+        pass
+
+
+class _FakeContainerLocator:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision":
+    stands in for the real Playwright/Patchright Locator
+    container_selector resolves to -- scroll_and_collect only ever calls
+    .hover() on it, once per scroll attempt."""
+
+    def __init__(self, selector: str, hover_calls: list[str]) -> None:
+        self._selector = selector
+        self._hover_calls = hover_calls
+
+    def hover(self) -> None:
+        self._hover_calls.append(self._selector)
 
 
 def test_progressive_collection_keeps_merging_across_every_attempt_not_just_the_first() -> None:
@@ -291,11 +332,11 @@ def test_progressive_collection_ignores_items_with_no_id_field_value() -> None:
     assert items == []
 
 
-def test_progressive_collection_passes_settle_fn_through_to_scroll_and_collect() -> None:
-    """docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
-    investigation: this module's own settle_fn parameter is a thin
-    passthrough to scroll_and_collect's -- confirms it actually reaches
-    it, invoked once per scroll attempt, not swallowed along the way."""
+def test_progressive_collection_passes_trigger_and_wait_fn_through_to_scroll_and_collect() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Fifth revision": this
+    module's own trigger_and_wait_fn parameter is a thin passthrough to
+    scroll_and_collect's -- confirms it actually reaches it, invoked
+    once per scroll attempt, not swallowed along the way."""
     page = _FakeVirtualizedPage(
         row_sets_per_read=[
             [_post_row("p1", "alice", "hi")],
@@ -305,9 +346,11 @@ def test_progressive_collection_passes_settle_fn_through_to_scroll_and_collect()
     )
     calls = 0
 
-    def settle() -> None:
+    def trigger_and_wait(trigger: Callable[[], None]) -> bool:
         nonlocal calls
         calls += 1
+        trigger()
+        return True
 
     items = collect_live_dom_items_progressively(
         page,
@@ -315,17 +358,17 @@ def test_progressive_collection_passes_settle_fn_through_to_scroll_and_collect()
         FIELD_SELECTORS,
         max_attempts=2,
         pause_ms=700,
-        settle_fn=settle,
+        trigger_and_wait_fn=trigger_and_wait,
     )
 
     assert calls == 2  # once per scroll attempt, not the pre-scroll read
     assert {item["post_id"] for item in items} == {"p1", "p2", "p3"}
 
 
-def test_progressive_collection_defaults_settle_fn_to_none() -> None:
+def test_progressive_collection_defaults_trigger_and_wait_fn_to_none() -> None:
     """Happy path (backward compatibility): every call site written
-    before this revision never passes settle_fn -- must keep working
-    unchanged."""
+    before this revision never passes trigger_and_wait_fn -- must keep
+    working unchanged."""
     page = _FakeVirtualizedPage(
         row_sets_per_read=[[_post_row("p1", "alice", "hi")], [_post_row("p2", "bob", "yo")]],
     )
@@ -335,6 +378,28 @@ def test_progressive_collection_defaults_settle_fn_to_none() -> None:
     )
 
     assert {item["post_id"] for item in items} == {"p1", "p2"}
+
+
+def test_progressive_collection_passes_container_selector_through_to_scroll_and_collect() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision": this
+    module's own container_selector parameter is a thin passthrough to
+    scroll_and_collect's -- confirms it actually reaches it, hovered once
+    per scroll attempt (not the fixed page.mouse.move(200, 200) at all)."""
+    page = _FakeVirtualizedPage(
+        row_sets_per_read=[[_post_row("p1", "alice", "hi")], [_post_row("p2", "bob", "yo")]],
+    )
+
+    items = collect_live_dom_items_progressively(
+        page,
+        '[data-role="post"]',
+        FIELD_SELECTORS,
+        max_attempts=1,
+        pause_ms=700,
+        container_selector='[data-role="feed"]',
+    )
+
+    assert {item["post_id"] for item in items} == {"p1", "p2"}
+    assert page.hover_calls == ['[data-role="feed"]']
 
 
 def test_progressive_collection_uses_a_custom_id_field_when_given() -> None:
