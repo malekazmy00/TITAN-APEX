@@ -3608,6 +3608,163 @@ guard بتاع `loadMore()` عمل الوظيفة اللي مصمم لها با�
 مراقبة الـworkflow) — منتظر توجيه المستخدم صراحة على القيم النهائية
 (`10`/`3` زي ما هي، أو `20`/`6` كشبكة أمان إضافية) قبل الـpush.
 
+### أول تأكيد CI حقيقي (push 1، run 33275376646) — نجاح جزئي حقيقي + اكتشاف رجعة (regression) جديدة
+
+اتعمل الـpush الأول (4 commits منفصلة: spacer fix، الإصلاحات
+الأساسية + hover، فحص post_id الدقيق، التوثيق). **النتيجة الحقيقية،
+اتفتحت اللوجات فعليًا مش بس اتشاف الـconclusion:**
+
+**✅ الاختباران الأساسيان بتاع بند 17 نفسه عدّوا 25/25 بالكامل على
+CI حقيقي** — `test_progressive_parsed_html_recovers_every_virtualization_window`
+و`test_progressive_live_dom_recovers_every_virtualization_window`،
+كلاهما بـ`progressive_scroll_attempt_log: ["success","success",
+"success","success"]` — صفر timeout، مطابق تمامًا للـ19/19 نتيجة
+محلية. **هذا أول تأكيد CI حقيقي للإصلاح الجذري (hover) منذ
+بدايته.**
+
+**❌ لكن الـCI run ككل فشل (`conclusion: failure`)** — بسبب اختبارين
+تانيين تمامًا، `tests/integration/test_mock_target_interstitial_live.py`:
+- `test_unhandled_interstitial_blocks_further_loading_after_the_first_batch`:
+  متوقَّع 5، طلع **0** (كراش كامل، مش نقص).
+- `test_camoufox_dismisses_the_interstitial_and_yields_every_batch`:
+  متوقَّع 15، طلع **5**.
+
+**السبب الحقيقي (من اللوج مباشرة، مش تخمين):**
+```
+Locator.hover: Timeout 30000ms exceeded.
+...
+<div data-role="interstitial">…</div> intercepts pointer events
+```
+بعكس `page.mouse.move()` العمياء القديمة، `.hover()` بتعمل فحص
+actionability حقيقي بتاع Playwright — overlay الـinterstitial
+(`position:fixed`, ملء الشاشة، لسه مش اتقفل في السيناريو "unhandled")
+بيغطّي الحاوية فعليًا، فـ`.hover()` بتستنى 30 ثانية حقيقية ثم ترمي
+استثناء **مش متلقّط في `_scroll.py` خالص** — بيطلع لفوق ويكرش الـsolve
+كله (0 items، مش بس فقدان جزء). درس مهم: التشخيص المحلي قبل الـpush
+كان مقتصر على اختباري بند 17 نفسهم بس، مش السويت الكامل — **غلطة
+منهجية اتعلّمناها**، ومتصلّحة دلوقتي (شغّلت السويت المحلي كامل قبل
+أي push تاني).
+
+### الإصلاح (توجيه صريح من المستخدم، مبني على دليل من مصدر متخصص)
+
+**`force=True` اتفحص واترفض صراحة:** مصدر متخصص ("17 Playwright
+Testing Mistakes") بيصنّفه كـanti-pattern بيخفي مشكلة حقيقية بدل ما
+يصلحها — التوصية الموثّقة الصريحة هناك: "اقفل الـoverlay الأول،
+متفرضش التفاعل".
+
+**التنفيذ الفعلي (Eighth revision، `_scroll.py`):**
+`container_selector: str | None` اتستبدل بالكامل بـ`hover_fn:
+Callable[[], bool] | None` — نفس شكل `trigger_and_wait_fn` بالظبط
+(caller-supplied، بيرجع `bool`)، لنفس السبب اللي خلّى
+`trigger_and_wait_fn` نفسه caller-built من الأول: التقاط استثناء
+تايم آوت محدَّد النوع محتاج `PlaywrightTimeoutError`/
+`PatchrightTimeoutError`، والموديول ده متعمّد يفضل بلا معرفة بأي
+مكتبة (نفس مبدأ الموديول الموثَّق من زمان). لو `hover_fn` رجعت
+`False`، الخطوة دي بتتخطّى الـwheel trigger بالكامل (مفيش حاجة
+حقيقية تتزحلق ليها)، لكن الـpause+`collect_fn()` بتاعتها لسه بتتنفّذ
+(نفس وعد "Sixth revision")، والحلقة بتوقف.
+
+**التنفيذ في `camoufox_provider.py`/`patchright_provider.py`
+(`_hover_feed_container_before_scroll`)، بالضبط زي ما المستخدم طلب:**
+1. `hover(timeout=3000)` بدل الافتراضي 30000 — 3 ثواني معيار شائع
+   موثّق لفحص actionability سريع، مش رقم مُخترَع.
+2. لو حصل timeout: استدعاء **نفس** آلية `click_selector` الموجودة
+   فعلاً من entry 9/16 (`page.locator(click_selector).click(...)`)
+   — نفس القرار اللي اتاخد قبل كده لنفس المشكلة، مش آلية جديدة.
+   لو `click_selector` مش متظبط لهذا الهدف، الخطوة دي no-op بأمان.
+3. إعادة محاولة الـhover مرة واحدة، نفس التايم آوت القصير.
+4. لو استمر الحجب (overlay نوع غير معروف، مالوش `click_selector`
+   يقفله): ترجع `False` (مش استثناء) — `logger.warning` بفشل واضح
+   (مبدأ "No Silent Failure" الأساسي للمشروع)، والحلقة بتوقف بأمان
+   بدل ما تكرش الـsolve كله.
+
+**ملحوظة عن "expect.poll/toPass":** المصدر اللي أشار له المستخدم
+بيوصي بيها كنمط قياسي لحلقات إعادة المحاولة دي في Playwright Test
+(JS test runner). النسخة المتاحة هنا Python + `sync_playwright` API
+مباشر (مش Playwright Test)، ومفيهاش `expect.poll`/`.to_pass()` عام
+لإعادة محاولة action بالشكل ده — التنفيذ فوق بيحقق نفس الجوهر
+(retry محدود ومقيّد، مش حلقة مفتوحة) بأدوات الـsync API الفعلية
+المتاحة، موثَّق هنا صراحةً بدل افتراض تطابق حرفي مع مصدر مبني على
+واجهة مختلفة.
+
+**اتّحقّق محليًا:** `ruff`/`mypy --strict` نظيفين على كل الملفات
+الأربعة، 143/143 unit test PASSED (اختبارات `container_selector`
+القديمة اتحوّلت لـ`hover_fn` مع اختبار جديد لسيناريو `False` -- توقف
+الـwheel trigger بس استمرار الـcollect/pause). `scripts/verify-like-ci.sh`
+بالكامل نظيف.
+
+### السويت المحلي الكامل (`tests/integration/`، مش بس اختباري بند 17) -- الدرس المتعلَّم اتطبّق
+
+29 ملف اختبار، 37 اختبار إجمالًا: **27 نجحوا، 9 فشلوا، 1 skipped**
+(`441.44s`). كل واحدة من الفشلات التسعة اتفتحت واتفهمت سببها الحقيقي،
+مش افتراض:
+
+- **✅ `test_unhandled_interstitial_blocks_further_loading_after_the_first_batch`
+  بقت PASSED** -- التأكيد المحلي المباشر إن إصلاح الـhover (فوق) بيحل
+  بالظبط المشكلة اللي اتصمم لها.
+- **❌ `test_camoufox_dismisses_the_interstitial_and_yields_every_batch`
+  لسه فاشلة (5 بدل 15)** -- لكن **مش بسبب hover**: صفر تحذير
+  `progressive_hover_blocked` في اللوج، و`load_more_calls: 0` (مش
+  crash). **اكتشاف جديد، منفصل، ومؤكَّد إنه موجود من قبل push الأول
+  أصلاً** (نفس النمط بالظبط ظهر في أول CI run قبل ما إصلاح الـhover
+  يتكتب خالص) -- مش رجعة (regression) من شغل الجلسة دي. تفاصيل
+  التشخيص والفرضية تحت.
+- **❌ `test_mock_target_dom_virtualization_live.py::test_parsed_html_only_recovers_the_final_virtualization_window`**:
+  `camoufox_provider.solve_crashed` -- `Page.wait_for_timeout: Target
+  page, context or browser has been closed`. نفس فئة الكراش القديمة
+  المعروفة (AppArmor/موارد الـsandbox)، **مش مرتبطة بـ`hover_fn`
+  خالص** -- الاختبار ده أصلاً بيستخدم المسار القديم غير التقدمي
+  (`scroll_to_load_lazy_content`)، مايلمسش `container_selector`/
+  `hover_fn` من الأساس.
+- **❌ 7 اختبارات تانية** (`test_playwright_live_render`,
+  `test_quotes_toscrape_js_live`, `test_quotes_toscrape_scroll_live`,
+  `test_scrapethissite_ajax_javascript_live`,
+  `test_scrapingcourse_javascript_rendering_live`,
+  `test_webscraper_io_load_more_live`, `test_webscraper_io_scroll_live`):
+  كل واحد فيهم `RenderError: playwright failed to launch chromium
+  for <رابط خارجي حقيقي>` (quotes.toscrape.com، webscraper.io،
+  scrapethissite.com، scrapingcourse.com). دول كلهم بيحتاجوا اتصال
+  إنترنت حقيقي خارج الـdocker-compose stack المحلي -- الـsandbox ده
+  مالوش اتصال إنترنت حقيقي (قيد بيئة معروف ومُتوقَّع، مش كود، ومش
+  PlaywrightMiddleware ولا Camoufox/Patchright حتى -- مسار مختلف
+  تمامًا عن التحقيق ده).
+
+### `feed_interstitial.html`: نفس بق الـspacer، ولا حاجة مختلفة؟ -- اتفحص مباشرة، مش افتراض
+
+سؤال المستخدم قبل أي قرار: هل `feed_interstitial.html` نسخة تانية من
+نفس بق الـspacer اللي اتصلح في `feed.html`؟ **لأ -- قُرئ الملف
+مباشرة، وهو template مختلف تمامًا بمنطق تحميل مختلف خالص:**
+
+- `feed.html` (DOM Virtualization الحقيقية): كل تحميل جديد بيعمل
+  **إخلاء** (`removeChild`) للمنشورات القديمة عشان الحاوية تفضل
+  محدودة الحجم -- هنا كان الـbug: الإخلاء بيقلّص `document.body`'s
+  scrollable height من غير تعويض، فمافيش مسافة scroll حقيقية تفضل.
+  الحل: spacer بيمتص ارتفاع المُخلَى.
+- `feed_interstitial.html` (اتأكّد بالقراءة المباشرة، السطر
+  `container.appendChild(article)`): **تحميل تراكمي بسيط، صفر إخلاء
+  خالص** -- كل منشور بيتضاف ويفضل موجود للأبد، مفيش أي منطق حذف أو
+  تقليم. **مفيش سبب معماري لوجود نفس بق الـspacer هنا -- مفيش حاجة
+  بتتقلّص أصلًا يحتاج تعويضها.**
+
+**الفرضية الأقرب (لسه *مش* مؤكَّدة بدليل مباشر -- محتاجة تشخيصها
+بنفس الصرامة، مش تُفترض):** المشكلة الحقيقية على الأرجح إن
+**الدفعة الأولى نفسها قصيرة يعني مفيش مسافة scroll حقيقية أصلاً**،
+مش إن المسافة *بتنكمش* بعد كده. `config.py`'s
+`INTERSTITIAL_FEED_PAGE_SIZE` الافتراضي = **5 منشورات بس** (أقل من
+`feed.html`'s الـ10 لكل صفحة) -- 5 منشورات (نص قصير + مؤلف + لايكات)
+محتمل جدًا ميكفيش يتخطّى ارتفاع الـviewport، يعني `window.scrollY`
+مايقدرش يتغيّر خالص لأن المتصفح صح إنه مفيش مسافة scroll حقيقية من
+الأساس -- نفس فئة "no scroll room" اللي كان بيحلّها
+`dispatchEvent('scroll')` الاصطناعي القديم (قبل ما نشيله بسبب سباق
+الـdouble-dispatch على `/feed`)، لكن **مش نفس الحل** (spacer): هنا
+مفيش حاجة اتخلت يتم تعويضها، المطلوب حل مختلف تمامًا (مثلًا: دفعة
+أولى أكبر، أو تأكيد فعلي إن أول batch بمفرده أطول من الـviewport،
+أو آلية بديلة لضمان مسافة scroll حقيقية من غير التعارض القديم مع
+DOM-virtualization). **مسجَّل هنا كـfollow-up منفصل، لسه معملوش أي
+تنفيذ** -- يحتاج نفس المنهجية اللي اتّبعناها مع `feed.html` (قياس
+مباشر لـ`document.body.offsetHeight` بعد أول batch مقابل
+`window.innerHeight`، مش افتراض) قبل أي إصلاح.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
