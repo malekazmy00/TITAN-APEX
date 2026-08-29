@@ -77,10 +77,104 @@
             cursor = pageInfo.end_cursor;
             hasNext = Boolean(pageInfo.has_next_page);
             loading = false;
+            maybeLoadMoreIfNoScrollRoom();
           })
           .catch(function () {
             loading = false;
           });
+      }
+
+      // docs/REQUIREMENTS.md section 9 entry 17's feed_interstitial.html
+      // follow-up: a genuinely *different* bug class from feed.html's own
+      // spacer fix, confirmed by direct measurement first, not assumed
+      // (document.body.scrollHeight 502px vs window.innerHeight 720px
+      // right after the very first batch alone -- zero scrollable
+      // distance from the start, not a shortfall introduced later by
+      // eviction; this template never evicts anything at all). A real
+      // 'scroll' event structurally cannot ever fire here on its own --
+      // there is nothing to scroll *to* -- the same well-known category
+      // a react-infinite-scroll-component issue documents (an initial
+      // page shorter than the viewport leaves no scrollbar for a user,
+      // or a real scroll-driven scraper, to ever act on). The documented
+      // fix for this category is different from a spacer (there is
+      // nothing evicted here to compensate for): detect the missing
+      // scroll room directly and load proactively, the same thing a
+      // well-built real infinite-scroll implementation already does.
+      //
+      // **Real, CI-confirmed correction, caught by a user review before
+      // this was even pushed:** an unconditional auto-load here raced
+      // and defeated entry 9's own interstitial obstacle test
+      // (test_unhandled_interstitial_blocks_further_loading_after_the_
+      // first_batch, which must never regress -- it verifies a real
+      // safety guarantee: a still-pending obstacle must stop the crawl,
+      // no exceptions) -- a real network round trip is fast enough to
+      // win a race against window.__interstitialShown becoming true on
+      // its own INTERSTITIAL_DELAY_MS timer, loading a batch the
+      // interstitial was supposed to have already blocked.
+      // interstitialMightAppearSoon() closes that race: entry 9's own
+      // structural/interstitial.py::render_interstitial_script now
+      // exposes the *configured* trigger shape and arm time (not just
+      // window.__interstitialShown, which only flips true once the
+      // timer actually fires) -- fails closed (treats an unrecognized
+      // trigger shape as "might appear") rather than open, matching
+      // this project's own "an obstacle must stop the crawl" priority.
+      //
+      // **Second real regression, caught the same way (a real run of
+      // the two interstitial tests together, not assumed safe from the
+      // first fix alone):** comparing "elapsed < delayMs" right at the
+      // boundary is itself still racy -- two independent setTimeout
+      // callbacks (this poll's own retry, and showInterstitial()'s
+      // real timer) have no guaranteed ordering when both become due at
+      // nearly the same instant, and real browser timers only ever fire
+      // *late* under load, never early, by an unpredictable margin --
+      // a real run reproduced exactly this (got 10, not 5). A generous,
+      // explicit safety margin *on top of* the nominal delay -- not a
+      // tighter one tuned to "just barely" win -- is what actually
+      // closes it: this deliberately waits meaningfully longer than the
+      // configured delay before ever concluding the window has passed,
+      // trading a little eagerness for the "impossible to race past a
+      // real obstacle" guarantee this exists for in the first place.
+      var INTERSTITIAL_SAFETY_MARGIN_MS = 3000;
+
+      function interstitialMightAppearSoon() {
+        if (window.__interstitialShown) {
+          return true;
+        }
+        if (
+          window.__interstitialTrigger === "time" &&
+          typeof window.__interstitialArmedAt === "number" &&
+          typeof window.__interstitialDelayMs === "number"
+        ) {
+          return (
+            Date.now() - window.__interstitialArmedAt <
+            window.__interstitialDelayMs + INTERSTITIAL_SAFETY_MARGIN_MS
+          );
+        }
+        // Unknown/unconfigured trigger shape (e.g. "scroll", or this
+        // page rendered without an interstitial at all) -- no precise
+        // window to reason about, so assume it might appear rather than
+        // assume it's safe.
+        return true;
+      }
+
+      function maybeLoadMoreIfNoScrollRoom() {
+        if (!hasNext || document.body.offsetHeight > window.innerHeight) {
+          // Either genuinely done (structural/interstitial.py's own
+          // total_batches bound), or real scroll room already exists --
+          // nothing more for this helper to do, ever, for this page.
+          return;
+        }
+        if (interstitialMightAppearSoon()) {
+          // Don't load now, but don't give up either -- entry 9's own
+          // interstitial is a one-shot timer (showInterstitial() only
+          // ever runs once), so this window reliably closes shortly
+          // (delayMs elapses, or a dismiss-and-reopen never happens
+          // here) -- bounded by the same two exits above, not an
+          // unbounded poll.
+          setTimeout(maybeLoadMoreIfNoScrollRoom, 200);
+          return;
+        }
+        loadMore();
       }
 
       window.addEventListener("scroll", function () {

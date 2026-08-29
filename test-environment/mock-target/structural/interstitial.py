@@ -105,6 +105,23 @@ def render_interstitial_script(trigger: str, delay_ms: int, scroll_percent: int)
         raise ValueError(f"scroll_percent must be in (0, 100], got {scroll_percent}")
 
     wiring = (
+        # docs/REQUIREMENTS.md section 9 entry 17's feed_interstitial.html
+        # follow-up: a real, known-window signal *other* client-side
+        # code on this same page (templates/feed_interstitial.html's own
+        # maybeLoadMoreIfNoScrollRoom()) can read to answer "might an
+        # interstitial still appear soon" *before* window.__interstitialShown
+        # itself ever becomes true -- set synchronously here, before the
+        # trigger below is even armed, so it's always available the
+        # moment any other script tag on the page runs after this one
+        # (document order guarantees that; the setTimeout/scroll-listener
+        # below only *fires* later, asynchronously). Exposing the
+        # trigger's own configured shape, not just a bare boolean,
+        # deliberately lets a reader distinguish "definitely armed for a
+        # known window" (trigger == 'time') from anything this specific
+        # helper doesn't have a precise window for.
+        f"window.__interstitialTrigger = {trigger!r};"
+        "window.__interstitialArmedAt = Date.now();"
+        f"window.__interstitialDelayMs = {delay_ms if trigger == 'time' else 'null'};"
         "function showInterstitial() {"
         "if (window.__interstitialShown) { return; }"
         "window.__interstitialShown = true;"
