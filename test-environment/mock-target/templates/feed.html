@@ -7,6 +7,11 @@
 <body>
   <main>
     <h1 class="page-title">Live Feed</h1>
+    <!-- docs/REQUIREMENTS.md section 9 entry 17's DOM Virtualization
+         race investigation: a real virtualization-fidelity bug fix, not
+         a scraper workaround -- see this file's own inline comment,
+         right where it's used, for the full evidence and reasoning. -->
+    <div data-role="virtualization-spacer" style="height: 0px;"></div>
     <div data-role="feed"></div>
     <div id="loading" style="display:none">Loading...</div>
   </main>
@@ -22,6 +27,43 @@
       let loading = false;
       const container = document.querySelector('[data-role="feed"]');
       const loadingEl = document.getElementById("loading");
+      // docs/REQUIREMENTS.md section 9 entry 17's DOM Virtualization
+      // race investigation -- a real, confirmed bug fix in this mock
+      // target's own virtualization *fidelity*, not a scraper
+      // workaround. structural/dom_virtualization.py's own module
+      // docstring states the intent plainly: mimic "the same mechanism
+      // a real virtualized list (react-window, a real social-feed
+      // client) uses to keep DOM node count bounded *regardless of how
+      // much total content has actually been scrolled through*" -- but
+      // this file's eviction below used to just removeChild() straight
+      // out of `container`, with nothing compensating for the space
+      // that content used to occupy. Real virtualization libraries never
+      // do that: they keep a spacer/sizer element so the scrollable
+      // area stays representative of the *entire* list, only swapping
+      // which items are actually rendered as the user scrolls through
+      // it. Without one, `container`'s (and therefore
+      // `document.body`'s) own rendered height shrinks back down to
+      // `windowSize` posts' worth the moment eviction starts -- on this
+      // mock target's own default content, shorter than a typical
+      // viewport. Confirmed for real (not assumed) that this is exactly
+      // why a real, trusted `page.mouse.wheel()` scroll -- correct
+      // input-level browser automation, no synthetic event dispatch --
+      // stops producing any `scroll` event at all after just one or two
+      // batches: a real browser correctly refuses to fire one once
+      // there is *no real remaining scroll distance*, which is never
+      // supposed to happen on a page whose virtualization is actually
+      // faithful to what it claims to imitate.
+      //
+      // `spacerEl` sits *outside* `container` (a sibling, not inside
+      // it) specifically so it is never counted by the eviction loop's
+      // own `container.children.length` -- `structural/dom_virtualization.py`'s
+      // `excess_count(rendered_count, window_size)` (the real,
+      // unit-tested source of truth this eviction rule mirrors) counts
+      // posts only, and needs no change at all: it has never known
+      // about pixels or layout, only counts, and the spacer changes
+      // neither.
+      const spacerEl = document.querySelector('[data-role="virtualization-spacer"]');
+      let spacerHeightPx = 0;
       // DOM Virtualization (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
       // محور 3, docs/REQUIREMENTS.md section 9 entry 13): mirrors
       // structural/dom_virtualization.py's excess_count(rendered_count,
@@ -91,9 +133,18 @@
           // from every other structural challenge here.
           let excess = container.children.length - windowSize;
           while (excess > 0) {
-            container.removeChild(container.firstElementChild);
+            const evicted = container.firstElementChild;
+            // Measured *before* removal -- this evicted post's own
+            // real, current rendered height, not a guessed/average one
+            // -- accumulated into the spacer so the page's total
+            // scrollable height stays genuinely representative of
+            // everything ever rendered (this block's own comment
+            // above has the full reasoning/evidence for why).
+            spacerHeightPx += evicted.offsetHeight;
+            container.removeChild(evicted);
             excess -= 1;
           }
+          spacerEl.style.height = spacerHeightPx + "px";
         }
       }
 

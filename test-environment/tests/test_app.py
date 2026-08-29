@@ -160,6 +160,32 @@ def test_feed_page_ships_the_virtualization_config_when_enabled(client: FlaskCli
     assert "removeChild" in body
 
 
+def test_feed_page_ships_the_virtualization_spacer(client: FlaskClient) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's DOM Virtualization race
+    investigation: a real, confirmed bug fix in this mock target's own
+    virtualization *fidelity* (structural/dom_virtualization.py's own
+    docstring says the intent was mimicking a real virtualized list
+    "regardless of how much total content has actually been scrolled
+    through" -- removeChild() alone, with nothing compensating for the
+    space evicted content used to occupy, never actually delivered
+    that). Without a spacer, `document.body`'s own rendered height
+    shrinks back down to `windowSize` posts' worth the moment eviction
+    starts -- confirmed for real that a genuine, trusted
+    page.mouse.wheel() scroll (correct browser-input-level automation)
+    then stops producing any 'scroll' event at all, since a real
+    browser correctly refuses to fire one once there is no real
+    scrollable distance left. The spacer element must ship in the
+    markup (its accumulated height is a runtime-only JS concern, not
+    checkable from a Flask test client that never executes the
+    script -- same limitation this file's other virtualization test
+    already documents)."""
+    body = client.get("/feed").get_data(as_text=True)
+
+    assert 'data-role="virtualization-spacer"' in body
+    assert "spacerHeightPx" in body
+    assert "offsetHeight" in body
+
+
 def test_feed_page_ships_the_progressive_diagnostic_counters(client: FlaskClient) -> None:
     """docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
     investment: the `container`'s data-load-more-calls/data-load-more-dropped
