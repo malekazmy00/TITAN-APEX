@@ -103,6 +103,43 @@ BYPARR_URL = os.environ.get("TITAN_BYPARR_URL")
 EXPECTED_TOTAL_POSTS = 25
 
 
+FEED_PAGE_SIZE = 10  # test-environment/mock-target/config.py's own FEED_PAGE_SIZE default
+DOM_VIRTUALIZATION_WINDOW_SIZE = 5  # ditto, DOM_VIRTUALIZATION_WINDOW_SIZE default
+MAX_FEED_PAGES = 5  # test-environment/mock-target/structural/feed.py's own MAX_FEED_PAGES
+
+
+def _expected_post_ids(seed: str) -> set[str]:
+    """The exact set of post_ids this module's docstring derivation says
+    should survive -- not just their count. Re-derives
+    ``structural/feed.py``'s + ``templates/feed.html``'s own trim rule by
+    hand: page ``p``'s own batch occupies global indices
+    ``[p*FEED_PAGE_SIZE, (p+1)*FEED_PAGE_SIZE)``, and only the *last*
+    ``DOM_VIRTUALIZATION_WINDOW_SIZE`` of any page's batch ever survive
+    long enough for a progressive read to catch (this module's docstring
+    walks through why, for every page after the first). Stronger than the
+    plain count+uniqueness checks below: two runs that each recover a
+    coincidentally-``EXPECTED_TOTAL_POSTS``-sized but *differently
+    composed* set (e.g. one that quietly lost page 3's real window while
+    somehow not losing any overall count) are structurally impossible
+    given globally unique ids, but this closes that possibility by
+    construction instead of by argument.
+
+    ``content_generator.py``'s ``post_id = f"{seed}-post-{index}"``
+    scheme means the per-session ``seed`` isn't known ahead of the crawl
+    (a fresh random token unless a session cookie is reused) -- so it is
+    recovered from any one already-collected post_id instead, rather than
+    threading the live server's cookie jar through ``run_spider_live``.
+    """
+    expected: set[str] = set()
+    for page in range(MAX_FEED_PAGES):
+        start = page * FEED_PAGE_SIZE
+        survivors_start = start + FEED_PAGE_SIZE - DOM_VIRTUALIZATION_WINDOW_SIZE
+        expected.update(
+            f"{seed}-post-{index}" for index in range(survivors_start, start + FEED_PAGE_SIZE)
+        )
+    return expected
+
+
 def _assert_all_posts_recovered_across_every_window(items: list[dict[str, object]]) -> None:
     assert len(items) == EXPECTED_TOTAL_POSTS, (
         f"expected exactly {EXPECTED_TOTAL_POSTS} items (all 5 virtualization windows' "
@@ -120,6 +157,20 @@ def _assert_all_posts_recovered_across_every_window(items: list[dict[str, object
         f"post_id-keyed dedup (spanning the *entire* crawl, not just one snapshot) should "
         f"never let a post seen more than once (e.g. still visible on a later read) appear "
         f"twice -- got {post_ids}"
+    )
+    # docs/REQUIREMENTS.md section 9 entry 17, answering a user review's
+    # Q3: an *exact*-id check, not just count+uniqueness -- see
+    # _expected_post_ids's own docstring for why this closes a real
+    # (if narrow) gap the count+uniqueness checks above leave open.
+    str_post_ids = {str(post_id) for post_id in post_ids}
+    seed = str(post_ids[0]).rsplit("-post-", 1)[0]
+    expected_ids = _expected_post_ids(seed)
+    assert str_post_ids == expected_ids, (
+        f"recovered the right *count* ({len(post_ids)}) but the wrong *composition* -- "
+        f"missing {sorted(expected_ids - str_post_ids)}, unexpected "
+        f"{sorted(str_post_ids - expected_ids)}: every page's own last "
+        f"{DOM_VIRTUALIZATION_WINDOW_SIZE} posts should survive, not some other, "
+        f"same-sized substitute"
     )
 
 
