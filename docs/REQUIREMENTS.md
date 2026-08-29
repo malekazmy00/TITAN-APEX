@@ -3889,6 +3889,30 @@ DOM-virtualization). **مسجَّل هنا كـfollow-up منفصل، لسه م�
 لنمط السباق نفسه عبر الـ12 تشغيلة الفردية. `scripts/verify-like-ci.sh`
 بالكامل نظيف تاني بعد التعديل.
 
+### تأكيد CI حقيقي ثالث (push 3، run 33280481152) -- الاتنين عدّوا مع بعض، صفر سباق
+
+**36 passed، 1 failed** (`539.00s`). الفشلة الوحيدة:
+`test_live_dom_also_only_recovers_the_final_virtualization_window` --
+اتفتح اللوج مباشرة، وهي **نفس فئة الكراش المعروفة** (`Target page,
+context or browser has been closed`, `url: /feed`) -- مش مرتبطة
+بالإصلاح ده خالص (الاختبار ده أصلاً بيستخدم المسار القديم غير
+التقدمي، مالوش أي علاقة بـ`feed_interstitial.html` أو الـhover).
+
+**الاتنين اللي كانوا في تعارض عدّوا مع بعض على CI حقيقي، بالدليل:**
+- `test_unhandled_interstitial_blocks_further_loading_after_the_first_batch`:
+  `html_snapshot_count: 2` بس (batch واحد + pre-scroll)،
+  `progressive_api_reported_post_id_count: 0` -- الـauto-trigger
+  امتنع صح، مفيش batch إضافي راح قبل الـinterstitial.
+- `test_camoufox_dismisses_the_interstitial_and_yields_every_batch`:
+  `container.height: 1335px` (كان 445px قبل أي إصلاح) -- تأكيد
+  مباشر إن كذا batch اتحمّل فعليًا بالـauto-trigger، ووصل لمسافة
+  scroll حقيقية، وخلّص الـ15 عنصر.
+
+**القرار المتفق عليه اتنفّذ بالكامل ومؤكَّد على CI حقيقي: الفئة
+الصحيحة (short-content, مش spacer) اتحدّدت بالدليل، الحل الضيّق
+النطاق (auto-trigger + فحص "مفيش عائق قريب" + هامش أمان سخي) بيحل
+المشكلة الأصلية بدون ما يكسر ضمانة الأمان الجوهرية.**
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
