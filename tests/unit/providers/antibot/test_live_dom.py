@@ -211,18 +211,11 @@ class _FakeVirtualizedPage:
         # call, same "nothing to simulate" shape as the wait_for_timeout
         # stub below.
         self.mouse = _FakeMouse()
-        # docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision":
-        # scroll_and_collect's own container_selector hover, a *different*
-        # .locator() call than the item-row one above (a different
-        # selector value) -- tracked separately since it's a distinct
-        # concern (cursor positioning, not item extraction).
-        self.hover_calls: list[str] = []
 
-    def locator(self, selector: str) -> _FakeLocator | _FakeContainerLocator:
-        if selector == '[data-role="post"]':
-            self._current_rows = next(self._row_sets)
-            return _FakeLocator(self._current_rows)
-        return _FakeContainerLocator(selector, self.hover_calls)
+    def locator(self, selector: str) -> _FakeLocator:
+        assert selector == '[data-role="post"]'
+        self._current_rows = next(self._row_sets)
+        return _FakeLocator(self._current_rows)
 
     def evaluate(self, script: str) -> None:
         return None
@@ -241,20 +234,6 @@ class _FakeMouse:
 
     def wheel(self, delta_x: float, delta_y: float) -> None:
         pass
-
-
-class _FakeContainerLocator:
-    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision":
-    stands in for the real Playwright/Patchright Locator
-    container_selector resolves to -- scroll_and_collect only ever calls
-    .hover() on it, once per scroll attempt."""
-
-    def __init__(self, selector: str, hover_calls: list[str]) -> None:
-        self._selector = selector
-        self._hover_calls = hover_calls
-
-    def hover(self) -> None:
-        self._hover_calls.append(self._selector)
 
 
 def test_progressive_collection_keeps_merging_across_every_attempt_not_just_the_first() -> None:
@@ -380,14 +359,21 @@ def test_progressive_collection_defaults_trigger_and_wait_fn_to_none() -> None:
     assert {item["post_id"] for item in items} == {"p1", "p2"}
 
 
-def test_progressive_collection_passes_container_selector_through_to_scroll_and_collect() -> None:
-    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision": this
-    module's own container_selector parameter is a thin passthrough to
-    scroll_and_collect's -- confirms it actually reaches it, hovered once
+def test_progressive_collection_passes_hover_fn_through_to_scroll_and_collect() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision"
+    (replacing the "Seventh revision"'s container_selector): this
+    module's own hover_fn parameter is a thin passthrough to
+    scroll_and_collect's -- confirms it actually reaches it, called once
     per scroll attempt (not the fixed page.mouse.move(200, 200) at all)."""
     page = _FakeVirtualizedPage(
         row_sets_per_read=[[_post_row("p1", "alice", "hi")], [_post_row("p2", "bob", "yo")]],
     )
+    hover_calls = 0
+
+    def hover_fn() -> bool:
+        nonlocal hover_calls
+        hover_calls += 1
+        return True
 
     items = collect_live_dom_items_progressively(
         page,
@@ -395,11 +381,11 @@ def test_progressive_collection_passes_container_selector_through_to_scroll_and_
         FIELD_SELECTORS,
         max_attempts=1,
         pause_ms=700,
-        container_selector='[data-role="feed"]',
+        hover_fn=hover_fn,
     )
 
     assert {item["post_id"] for item in items} == {"p1", "p2"}
-    assert page.hover_calls == ['[data-role="feed"]']
+    assert hover_calls == 1
 
 
 def test_progressive_collection_uses_a_custom_id_field_when_given() -> None:

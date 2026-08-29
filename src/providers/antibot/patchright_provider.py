@@ -91,6 +91,10 @@ DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS = 3
 # (docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision") -- see
 # camoufox_provider.py's own comment for the full explanation.
 _FEED_CONTAINER_SELECTOR = '[data-role="feed"]'
+# Same value and same reasoning as CamoufoxProvider's identical constant
+# (docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision") -- see
+# camoufox_provider.py's own comment for the full explanation.
+DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS = 3_000
 
 
 class _RawSolve(NamedTuple):
@@ -318,6 +322,41 @@ def _default_patchright_solve(  # pragma: no cover
                         # stays a raw count, not a "missing ids" diff.
                         progressive_page_post_ids: list[str] = []
 
+                        def _hover_feed_container_before_scroll() -> bool:
+                            """Same real, CI-confirmed regression and
+                            fix as camoufox_provider.py's identical
+                            helper (docs/REQUIREMENTS.md section 9 entry
+                            17's "Eighth revision") -- built around
+                            Patchright's own TimeoutError/Error instead.
+                            See camoufox_provider.py's own comment for
+                            the full reasoning.
+                            """
+                            container = page.locator(_FEED_CONTAINER_SELECTOR)
+                            try:
+                                container.hover(timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS)
+                                return True
+                            except PatchrightTimeoutError:
+                                pass
+                            if click_selector:
+                                try:
+                                    page.locator(click_selector).click(
+                                        timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS
+                                    )
+                                except (PatchrightTimeoutError, PatchrightError) as exc:
+                                    logger.debug(
+                                        "patchright_provider.progressive_hover_dismiss_click_failed",
+                                        extra={"url": url, "reason": str(exc)},
+                                    )
+                            try:
+                                container.hover(timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS)
+                                return True
+                            except PatchrightTimeoutError as exc:
+                                logger.warning(
+                                    "patchright_provider.progressive_hover_blocked",
+                                    extra={"url": url, "reason": str(exc)},
+                                )
+                                return False
+
                         def _trigger_and_wait_for_feed_response(
                             trigger_fn: Callable[[], None],
                         ) -> bool:
@@ -391,7 +430,7 @@ def _default_patchright_solve(  # pragma: no cover
                                 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                                 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                                 trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
-                                container_selector=_FEED_CONTAINER_SELECTOR,
+                                hover_fn=_hover_feed_container_before_scroll,
                             )
                         else:
                             html_snapshots = collect_html_snapshots(
@@ -399,7 +438,7 @@ def _default_patchright_solve(  # pragma: no cover
                                 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                                 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                                 trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
-                                container_selector=_FEED_CONTAINER_SELECTOR,
+                                hover_fn=_hover_feed_container_before_scroll,
                             )
                     else:
                         scroll_to_load_lazy_content(

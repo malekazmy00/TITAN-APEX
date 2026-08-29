@@ -131,11 +131,20 @@ DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS = 1_500
 # docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision": the same
 # selector _read_feed_attr's own JS strings already hardcode (as a
 # querySelector() string there, not reusable directly) -- named here as
-# a real Python constant so scroll_and_collect's container_selector
-# hover-per-attempt (see _scroll.py's own module docstring) targets
-# exactly the same element every other progressive-collection diagnostic
-# in this file already reads from.
+# a real Python constant so scroll_and_collect's hover_fn (see
+# _scroll.py's own module docstring) targets exactly the same element
+# every other progressive-collection diagnostic in this file already
+# reads from.
 _FEED_CONTAINER_SELECTOR = '[data-role="feed"]'
+# docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision": a short,
+# fail-fast timeout for the per-attempt hover actionability probe --
+# 3000ms is a commonly documented duration for this kind of quick
+# actionability check (not this project's own invented number), well
+# short of Locator.hover()'s own 30000ms default, which real CI evidence
+# (run 33275376646) confirmed can block the *entire* solve for 30 real
+# seconds before raising, once an unhandled interstitial overlay is
+# genuinely intercepting pointer events over the container.
+DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS = 3_000
 # docs/REQUIREMENTS.md section 9's "DOM Virtualization Instability"
 # investigation: DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS above only narrowed
 # a real race, never closed it -- the same test family kept failing
@@ -589,6 +598,93 @@ def _default_camoufox_solve(  # pragma: no cover
                                 f"?.getAttribute('{attr}') ?? null"
                             )
 
+                        def _hover_feed_container_before_scroll() -> bool:
+                            """docs/REQUIREMENTS.md section 9 entry 17's
+                            "Eighth revision" -- a real, CI-confirmed
+                            regression the "Seventh revision"'s bare
+                            ``page.locator(...).hover()`` introduced (see
+                            ``_scroll.py``'s own module docstring for the
+                            full reasoning and the real CI evidence,
+                            run 33275376646): unlike the blind
+                            ``page.mouse.move()`` it replaced, ``hover()``
+                            performs a real actionability check -- an
+                            unhandled interstitial overlay genuinely
+                            intercepting pointer events over the
+                            container makes it block for its own default
+                            30 real seconds, then raise an exception this
+                            module never caught, crashing the *entire*
+                            solve.
+
+                            ``force=True`` (skip the actionability check
+                            entirely) was considered and rejected -- a
+                            cited source ("17 Playwright Testing
+                            Mistakes") names it explicitly as an
+                            anti-pattern that hides a real problem
+                            instead of fixing it, recommending instead:
+                            dismiss the actual blocking overlay first,
+                            never force past it. This does exactly that,
+                            in the order requested:
+
+                            1. Hover with a short, fail-fast
+                               ``DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS``
+                               (3000ms, not this module's own 30000ms
+                               default) instead of waiting the full
+                               default -- succeeds immediately when
+                               nothing is blocking, the common case.
+                            2. On a timeout, reuse the *exact* same
+                               ``click_selector`` dismiss mechanism
+                               entries 9/16 already established (the
+                               same real button a real user would click)
+                               -- harmless (a no-op the caller already
+                               expects to sometimes not apply) when
+                               ``click_selector`` isn't configured for
+                               this particular target at all.
+                            3. Retry the hover once more, same short
+                               timeout.
+
+                            Returns ``False`` (never raises) only if the
+                            container is *still* blocked after that --
+                            an unknown, unhandled kind of overlay this
+                            function has no more specific recourse for
+                            -- logged clearly (this project's own "No
+                            Silent Failure" convention) so
+                            ``scroll_and_collect`` can stop the loop
+                            gracefully instead of the whole solve
+                            crashing.
+                            """
+                            container = page.locator(_FEED_CONTAINER_SELECTOR)
+                            try:
+                                container.hover(timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS)
+                                return True
+                            except PlaywrightTimeoutError:
+                                pass
+                            if click_selector:
+                                try:
+                                    page.locator(click_selector).click(
+                                        timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS
+                                    )
+                                except (PlaywrightTimeoutError, PlaywrightError) as exc:
+                                    # Not necessarily a problem -- the
+                                    # overlay blocking the hover might not
+                                    # even be the one click_selector
+                                    # dismisses (a different, unhandled
+                                    # kind entirely); logged, not
+                                    # swallowed, and the retry below still
+                                    # gets a fair attempt regardless.
+                                    logger.debug(
+                                        "camoufox_provider.progressive_hover_dismiss_click_failed",
+                                        extra={"url": url, "reason": str(exc)},
+                                    )
+                            try:
+                                container.hover(timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS)
+                                return True
+                            except PlaywrightTimeoutError as exc:
+                                logger.warning(
+                                    "camoufox_provider.progressive_hover_blocked",
+                                    extra={"url": url, "reason": str(exc)},
+                                )
+                                return False
+
                         def _pre_trigger_container_diagnostic() -> str:
                             """docs/REQUIREMENTS.md section 9 entry 17,
                             a user review's direct follow-up question:
@@ -790,7 +886,7 @@ def _default_camoufox_solve(  # pragma: no cover
                                 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                                 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                                 trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
-                                container_selector=_FEED_CONTAINER_SELECTOR,
+                                hover_fn=_hover_feed_container_before_scroll,
                             )
                         else:
                             html_snapshots = collect_html_snapshots(
@@ -798,7 +894,7 @@ def _default_camoufox_solve(  # pragma: no cover
                                 DEFAULT_PROGRESSIVE_MAX_SCROLL_ATTEMPTS,
                                 DEFAULT_PROGRESSIVE_SCROLL_PAUSE_MS,
                                 trigger_and_wait_fn=_trigger_and_wait_for_feed_response,
-                                container_selector=_FEED_CONTAINER_SELECTOR,
+                                hover_fn=_hover_feed_container_before_scroll,
                             )
                     else:
                         scroll_to_load_lazy_content(

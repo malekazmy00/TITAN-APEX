@@ -39,20 +39,6 @@ class _FakeMouse:
         self.wheel_calls.append((delta_x, delta_y))
 
 
-class _FakeLocator:
-    """Stands in for a real Playwright/Patchright ``Page.locator(...)``
-    result -- docs/REQUIREMENTS.md section 9 entry 17's "Seventh
-    revision" only ever calls ``.hover()`` on it, once per scroll
-    attempt."""
-
-    def __init__(self, selector: str, hover_calls: list[str]) -> None:
-        self._selector = selector
-        self._hover_calls = hover_calls
-
-    def hover(self) -> None:
-        self._hover_calls.append(self._selector)
-
-
 class _FakePage:
     def __init__(self, heights: list[int]) -> None:
         # heights[0] is the initial height (read once before the loop);
@@ -61,7 +47,6 @@ class _FakePage:
         self.evaluate_calls: list[str] = []
         self.wait_calls: list[int] = []
         self.mouse = _FakeMouse()
-        self.hover_calls: list[str] = []
 
     def evaluate(self, script: str) -> int | None:
         self.evaluate_calls.append(script)
@@ -71,9 +56,6 @@ class _FakePage:
 
     def wait_for_timeout(self, ms: int) -> None:
         self.wait_calls.append(ms)
-
-    def locator(self, selector: str) -> _FakeLocator:
-        return _FakeLocator(selector, self.hover_calls)
 
 
 def test_stops_after_one_attempt_when_height_never_grows() -> None:
@@ -305,17 +287,24 @@ def test_moves_the_mouse_into_the_viewport_once_before_any_wheel() -> None:
 
     assert len(page.mouse.move_calls) == 1
     assert len(page.mouse.wheel_calls) == 3
-    assert page.hover_calls == []  # no container_selector given -- the fixed-move path only
 
 
-def test_container_selector_hovers_before_every_attempt_not_once() -> None:
-    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision",
-    a real, user-requested follow-up to the "Fourth revision" fixed-move
-    above: when a container_selector is given, page.locator(...).hover()
-    replaces the fixed page.mouse.move(200, 200) entirely -- called once
-    per attempt (recomputing the container's own real position every
-    time), never the fixed-coordinate one-time move at all."""
+def test_hover_fn_runs_before_every_attempt_not_once() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision"
+    (replacing the "Seventh revision"'s container_selector, a real,
+    user-requested follow-up to the "Fourth revision" fixed-move above):
+    when hover_fn is given, it replaces the fixed page.mouse.move(200,
+    200) entirely -- called once per attempt (recomputing the
+    container's own real position every time, in whatever way the
+    caller's own hover_fn does that), never the fixed-coordinate
+    one-time move at all."""
     page = _FakePage([1000, 1000, 1000, 1000])
+    hover_calls = 0
+
+    def hover_fn() -> bool:
+        nonlocal hover_calls
+        hover_calls += 1
+        return True
 
     scroll_and_collect(
         page,
@@ -323,27 +312,56 @@ def test_container_selector_hovers_before_every_attempt_not_once() -> None:
         pause_ms=700,
         collect_fn=lambda: None,
         rng=random.Random(0),
-        container_selector='[data-role="feed"]',
+        hover_fn=hover_fn,
     )
 
-    assert page.hover_calls == ['[data-role="feed"]'] * 4  # once per attempt, not once total
+    assert hover_calls == 4  # once per attempt, not once total
     assert page.mouse.move_calls == []  # the fixed-coordinate fallback never runs
     assert len(page.mouse.wheel_calls) == 4
 
 
-def test_container_selector_none_keeps_the_fixed_move_fallback() -> None:
-    """The other half of the same revision: container_selector's default
-    (None) must reproduce the exact prior behavior for every caller that
-    hasn't been updated to supply one -- same guarantee this module has
-    kept at every prior revision."""
+def test_hover_fn_none_keeps_the_fixed_move_fallback() -> None:
+    """The other half of the same revision: hover_fn's default (None)
+    must reproduce the exact prior behavior for every caller that hasn't
+    been updated to supply one -- same guarantee this module has kept
+    at every prior revision."""
     page = _FakePage([1000, 1000])
 
     scroll_and_collect(
-        page, max_attempts=1, pause_ms=700, collect_fn=lambda: None, container_selector=None
+        page, max_attempts=1, pause_ms=700, collect_fn=lambda: None, hover_fn=None
     )
 
     assert page.mouse.move_calls == [(200, 200)]
-    assert page.hover_calls == []
+
+
+def test_hover_fn_returning_false_skips_the_trigger_but_still_collects_and_stops() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision": a
+    hover_fn that fails to position the cursor even after its own
+    best-effort recovery (e.g. dismissing a known overlay and retrying)
+    returns False -- the same stop-early contract trigger_and_wait_fn
+    already has. This attempt's own wheel trigger is skipped entirely
+    (nothing meaningful to scroll toward), but its pause+collect_fn()
+    still runs (the same "Sixth revision" promise), and the loop stops
+    -- no further attempts."""
+    page = _FakePage([1000, 1000, 1000])
+    calls = 0
+
+    def collect() -> None:
+        nonlocal calls
+        calls += 1
+
+    scroll_and_collect(
+        page,
+        max_attempts=5,
+        pause_ms=700,
+        collect_fn=collect,
+        rng=random.Random(0),
+        hover_fn=lambda: False,
+    )
+
+    assert calls == 2  # pre-scroll collect + this step's own -- not skipped
+    assert page.mouse.wheel_calls == []  # the trigger never ran at all -- nothing to scroll to
+    assert len(page.wait_calls) == 1  # this step's own (randomized) pause still ran too
 
 
 def test_scroll_deltas_are_randomized_per_step_not_a_fixed_jump() -> None:
@@ -606,18 +624,22 @@ def test_respects_max_attempts_for_snapshots_too() -> None:
     assert len(snapshots) == 9  # pre-scroll + all 8 attempts, every time
 
 
-def test_collect_html_snapshots_passes_container_selector_through() -> None:
-    """docs/REQUIREMENTS.md section 9 entry 17's "Seventh revision":
-    collect_html_snapshots is a thin wrapper -- confirms
-    container_selector reaches scroll_and_collect unchanged through it
-    too, not just when calling scroll_and_collect directly."""
+def test_collect_html_snapshots_passes_hover_fn_through() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision":
+    collect_html_snapshots is a thin wrapper -- confirms hover_fn reaches
+    scroll_and_collect unchanged through it too, not just when calling
+    scroll_and_collect directly."""
     page = _FakeContentPage(heights=[1000, 1000], html_per_read=["first", "second"])
+    hover_calls = 0
 
-    collect_html_snapshots(
-        page, max_attempts=1, pause_ms=700, container_selector='[data-role="feed"]'
-    )
+    def hover_fn() -> bool:
+        nonlocal hover_calls
+        hover_calls += 1
+        return True
 
-    assert page.hover_calls == ['[data-role="feed"]']
+    collect_html_snapshots(page, max_attempts=1, pause_ms=700, hover_fn=hover_fn)
+
+    assert hover_calls == 1
     assert page.mouse.move_calls == []
 
 

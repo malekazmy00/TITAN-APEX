@@ -298,6 +298,50 @@ behavior unchanged -- every existing caller that hasn't been updated to
 supply a selector (and every test written before this revision) keeps
 its exact prior behavior, the same backward-compatibility guarantee
 this module has kept at every prior revision.
+
+**Eighth revision (docs/REQUIREMENTS.md section 9 entry 17, a real,
+CI-confirmed regression the "Seventh revision" above introduced --
+caught on real GitHub Actions CI, run 33275376646, not locally: this
+module's own test suite never exercised an obscured-container target,
+only ``test-environment/mock-target``'s plain ``/feed``):** unlike the
+blind ``page.mouse.move()`` it replaced, a real ``Locator.hover()``
+performs Playwright's own actionability check -- if another element (a
+real, unhandled interstitial overlay, ``position:fixed`` and
+full-viewport) currently intercepts pointer events over the container,
+``hover()`` correctly waits (its own default: 30 real seconds) rather
+than lying about having positioned the cursor, then raises. That
+exception was never caught anywhere in this module, so it propagated
+all the way up and crashed the *entire* solve -- losing every already-
+collected item, not merely this one attempt's contribution -- for a
+target this project's own :func:`~src.providers.antibot.
+camoufox_provider.CamoufoxProvider`-driven interstitial tests already
+expected to degrade *gracefully* (recover whatever loaded before the
+block, not crash).
+
+``force=True`` (skipping the actionability check entirely, the same
+blind behavior the fixed-coordinate ``move()`` always had) was
+considered and rejected: a cited source ("17 Playwright Testing
+Mistakes") names it explicitly as an anti-pattern that hides a real
+problem instead of fixing it, recommending instead "dismiss the actual
+blocking overlay first, don't force past it." ``container_selector``
+is replaced (not kept alongside) by ``hover_fn: Callable[[], bool] |
+None = None`` -- a caller-supplied callable, called before *every*
+scroll attempt exactly where ``container_selector``'s bare ``hover()``
+used to run, returning ``True`` if the cursor is genuinely positioned
+and it's safe to proceed, ``False`` if positioning failed even after
+the caller's own best effort to recover (e.g. dismissing a known
+overlay and retrying) -- the same ``bool``-returning,
+keep-going-or-stop-early contract :func:`scroll_and_collect` already
+established for ``trigger_and_wait_fn``, deliberately reused rather
+than inventing a second shape. This mirrors exactly why
+``trigger_and_wait_fn`` itself is caller-built rather than implemented
+in this module (see this docstring's "Fifth revision"): the retry
+itself needs each engine's own precisely-typed timeout exception
+(``PlaywrightTimeoutError``/``PatchrightTimeoutError``) to catch, which
+this deliberately engine-agnostic module has no business importing.
+``hover_fn=None`` (the default) keeps :func:`scroll_and_collect`'s
+original, pre-"Seventh revision" one-time ``page.mouse.move(200, 200)``
+behavior completely unchanged.
 """
 
 from __future__ import annotations
@@ -437,7 +481,7 @@ def scroll_and_collect(
     collect_fn: Callable[[], None],
     trigger_and_wait_fn: Callable[[Callable[[], None]], bool] | None = None,
     rng: random.Random | None = None,
-    container_selector: str | None = None,
+    hover_fn: Callable[[], bool] | None = None,
 ) -> None:
     """Calls ``collect_fn()`` after *every* read of the page -- including
     the very first, pre-scroll one -- so a caller can capture or extract
@@ -482,14 +526,23 @@ def scroll_and_collect(
     ``random.Random()`` -- genuine per-call randomness for every real
     caller; only this module's own tests inject a seeded one.
 
-    ``container_selector`` (docs/REQUIREMENTS.md section 9 entry 17's
-    "Seventh revision" -- see this module's own module docstring for
-    the full reasoning): when given, ``page.locator(container_selector)
-    .hover()`` re-positions the cursor against the container's own real,
-    current position immediately before *every* scroll attempt, instead
-    of the fixed ``page.mouse.move(200, 200)`` every caller used before
-    this parameter existed. ``None`` (the default) keeps that exact
-    prior one-time behavior unchanged.
+    ``hover_fn`` (docs/REQUIREMENTS.md section 9 entry 17's "Eighth
+    revision", replacing the "Seventh revision"'s ``container_selector``
+    -- see this module's own module docstring for the full reasoning):
+    an optional caller-supplied callable, invoked immediately before
+    *every* scroll attempt in place of the fixed ``page.mouse.move(200,
+    200)`` every caller used before "Seventh revision" existed. Returns
+    ``True`` when the cursor is genuinely positioned over the
+    container and it's safe to proceed with this attempt's own scroll
+    trigger; ``False`` when positioning failed even after the caller's
+    own best-effort recovery (e.g. dismissing a known overlay and
+    retrying) -- the same stop-early contract ``trigger_and_wait_fn``
+    already has. On ``False``, this attempt's own scroll trigger is
+    skipped entirely (there is nothing meaningful to scroll toward),
+    but its pause+``collect_fn()`` still runs (same "Sixth revision"
+    promise), and the loop stops -- no further attempts. ``None`` (the
+    default) keeps the original one-time ``page.mouse.move(200, 200)``
+    behavior completely unchanged.
 
     Raises:
         ValueError: if ``max_attempts`` is not positive, or ``pause_ms``
@@ -502,7 +555,7 @@ def scroll_and_collect(
 
     rng = rng if rng is not None else random.Random()
 
-    if container_selector is None:
+    if hover_fn is None:
         # A real, empirically-confirmed requirement, not a stylistic
         # choice: page.mouse.wheel() alone (no prior page.mouse.move())
         # produced zero real scroll at all in a headless Camoufox
@@ -512,37 +565,41 @@ def scroll_and_collect(
         # positioned somewhere inside the viewport first, the same way
         # a real mouse would already be somewhere on screen before a
         # person starts scrolling. Once, not per attempt -- the cursor
-        # stays wherever it's put. Only when no ``container_selector``
-        # is given at all -- see this function's own "Seventh revision"
-        # docstring paragraph for why a real caller should prefer
-        # supplying one instead.
+        # stays wherever it's put. Only when no ``hover_fn`` is given at
+        # all -- see this function's own "Eighth revision" docstring
+        # paragraph for why a real caller should prefer supplying one
+        # instead.
         page.mouse.move(200, 200)
 
     collect_fn()
     for step in range(max_attempts):
-        if container_selector is not None:
+        keep_going = True
+        if hover_fn is not None:
             # Re-computed fresh on every attempt -- unlike the fixed
             # coordinate above, this stays correct even if the
             # container's own real position shifts between scroll
             # steps (new content appended, old content evicted, a
             # scrollbar appearing/disappearing on a real, non-mock
-            # target). See this function's own "Seventh revision"
-            # docstring paragraph.
-            page.locator(container_selector).hover()
-        delta = randomized_scroll_delta(rng)
+            # target). See this function's own "Eighth revision"
+            # docstring paragraph for why this is a caller-supplied
+            # bool-returning callable, not a bare page.locator(...)
+            # .hover() call inline here.
+            keep_going = hover_fn()
 
-        def _wheel_trigger(delta: float = delta) -> None:
-            page.mouse.wheel(0, delta)
+        if keep_going:
+            delta = randomized_scroll_delta(rng)
 
-        keep_going = True
-        if trigger_and_wait_fn is not None:
-            # See this module's own docstring's "Fifth revision" for
-            # why the trigger is handed to the caller instead of being
-            # run first and waited on afterward -- that ordering is
-            # exactly the race this revision closes.
-            keep_going = trigger_and_wait_fn(_wheel_trigger)
-        else:
-            _wheel_trigger()
+            def _wheel_trigger(delta: float = delta) -> None:
+                page.mouse.wheel(0, delta)
+
+            if trigger_and_wait_fn is not None:
+                # See this module's own docstring's "Fifth revision" for
+                # why the trigger is handed to the caller instead of
+                # being run first and waited on afterward -- that
+                # ordering is exactly the race this revision closes.
+                keep_going = trigger_and_wait_fn(_wheel_trigger)
+            else:
+                _wheel_trigger()
         # **Sixth revision, a real bug in the "Fifth revision" above,
         # confirmed by hand (docs/REQUIREMENTS.md section 9 entry 17):**
         # the pause+collect for *this* attempt must still run even when
@@ -554,7 +611,9 @@ def scroll_and_collect(
         # the final page's own window every single time, not a race --
         # this function's own opening paragraph already promises
         # collect_fn() runs after *every* attempted step, no exceptions,
-        # and this revision actually keeps that promise.
+        # and this revision actually keeps that promise. "Eighth
+        # revision": the same guarantee now covers a `hover_fn` that
+        # returned `False` too, not just `trigger_and_wait_fn`.
         page.wait_for_timeout(randomized_pause_ms(pause_ms, step, max_attempts, rng))
         collect_fn()
         if not keep_going:
@@ -567,7 +626,7 @@ def collect_html_snapshots(
     pause_ms: int,
     trigger_and_wait_fn: Callable[[Callable[[], None]], bool] | None = None,
     rng: random.Random | None = None,
-    container_selector: str | None = None,
+    hover_fn: Callable[[], bool] | None = None,
 ) -> list[str]:
     """The ``"parsed_html"`` half of docs/REQUIREMENTS.md section 9 entry
     14's progressive-collection fix: captures ``page.content()`` after
@@ -579,9 +638,9 @@ def collect_html_snapshots(
     strings, since only the caller knows which field is the real identity
     key to deduplicate by.
 
-    ``trigger_and_wait_fn``/``rng``/``container_selector`` are passed
-    straight through to :func:`scroll_and_collect` -- see its own
-    docstring for all three.
+    ``trigger_and_wait_fn``/``rng``/``hover_fn`` are passed straight
+    through to :func:`scroll_and_collect` -- see its own docstring for
+    all three.
     """
     snapshots: list[str] = []
     scroll_and_collect(
@@ -591,7 +650,7 @@ def collect_html_snapshots(
         lambda: snapshots.append(page.content()),
         trigger_and_wait_fn,
         rng,
-        container_selector,
+        hover_fn,
     )
     return snapshots
 

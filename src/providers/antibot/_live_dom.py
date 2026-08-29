@@ -54,7 +54,7 @@ def collect_live_dom_items_progressively(
     id_field: str = "post_id",
     trigger_and_wait_fn: Callable[[Callable[[], None]], bool] | None = None,
     rng: random.Random | None = None,
-    container_selector: str | None = None,
+    hover_fn: Callable[[], bool] | None = None,
 ) -> list[dict[str, Any]]:
     """The ``"live_dom"`` half of docs/REQUIREMENTS.md section 9 entry
     14's progressive-collection fix for entry 13's confirmed DOM
@@ -82,8 +82,9 @@ def collect_live_dom_items_progressively(
     :func:`~src.providers.antibot._scroll.scroll_and_collect` -- see its
     own docstring.
 
-    ``container_selector`` (docs/REQUIREMENTS.md section 9 entry 17's
-    "Seventh revision"): also passed straight through -- see
+    ``hover_fn`` (docs/REQUIREMENTS.md section 9 entry 17's "Eighth
+    revision", replacing the "Seventh revision"'s ``container_selector``):
+    also passed straight through -- see
     :func:`~src.providers.antibot._scroll.scroll_and_collect`'s own
     docstring.
     """
@@ -95,9 +96,7 @@ def collect_live_dom_items_progressively(
             if key is not None and key not in collected:
                 collected[key] = item
 
-    scroll_and_collect(
-        page, max_attempts, pause_ms, _collect, trigger_and_wait_fn, rng, container_selector
-    )
+    scroll_and_collect(page, max_attempts, pause_ms, _collect, trigger_and_wait_fn, rng, hover_fn)
     return list(collected.values())
 
 
