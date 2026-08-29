@@ -3693,6 +3693,25 @@ Callable[[], bool] | None` — نفس شكل `trigger_and_wait_fn` بالظبط
 الـwheel trigger بس استمرار الـcollect/pause). `scripts/verify-like-ci.sh`
 بالكامل نظيف.
 
+### تأكيد CI حقيقي ثاني (push 2، run 33277674139) -- الإصلاح مؤكَّد، البق المنفصل باقي زي المتوقع
+
+**36 passed، 1 failed** (`537.00s`). الفشلة الوحيدة:
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch` --
+**بالظبط** البق المنفصل المسجَّل تحت، مش مفاجأة. كل حاجة تانية عدّت،
+بما فيهم:
+- الاختباران الأساسيان بتاع بند 17 (`test_progressive_parsed_html_recovers_every_virtualization_window`،
+  `test_progressive_live_dom_recovers_every_virtualization_window`).
+- `test_unhandled_interstitial_blocks_further_loading_after_the_first_batch`
+  -- **التأكيد الحقيقي على CI للإصلاح (hover fail-fast + dismiss +
+  retry)**: مكنش بيعدي في push 1 (كراش 0/5)، ودلوقتي بيعدي.
+- `test_mock_target_dom_virtualization_live.py::test_parsed_html_only_recovers_the_final_virtualization_window`
+  (اللي كرّش محليًا) عدّى هنا -- تأكيد إضافي إنه فعلًا كراش عرضي
+  (موارد الـsandbox)، مش بق حتمي.
+
+**القرار المتفق عليه اتنفّذ بالكامل: دُفع مع ترك البق المنفصل
+(`feed_interstitial.html`) كـfollow-up موثَّق، مش عائق لتسليم إصلاح
+الـhover.**
+
 ### السويت المحلي الكامل (`tests/integration/`، مش بس اختباري بند 17) -- الدرس المتعلَّم اتطبّق
 
 29 ملف اختبار، 37 اختبار إجمالًا: **27 نجحوا، 9 فشلوا، 1 skipped**
@@ -3764,6 +3783,16 @@ DOM-virtualization). **مسجَّل هنا كـfollow-up منفصل، لسه م�
 تنفيذ** -- يحتاج نفس المنهجية اللي اتّبعناها مع `feed.html` (قياس
 مباشر لـ`document.body.offsetHeight` بعد أول batch مقابل
 `window.innerHeight`، مش افتراض) قبل أي إصلاح.
+
+**تأكيد إضافي حقيقي من CI push 2 نفسه (run 33277674139)، مش تخمين
+بعد كده:** `progressive_container_diagnostic_log` بتاع
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch`
+سجّل نفس القيمة **بالظبط** (`y: 78.86666870117188`, `height: 445`)
+عبر **كل الثلاث محاولات المتتالية** -- صفر تغيير، مش حتى بكسر بكسل
+واحد. ده تأكيد مباشر (مش استنتاج): الصفحة فعلاً **صفر مسافة scroll
+حقيقية خالص** بعد الدفعة الأولى (5 منشورات، ارتفاع الحاوية 445px
+بس) -- الفرضية فوق (مش نقص تدريجي، نقص تام من الأول) اتأكّدت بالدليل
+المباشر، مش هيبقى لغز محتاج تشخيص إضافي وقت تنفيذ الإصلاح لاحقًا.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
