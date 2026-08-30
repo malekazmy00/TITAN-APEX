@@ -4313,7 +4313,167 @@ integration.py` نفسه 100%). `scripts/verify-like-ci.sh` بالكامل نظ�
 failed (نفس فئة "مفيش إنترنت حقيقي" المعروفة بالحرف، صفر تغيير)، 1
 skipped** — صفر رجعة.
 
-**لسه معملتش push** — جاهز للتأكيد على CI حقيقي.
+**تحديث (بعد الـpush):** اتأكّد فعليًا على CI حقيقي — GitHub Actions run
+[33316135693](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33316135693)
+(commit `efd5a19`)، `completed`/`success`، **37/37 اختبار نجحوا**، صفر
+رجعة. بند 19 (fpscanner) مقفول رسميًا.
+
+### 20. استكمال بند 10 (الجزء الأخير): محاكاة حركة الماوس — خط أساس مؤقت + إعادة استخدام hook بند 17، واكتشاف حقيقي لباج hang في Camoufox أثناء التنفيذ
+
+**السياق:** آخر جزء متبقي من بند 10 بعد إغلاق JA4 (بند 19، dead end
+مؤكَّد) وfpscanner (بند 19، log-only score، مؤكَّد على CI). خطة
+المستخدم المتفق عليها: (1) خط أساس مؤقت جاهز الاستخدام (مش تدريب موديل
+من الصفر)، (2) إعادة استخدام hook الـhover الموجود من بند 17 (مش
+معمارية جديدة)، (3) بنية أساسية لcorpus حركات مسجّلة حقيقية (مؤجَّلة/
+موازية، مش مطلوبة دلوقتي)، (4) تحذير من إعادة تشغيل حرفية لنفس
+التسجيلة مستقبلاً (session-replay bot detection، ReMouse dataset). هنا
+توثيق الخطوتين 1 و2 بس، زي ما اتفق عليه.
+
+#### الخطوة 1: اختيار المكتبة (مقارنة حقيقية، مش افتراض)
+
+اتقارن مكتبتين، الاتنين اتفحصوا فعليًا قبل الاختيار:
+
+| | **oxymouse** (المُختار) | **DaiCapra/Natural-Mouse-Movements-Neural-Networks** (اتراجع) |
+|---|---|---|
+| التبعيات | PyPI package خفيف (`pip install oxymouse`)، بيجيب `scipy`/`numpy`/`noise` (C extension لـPerlin) كـtransitive deps بس | يحتاج Keras/TensorFlow runtime كامل + إدارة ملفات وزن موديل مدرَّب سلفًا (`.h5`-style) في `/models/` |
+| الجاهزية | جاهز فورًا (`OxyMouse(algorithm).generate_coordinates(...)`) | يحتاج تحميل/تحميل موديل + إعداد إضافي |
+| القرار | **مناسب لخط أساس مؤقت صراحة** (زي ما وصفه المستخدم) — بصمة تبعيات أخف، متوافقة مع أسلوب المشروع "pure-function-first" | اتراجع تحديدًا لثقل التبعية، مش لجودة تقنية أقل — الحل الطويل الأمد (بند 3، corpus حقيقي) هيتفوق على الاتنين بالمناسبة |
+
+المصادر: [oxymouse على PyPI](https://pypi.org/project/oxymouse/) (MIT)،
+[DaiCapra/Natural-Mouse-Movements-Neural-Networks على GitHub](https://github.com/DaiCapra/Natural-Mouse-Movements-Neural-Networks).
+
+**تثبيت `oxymouse` احتاج فعليًا (مش نظريًا) تعديلين في بيئة النظام**:
+`gcc` (مفقود، بيبني C extension بتاع `noise`) و`python3.12-dev`
+(`Python.h` مفقود) — اتحلّوا بـ`apt-get install`. بعدهم `uv pip install
+oxymouse --python .venv/bin/python` نجح، وأضيف كـdependency حقيقي في
+`pyproject.toml` (مش venv-only) — `oxymouse==1.1.0` (pinned للـrelease
+اللي اتفحص فعليًا بالإيد، مش نطاق مفتوح — oxymouse مفيهوش py.typed
+marker ولا semver guarantee موثّق، فأي توسيع للنطاق لازم نفس إعادة
+الفحص اليدوي دي).
+
+**الخوارزميات التلاتة بتاعة oxymouse اتفحصوا فعليًا بالإيد، مش
+اتفترضوا متساويين** (طلب `(200,200) → (600,400)`):
+- **`bezier`** (**المُختار كـdefault**): منحنى سلس، بيوصل فعليًا لنقطة
+  الهدف بالظبط.
+- **`gaussian`**: باج حقيقي — بيتخطى الهدف بمسافة كبيرة، وبعدين
+  "يتيليبورت" لنقطة الهدف كآخر نقطة في المسار (مش منحنى سلس خالص —
+  الآخر 3 نقاط حقيقية: `[(914,467),(931,467),(600,400)]`).
+- **`perlin`**: مبيوصلش لنقطة الهدف بشكل موثوق خالص — النقطة الأخيرة
+  طلعت `(189,196)` بدل `(600,400)` المطلوبة.
+
+هذا هو المبرر المباشر لاختيار `bezier` كـdefault، ولتصميم
+`move_mouse_along_path()` بحيث **يضيف دايمًا حركة أخيرة دقيقة للهدف
+الحقيقي** بعد أي مسار من المولّد، بغض النظر عن نتيجة الخوارزمية نفسها —
+تعويض مباشر عن عدم موثوقية `gaussian`/`perlin` المؤكَّدة بالدليل، مش
+تصميم افتراضي.
+
+#### الخطوة 2: نقطة الاتصال المعمارية — إعادة استخدام hook بند 17
+
+`src/providers/antibot/_mouse_movement.py` (جديد): `PathGenerator =
+Callable[[int,int,int,int], list[tuple[int,int]]]` — **مولّد المسار
+نفسه هو الـdependency المحقونة، مش seed عشوائي** (نفس شكل
+`trigger_and_wait_fn`/`hover_fn` بتوع بند 17 بالظبط) — لأن خوارزميات
+oxymouse بتسحب من `random` العام مباشرة (اتأكّد من كود
+`bezier_mouse.py` نفسه: `random.randint`/`random.uniform` على مستوى
+الموديول، مش `random.Random` محقون) فمفيش طريقة نـseed-ها بأمان بدون
+تسريب حالة عشوائية لكود تاني غير مرتبط. `oxymouse_path_generator()`
+(deferred import — نفس مبدأ "دفع التكلفة بس عند الاستخدام الفعلي"
+الموثّق لـCamoufox/Playwright نفسهم) + `move_mouse_along_path(page,
+from_x, from_y, to_x, to_y, path_generator)`.
+
+**التوصيلة الفعلية**: `_hover_feed_container_before_scroll()` (نفس
+دالة بند 17's "Eighth revision" في `camoufox_provider.py`/
+`patchright_provider.py`) — قبل استدعاء `container.hover()` الحالي (اللي
+بيعمل actionability check ويظل زي ما هو تمامًا، بما فيه آلية الـtimeout/
+dismiss-click/retry بتاعت بند 17)، بيتحسب `container.bounding_box()`
+(بتاكد بالفحص المباشر لكود Playwright نفسه: `bounding_box()` **مبيعملش**
+pointer-interception check زي `hover()` — يرجع box حتى لو العنصر متغطي
+بـoverlay)، وبعدين `move_mouse_along_path()` بيحرّك الماوس (الوهمي) من
+آخر موضع معروف لمركز الـcontainer، **بمسار منحني حقيقي بدل القفزة
+الفورية الواحدة اللي `Locator.hover()` بيعملها** (اتأكّد من كود
+Playwright نفسه: `hover()` بينادي `mouse.move()` مرة واحدة بس، بدون أي
+خطوات وسيطة). هذا **ترقية لشكل الحركة اللي بتوصل لنفس الهدف، مش hook
+جديد ولا نقطة استدعاء جديدة** — بالظبط زي ما طلب المستخدم.
+
+**توافق ترتيب click→hover→wheel (بند 9)، اتفحص صراحة**: نقرة
+`click_selector` الأولية (كوكي-consent/interstitial-dismiss، بند 9)
+بتحصل **مرة واحدة، قبل أي scroll خالص** — قبل ما `_hover_feed_container
+_before_scroll` يتعرّف أصلاً كـclosure. الحركة الجديدة بتحصل بس جوه
+حلقة الـscroll (لكل محاولة)، بعد النقرة الأولية بوقت طويل — صفر تعارض
+أو ازدواجية في تحديد موضع الماوس بين الاتنين. نقرة الـdismiss التانية
+(الاحتياطية، جوه `_hover_feed_container_before_scroll` نفسها لو
+`hover()` وقعت في timeout) لسه زي ما هي — الحركة الجديدة بتحصل *قبلها*،
+مش بدالها.
+
+#### اكتشاف حقيقي أثناء التحقق المحلي: `page.mouse.move(0, 0)` بيعلّق Camoufox إلى الأبد على صفحة حقيقية
+
+**دليل مباشر، مش افتراض** — بعد كتابة الكود وتوصيله، اختبار
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch` (اللي
+كان بينجح في 13 ثانية قبل التعديل، اتأكّد بـbaseline مباشر بعد
+`git stash`) بدأ يعلّق **للأبد** (SIGKILL بعد 180 ثانية في CI-style
+subprocess timeout، مش مجرد بطء). عزل السبب اتم بسلسلة تجارب معزولة
+(isolated repro scripts)، مش تخمين:
+1. مسار كامل يدوي (goto + click + wait + bounding_box + move) خارج
+   scrapy/twisted — نجح فورًا (0.004s للـmove).
+2. نفس المسار بس عبر `_default_camoufox_solve` الحقيقية مباشرة (main
+   thread، بدون scrapy) — **علّق بالظبط زي المسار الكامل** — استبعد
+   نظرية "المشكلة في الـthreading/twisted".
+3. طباعة كل نقطة في المسار *قبل* استدعاء `page.mouse.move()` كشفت إن
+   أول نقطة في مسار bezier هي `(0, 0)` — نفس القيمة الابتدائية اللي
+   اتحطت لـ`_last_cursor_position` (كانت مبنية على افتراض إنها "نفس
+   نقطة بداية الماوس الموثّقة في Playwright" — افتراض غير مُتحقَّق منه
+   فعليًا ضد صفحة حقيقية، بالظبط النوع اللي قاعدة "لا افتراض قيد بيئة"
+   موجودة عشان تمسكه).
+4. اختبار مباشر ومركّز: `page.mouse.move(0, 0)` **لوحده**، بعد نفس
+   click+wait، على نفس الصفحة الحقيقية — **علّق للأبد** (SIGKILL بعد
+   30 ثانية، مفيش أي return). نفس الاستدعاء بالظبط كان بيرجع فورًا على
+   `about:blank`.
+
+**الخلاصة**: `(0, 0)` تحديدًا (زاوية الـviewport اليسرى العلوية) بتسبب
+hang حقيقي غير معروف السبب الجذري بدقة (على الأرجح تفاعل خاص بمحرك
+Firefox/Camoufox headless مع نقطة الأصل بالظبط) — مش باج في oxymouse
+ولا في منطق الاستهلاك بتاعنا. **الإصلاح**: `_last_cursor_position`
+الابتدائية اتغيّرت لـ`(200, 200)` — **نفس القيمة الثابتة المُثبَتة
+فعليًا وآمنة من زمان في نفس الملف** (`_scroll.py`'s `scroll_and_collect`
+لما `hover_fn=None`، من بند 17's "Fourth revision") بدل قيمة "أدق
+نظريًا" بس معملهاش اختبار فعلي قبل كده. اتطبّق نفس التغيير في
+`patchright_provider.py` (احتياطيًا، مش لأن نفس الباج اتأكّد فيه
+تحديدًا — Chromium مختلف عن Firefox، ومفيش سبب أصلاً نُفضّل `(0,0)`
+حتى لو المحرك ده معندوش نفس المشكلة).
+
+#### التحقق المحلي (بعد الإصلاح)
+
+- `ruff check` + `mypy --strict` نظيفين على الملفات التلاتة
+  المتأثرة (`_mouse_movement.py`، `camoufox_provider.py`،
+  `patchright_provider.py`).
+- **6 اختبارات وحدة جديدة** لـ`_mouse_movement.py`
+  (`tests/unit/providers/antibot/test_mouse_movement.py`): استهلاك
+  المسار بالترتيب، الحركة الأخيرة الدقيقة الإجبارية (حتى مع مولّد
+  "يتخطى" الهدف زي `gaussian` الحقيقي)، `ValueError` على مسار فاضي،
+  الـdefault هو `bezier`، ودخان حقيقي (smoke test) لـ`oxymouse_path_
+  generator()` نفسها. **346 اختبار وحدة PASSED** (كان 340)، تغطية 100%
+  للملف الجديد، 99% لكل من `camoufox_provider.py`/`patchright_provider.py`
+  (زي ما كانت قبل التعديل بالظبط — نفس الأسطر الاستثنائية `# pragma: no
+  cover`).
+- `scripts/verify-like-ci.sh` بالكامل نظيف (lint + mypy + unit +
+  contract + test-environment unit، **173 test-environment PASSED**).
+- **تحقق حي حقيقي (مش mock) ضد stack حقيقي شغّال محليًا (docker compose
+  فعليًا شغّال، ده كان متاح فعليًا في البيئة دي — اتأكّد بدل ما
+  يتفترض غير متاح)**: كل الـ5 configs اللي بتستخدم `progressive_
+  extraction: true` (المسار الوحيد المتأثر بالتغيير ده) اتغطّوا بالكامل:
+  - `test_mock_target_interstitial_live.py` (3 اختبارات: unhandled/
+    dismissed-camoufox/dismissed-patchright) — **PASSED كلهم**،
+    `test_camoufox_dismisses_the_interstitial_and_yields_every_batch`
+    بقى بيخلّص في ~11 ثانية بدل ما يعلّق للأبد.
+  - `test_mock_target_dom_virtualization_progressive_live.py` (2
+    اختبار: parsed_html/live_dom) — **PASSED كلهم**، نفس عدد الـitems
+    المتوقَّع (40 post_id) بدون أي رجعة.
+
+**الحالة**: جاهز للـpush والتأكيد الأول على CI حقيقي (فتح اللوج الفعلي،
+مش الاكتفاء بنتيجة PASS/FAIL مجردة، زي العادة). بند 3 (بنية corpus
+الحركات المسجّلة) مؤجَّل/موازي، برضه مع تحذير session-replay bot
+detection (ReMouse dataset) اللي اتسجّل في docstring الموديول الجديد
+كـforward-reference لتصميم مستقبلي.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

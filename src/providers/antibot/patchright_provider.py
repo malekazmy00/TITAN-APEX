@@ -57,6 +57,10 @@ from src.providers.antibot._live_dom import (
     extract_live_dom_items,
 )
 from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
+from src.providers.antibot._mouse_movement import (
+    move_mouse_along_path,
+    oxymouse_path_generator,
+)
 from src.providers.antibot._scroll import (
     collect_html_snapshots,
     scroll_to_load_lazy_content,
@@ -376,6 +380,20 @@ def _default_patchright_solve(  # pragma: no cover
                         # own comment for the full reasoning on why this
                         # stays a raw count, not a "missing ids" diff.
                         progressive_page_post_ids: list[str] = []
+                        # docs/REQUIREMENTS.md section 9 entry 20: same
+                        # reasoning and shape as camoufox_provider.py's
+                        # identical variables, including the (200, 200)
+                        # starting value -- see that module's own comment
+                        # for the full explanation of why (0, 0) hangs
+                        # there. That specific hang was only confirmed
+                        # against Camoufox/Firefox, not against this
+                        # provider's own Chromium -- (200, 200) is used
+                        # here too anyway, both for consistency and
+                        # because there is no actual reason to prefer
+                        # (0, 0) even if this engine turns out not to
+                        # share the bug.
+                        _mouse_path_generator = oxymouse_path_generator()
+                        _last_cursor_position: tuple[int, int] = (200, 200)
 
                         def _hover_feed_container_before_scroll() -> bool:
                             """Same real, CI-confirmed regression and
@@ -385,8 +403,36 @@ def _default_patchright_solve(  # pragma: no cover
                             Patchright's own TimeoutError/Error instead.
                             See camoufox_provider.py's own comment for
                             the full reasoning.
+
+                            docs/REQUIREMENTS.md section 9 entry 20:
+                            same curved-approach-before-hover upgrade as
+                            camoufox_provider.py's identical helper --
+                            see that module's own docstring for the full
+                            reasoning.
                             """
+                            nonlocal _last_cursor_position
                             container = page.locator(_FEED_CONTAINER_SELECTOR)
+                            try:
+                                box = container.bounding_box(
+                                    timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS
+                                )
+                            except (PatchrightTimeoutError, PatchrightError) as exc:
+                                box = None
+                                logger.debug(
+                                    "patchright_provider.progressive_hover_bounding_box_failed",
+                                    extra={"url": url, "reason": str(exc)},
+                                )
+                            if box is not None:
+                                target_x = int(box["x"] + box["width"] / 2)
+                                target_y = int(box["y"] + box["height"] / 2)
+                                move_mouse_along_path(
+                                    page,
+                                    *_last_cursor_position,
+                                    target_x,
+                                    target_y,
+                                    _mouse_path_generator,
+                                )
+                                _last_cursor_position = (target_x, target_y)
                             try:
                                 container.hover(timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS)
                                 return True

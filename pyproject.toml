@@ -58,6 +58,19 @@ dependencies = [
     # this project already depends on -- confirmed against its own real
     # PyPI metadata (current release 1.62.1) before pinning.
     "patchright>=1.60,<2.0",
+    # docs/REQUIREMENTS.md section 9 entry 20 (item 10's mouse-simulation
+    # phase, temporary baseline): generates human-like curved cursor
+    # paths (see src/providers/antibot/_mouse_movement.py's own module
+    # docstring for the full library comparison against
+    # DaiCapra/Natural-Mouse-Movements-Neural-Networks, rejected for its
+    # heavier Keras/TensorFlow + model-weight-file footprint). Pinned to
+    # the exact release this project tested by hand (1.1.0, PyPI) --
+    # oxymouse ships no changelog/semver guarantee this project has
+    # independently verified, so widening this range later needs the
+    # same real, hands-on re-testing this pin itself was based on (this
+    # module's own docstring has the exact recorded output that
+    # justified choosing its "bezier" algorithm over "gaussian"/"perlin").
+    "oxymouse==1.1.0",
 ]
 
 [project.optional-dependencies]
@@ -126,4 +139,12 @@ mypy_path = "."
 
 [[tool.mypy.overrides]]
 module = ["scrapy.*", "twisted.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# docs/REQUIREMENTS.md section 9 entry 20: unlike camoufox/patchright
+# (both ship a real py.typed marker, confirmed by hand), oxymouse ships
+# neither a py.typed marker nor separate stub files -- confirmed the
+# same way (no py.typed anywhere under its installed package dir).
+module = ["oxymouse.*"]
 ignore_missing_imports = true

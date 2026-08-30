@@ -78,6 +78,10 @@ from src.providers.antibot._live_dom import (
     extract_live_dom_items,
 )
 from src.providers.antibot._login import log_login_outcome, perform_login_and_navigate
+from src.providers.antibot._mouse_movement import (
+    move_mouse_along_path,
+    oxymouse_path_generator,
+)
 from src.providers.antibot._scroll import (
     collect_html_snapshots,
     scroll_to_load_lazy_content,
@@ -625,6 +629,43 @@ def _default_camoufox_solve(  # pragma: no cover
                         # collect_fn() later manages to read back from
                         # the DOM/HTML.
                         progressive_page_post_ids: list[str] = []
+                        # docs/REQUIREMENTS.md section 9 entry 20 (item
+                        # 10's mouse-simulation phase): built once per
+                        # solve, not per scroll attempt -- an OxyMouse
+                        # instance is cheap to build but there's no
+                        # reason to rebuild it on every single hover.
+                        # `_last_cursor_position` tracks where the
+                        # (virtual) cursor actually is between attempts:
+                        # Playwright itself exposes no "read back the
+                        # current mouse position" API, so this closure
+                        # variable is the only way
+                        # `_hover_feed_container_before_scroll` below
+                        # knows the real "from" point for the next
+                        # curved move. Starts at (200, 200) -- the same
+                        # fixed point this file's own `hover_fn=None`
+                        # fallback (``_scroll.py``'s ``scroll_and_collect``)
+                        # has used unmodified since entry 17's "Fourth
+                        # revision", already proven safe here. **Not
+                        # (0, 0):** confirmed by hand, directly against
+                        # this exact target, that ``page.mouse.move(0, 0)``
+                        # hangs *indefinitely* (a real Camoufox/headless-
+                        # Firefox quirk moving the synthetic cursor to
+                        # the literal viewport origin, force-killed after
+                        # 30s with no return -- not merely slow) on a
+                        # real, non-``about:blank`` page, even though the
+                        # identical call returns in milliseconds on
+                        # ``about:blank`` -- (0, 0) looked like the
+                        # obvious "Playwright's own documented starting
+                        # position" choice at first, but was never
+                        # actually exercised against a real page before
+                        # this was caught, exactly the kind of assumption
+                        # this project's own "لا افتراض قيد بيئة" rule
+                        # exists to catch. A real, already-proven-safe
+                        # value is strictly safer than a theoretically
+                        # "more accurate" one that has never actually
+                        # been exercised against a real page.
+                        _mouse_path_generator = oxymouse_path_generator()
+                        _last_cursor_position: tuple[int, int] = (200, 200)
                         # TEMPORARY DIAGNOSTIC, TITAN_DEBUG_LOADING_RACE
                         # -gated (docs/REQUIREMENTS.md section 9 entry 17,
                         # a user review's direct follow-up: *why* does
@@ -744,8 +785,62 @@ def _default_camoufox_solve(  # pragma: no cover
                             ``scroll_and_collect`` can stop the loop
                             gracefully instead of the whole solve
                             crashing.
+
+                            **docs/REQUIREMENTS.md section 9 entry 20
+                            (item 10's mouse-simulation phase):** before
+                            the actionability-checked ``hover()`` calls
+                            below, the (virtual) cursor is first walked
+                            along a real, curved path toward the
+                            container's own current center --
+                            :func:`~src.providers.antibot._mouse_movement.move_mouse_along_path`,
+                            reusing this exact hook rather than a new
+                            one (see that module's own docstring for the
+                            full reasoning: ``Locator.hover()`` itself
+                            snaps the cursor there in a single instant
+                            jump, confirmed by reading Playwright's own
+                            source -- not what a real user's cursor
+                            does). This only changes *how* the cursor
+                            gets there; it changes nothing about
+                            ``hover()``'s own actionability check,
+                            timeout, or the dismiss-and-retry recovery
+                            below -- a curved approach path landing on
+                            an obscured container is exactly as blocked
+                            as an instant jump onto one, and ``hover()``
+                            still catches that the same way it always
+                            has. ``container.bounding_box()`` returning
+                            ``None`` (the container itself isn't visible
+                            at all, as opposed to merely obscured by an
+                            overlay -- confirmed from Playwright's own
+                            source: unlike ``hover()``, ``bounding_box()``
+                            performs no pointer-interception check of its
+                            own) skips the curved movement entirely and
+                            falls through to the unchanged ``hover()``
+                            calls below, which handle that case exactly
+                            as they already did before this revision.
                             """
+                            nonlocal _last_cursor_position
                             container = page.locator(_FEED_CONTAINER_SELECTOR)
+                            try:
+                                box = container.bounding_box(
+                                    timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS
+                                )
+                            except (PlaywrightTimeoutError, PlaywrightError) as exc:
+                                box = None
+                                logger.debug(
+                                    "camoufox_provider.progressive_hover_bounding_box_failed",
+                                    extra={"url": url, "reason": str(exc)},
+                                )
+                            if box is not None:
+                                target_x = int(box["x"] + box["width"] / 2)
+                                target_y = int(box["y"] + box["height"] / 2)
+                                move_mouse_along_path(
+                                    page,
+                                    *_last_cursor_position,
+                                    target_x,
+                                    target_y,
+                                    _mouse_path_generator,
+                                )
+                                _last_cursor_position = (target_x, target_y)
                             try:
                                 container.hover(timeout=DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS)
                                 return True
