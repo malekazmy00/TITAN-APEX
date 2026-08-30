@@ -3913,6 +3913,102 @@ context or browser has been closed`, `url: /feed`) -- مش مرتبطة
 النطاق (auto-trigger + فحص "مفيش عائق قريب" + هامش أمان سخي) بيحل
 المشكلة الأصلية بدون ما يكسر ضمانة الأمان الجوهرية.**
 
+### فرضية "browser crash" المتبقية: shm_size اتنفت بدليل قاطع، والسبب الحقيقي segfault معروف في Firefox نفسه بدون حل موثّق
+
+المستخدم راجع نسبة الكراش (18/216 ≈ 8.3% إجمالًا، 10.1% في اختبارات
+بند 13/14/17 مقابل 5.7% في اختبارات تانية) وطلب تأكيد فرضية `shm_size`
+(القيمة الافتراضية 64MB بتاعة Docker، سبب موثّق على نطاق واسع لكراشات
+Firefox headless عشوائية) بدليل مباشر قبل أي تعديل.
+
+**الفحص (بالترتيب اللي طُلب):**
+1. **`df -h /dev/shm`**: في الـsandbox المحلي، `3.8G` متاحة، صفر
+   استخدام — مش مقيّدة خالص.
+2. **`docker-compose.test.yml`**: صفر `shm_size` معرّف لأي service،
+   لكن **الأهم**: مفيش أي service اسمه Camoufox/Patchright/Playwright
+   في الملف من الأساس — Camoufox/Patchright بيتشغّلوا **مباشرة على
+   الـrunner نفسه** (خطوات `python -m camoufox fetch`/`playwright
+   install` في `ci.yml` بره أي container)، و`ci.yml`'s job نفسه
+   `runs-on: ubuntu-latest` **مش** `container:` — يعني قيد الـ64MB
+   الافتراضي بتاع Docker مالوش علاقة من الأساس بمعمارية المشروع ده.
+
+**الدليل الحاسم (نزّلت الـCI diagnostics artifact الحقيقية من نفس
+الـrun اللي كرّش، run 33280481152 — الملف ده أصلاً موجود جوه
+البنية التحتية للمشروع، `scripts/ci-check-oom.sh`، مش أداة جديدة):**
+- `oom-check.txt` (dmesg الحقيقي لنفس الـjob): **صفر رسائل OOM
+  خالص**، لكن السطر ده بالظبط:
+  ```
+  [376.238911] DOM Worker[9597]: segfault at 8 ip 00007ff79bae6c80
+  sp ... error 4 in libxul.so[...]
+  ```
+  **segfault حقيقي جوه محرك Firefox نفسه** (`libxul.so`)، جوه thread
+  "DOM Worker". **التوقيت متطابق بدقة**: الـsegfault حصل الساعة
+  `23:19:36.65`، والكراش الحقيقي المسجَّل (`camoufox_provider.
+  solve_crashed`) كان الساعة `23:19:34.8` — فرق ثانيتين، نفس الحدث.
+- `runner-stats.log` في نفس اللحظة: الذاكرة سليمة تمامًا
+  (`available: 5700-6400MB` من أصل `7938MB`)، و`shared` (تقريبًا
+  /dev/shm) ثابت عند `~51-54MB` طول الوقت — صفر ضغط، صفر نمو قبل
+  الكراش.
+- رسائل الـAppArmor "DENIED" جنب السطر ده عادية ومتكررة عشرات المرات
+  في نفس اللوج (كل تشغيلة Camoufox) — تأكيد إضافي إنها مش السبب،
+  ومطابق للإحصائية الأوسع (14 من 17 حالة كراش تاريخية كانت
+  `apparmor_denials_during_solve: 0`).
+
+**الخلاصة: فرضية `shm_size` اتنفت بدليل قاطع، مش "لسه بتحصل بعد
+محاولة إصلاح".** السبب الحقيقي segfault حقيقي في محرك Firefox نفسه.
+المستخدم بحث ولقى إن دي فئة قديمة معروفة في Bugzilla بتاع Firefox
+نفسه، بدون حل نهائي موثّق (مش bug نسخة قابل للإصلاح بترقية). **صفر
+تعديل اتنفّذ على `shm_size`** — الدليل بيقول كده مباشرة.
+
+### إعادة تأطير الهدف: اكتشاف وتعافي تلقائي، مش منع (قرار قائم على واقع محرك Firefox، مش استسلام)
+
+بما إن السبب مش قابل للإصلاح من عندنا (bug في محرك متصفح خارجي)،
+الهدف اتغيّر من "امنع الكراش" لـ"اكتشفه فورًا وتعافى منه تلقائيًا" —
+الحل الموثّق المعياري لهذه الفئة تحديدًا من الأعطال.
+
+**التنفيذ:**
+1. **استثناء مصنَّف جديد**: `BrowserCrashedError(AntibotError)`
+   (`src/core/exceptions.py`) — subclass، مش sibling، فكل
+   `except AntibotError` موجود يفضل شغّال زي ما هو، لكن أي caller
+   عايز يميّز الكراش تحديدًا يقدر.
+2. **`page.on("crash", ...)` و`browser.on(...)` مسجّلين فور الإنشاء**
+   (مش بعدين) في `camoufox_provider.py`/`patchright_provider.py`
+   الاتنين — قبل أي navigation أو شغل حقيقي. اكتشاف حقيقي أثناء
+   التنفيذ (مش افتراض): Camoufox's context manager بيرجّع إما
+   `Browser` حقيقي أو `BrowserContext` دائم حسب وضع التشغيل
+   (`reveal_type` أكّد `Browser | BrowserContext`)، ولهم أسماء أحداث
+   مختلفة (`"disconnected"` مقابل `"close"`) — الكود بيفحص
+   `isinstance` بدل ما يفترض نوع واحد. Patchright's `p.chromium.
+   launch()` بيرجّع `Browser` حقيقي دايمًا، فـ`"disconnected"`
+   مباشرة كافية هناك.
+3. لما `page.on("crash")`/الحدث المناسب يطلق، الـflag `browser_crashed`
+   بيتسجّل، وأي `PlaywrightError`/`PatchrightError` بعد كده بيتحوّل
+   لـ`BrowserCrashedError` تحديدًا (مش `AntibotError` عام) — استثناء
+   مصنَّف، مش "Target closed" غامض.
+4. `CamoufoxProvider.solve()`/`PatchrightProvider.solve()`: حلقة
+   retry بتلتقط `BrowserCrashedError` تحديدًا بس (مش أي `AntibotError`
+   تاني — طلب صريح/رفض غير مرتبط بيفضل يفشل فورًا، من غير إعادة
+   محاولة عبثية) وتعيد نداء `solve_fn` بالكامل — بما إن `_default_
+   camoufox_solve`/`_default_patchright_solve` بيعملوا `with
+   Camoufox(...)`/`p.chromium.launch()` جديد كل نداء، ده فعليًا
+   browser instance جديد تمامًا كل محاولة، مش نفس الجلسة المكسورة.
+   محدود بـ`max_browser_crash_attempts` (افتراضي **3**، نفس معيار
+   "أقصى 3 محاولات" اللي استُخدم قبل كده لمواضيع تانية في نفس
+   المشروع) — مش حلقة مفتوحة.
+
+**اتّحقّق محليًا:** `ruff`/`mypy --strict` نظيفين على الملفات
+الأربعة (`exceptions.py`، الـproviderين، اختباراتهم). 336 unit test
+PASSED إجمالًا (9 اختبارات جديدة: نجاح بعد كراشين ثم محاولة تالتة
+ناجحة، استنفاد الحد الأقصى ورفع الاستثناء، عدم إعادة محاولة
+`AntibotError` عادي، رفض `max_browser_crash_attempts<=0`، لكل من
+Camoufox وPatchright + اختبار للاستثناء نفسه). `scripts/verify-
+like-ci.sh` بالكامل نظيف، تغطية 100% محفوظة (منطق اكتشاف الكراش
+نفسه جوه `# pragma: no cover` بتاع الدالة المرتبطة بمتصفح حقيقي، زي
+باقي الكود المشابه؛ منطق الـretry نفسه، اللي *قابل* للاختبار عبر
+`solve_fn` المُحقَن، **متغطّى فعليًا** بالاختبارات الجديدة).
+
+**لسه معملتش push** — التنفيذ ده جاهز محليًا، منتظر مراجعة/تأكيد قبل
+أي دفع.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
