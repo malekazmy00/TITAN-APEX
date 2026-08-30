@@ -4970,7 +4970,17 @@ per-target-configurable. بما إن المشروع بيزحف targets كتير 
 - كل الـ8 اختبار حي المرتبط (بند 17 + بند 21 Step 1 + Step 2) اتأكّدوا
   مع بعض في تشغيلة واحدة، صفر تعارض.
 
-**الحالة**: جاهز للـpush والتأكيد الأول على CI حقيقي.
+**تحديث (بعد الـpush) — اتأكّد فعليًا على CI حقيقي:** GitHub Actions
+run [33339163520](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33339163520)
+(فرع `claude/entry21-step2-persistent-context`، commit `795024e`)،
+`completed`/`success`. اللوج الفعلي اتفتح وقُرِئ مباشرة: **398 unit +
+35 contract + 192 test-environment + 39 integration = صفر فشل** (كان
+38 integration في run بند 21 Step 1 — بالظبط الاختبار الجديد الواحد).
+`test_accumulated_profile_carries_a_cookie_into_a_completely_separate_later_run`
+PASSED — ولوج الـrun الثاني نفسه (مش محلي بس) أكّد تاني إن
+`mocktarget_warmup_session` ظهرت في كوكيز `/feed` من غير أي
+`warm_session_urls` في الطلب التاني خالص. **بند 10/21 بالكامل (Step 1 +
+Step 2) مقفول رسميًا.**
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
