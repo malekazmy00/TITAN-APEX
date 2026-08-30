@@ -4009,6 +4009,41 @@ like-ci.sh` بالكامل نظيف، تغطية 100% محفوظة (منطق ا�
 **لسه معملتش push** — التنفيذ ده جاهز محليًا، منتظر مراجعة/تأكيد قبل
 أي دفع.
 
+### مراجعة قبل الدفع: فجوة اختبار حقيقية اتلقطت (منطق التصنيف نفسه مش متغطّي مباشرة)
+
+المستخدم سأل تحديدًا: هل من ضمن الـ9 اختبارات الجداد فيه واحد بيتأكد
+من (أ) التصنيف الصحيح لحظة ما الحدث يتفعّل فعليًا، (ب) الـretry على
+instance جديد، (ج) التوقف بعد 3 محاولات؟ الفحص أظهر إن (ب) و(ج)
+متغطّيين، لكن (أ) لأ — كل الاختبارات الموجودة كانت بتحقن
+`BrowserCrashedError` جاهز في الـ`solve_fn` المزيَّف، مش بتتحقق من
+منطق التحويل نفسه (`browser_crashed` → أي استثناء).
+
+**الإصلاح:** فُصل منطق القرار في دالة نقية منفصلة
+`_classify_solve_exception(browser_crashed, url, exc)` في كل من
+`camoufox_provider.py`/`patchright_provider.py` — خارج الجزء المرتبط
+بمتصفح حقيقي (نفس مبدأ `randomized_scroll_delta`/
+`count_apparmor_camoufox_denials` بالظبط: منطق حقيقي مفصول عشان
+يتفحص بـ`bool` بسيط من غير محاكاة متصفح كامل). اتضاف اختباران مباشرين
+لكل provider: `browser_crashed=True` → لازم يرجع `BrowserCrashedError`
+بالظبط، `browser_crashed=False` → لازم يرجع `AntibotError` عادي بس.
+
+**اتّحقّق محليًا:** 340 unit test PASSED (95.03% تغطية)، `ruff`/
+`mypy --strict` نظيفين، `scripts/verify-like-ci.sh` نظيف.
+
+### تأكيد CI حقيقي (run 33284864438) — الآلية اشتغلت فعليًا 3 مرات في نفس الـrun
+
+**37 passed، صفر فشل** (`533.44s`). **الأهم: 3 كراشات حقيقية حصلت
+فعليًا في نفس الـrun، في 3 اختبارات مختلفة تمامًا** (`test_mock_
+target_camoufox_crawl_gets_real_posts_and_never_reaches_a_real_
+honeypot`، `test_mock_target_feed_yields_real_posts_from_the_json_
+api`، `test_mock_target_login_protected_live.py`) — كل واحدة اتصنّفت
+صح (`"browser_crashed": true` في لوج `solve_crashed`)، اتسجّلت
+كـ`camoufox_provider.browser_crash_retry` (مش استثناء غامض)، وانحلّت
+تلقائيًا (نجحت في المحاولة التالية). **قبل الإصلاح ده، الثلاث
+اختبارات دول كانوا هيفشلوا فعليًا** — دليل حي، مش نظري، إن الآلية
+بتحوّل الكراش من فشل صامت غامض لحدث معروف ومُدار، بالظبط الهدف اللي
+اتفق عليه.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
