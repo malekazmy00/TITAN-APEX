@@ -5087,7 +5087,50 @@ less than 60 minutes, not to exceed 90... Inspection rates less than
 لازم يفكّر فعليًا في المنطق والسيناريوهات، مش يشغّل `ruff`/`mypy`
 ويعتبر المراجعة خلصت.**
 
-**الحالة**: توثيق وتصميم بس — **صفر كود/أداة/slash-command اتنفّذ لحد
-دلوقتي**، زي ما طلب المستخدم صراحة ("وثّق... قبل أي تنفيذ"). جاهز
-للتنفيذ الفعلي (بناء الـprompt/الآلية اللي جلسة الـValidator هتستخدمها
-عمليًا) لما المستخدم يأكّد.
+**تحديث: اتنفّذ فعليًا.** الآلية العملية:
+
+- **`.claude/agents/reviewer.md`** (جديد): تعريف subagent مستقل بالبروتوكول
+  الكامل فوق كـsystem prompt — أدوات `Read, Grep, Glob, Bash` بس
+  (**صفر `Edit`/`Write`** — المراجع بيقرأ ويشغّل ويبلّغ، مايصلحش
+  الكود بنفسه، نفس تصميم القسم فوق بالحرف).
+- **`.claude/skills/review/SKILL.md`** (جديد): يستدعي الـsubagent
+  فوق عبر أداة `Agent` مباشرة (`subagent_type: "reviewer"`) — مش
+  عبر آلية `context: fork`/`agent:` في الـfrontmatter (مصدر البحث
+  عن الصيغة دي رجّع محتوى اتعلّم عليه تحذير أمان حقيقي من الـharness
+  نفسه — "instruction-shaped pattern" — فاستُبعدت الحقول المشكوك
+  فيها زي `permissionMode: bypassPermissions` بالكامل، واستُخدمت بدالها
+  آلية `Agent` tool اللي أنا نفسي متأكد منها ومستخدمها فعليًا في نفس
+  الجلسة دي).
+
+**باگين حقيقيين اتلقطوا واتصلحوا بالفحص المباشر (مش افتراض)**:
+1. `description:` في `reviewer.md` كان فيه `:` جوه نص غير مقتبَس —
+   ده كسر الـYAML فعليًا (`yaml.scanner.ScannerError: mapping values
+   are not allowed here`) — اتأكّد بتشغيل `yaml.safe_load` مباشرة،
+   واتصلح بوضع الوصف بين quotes.
+2. `argument-hint:` في `SKILL.md` كان فيه `[...]` غير مقتبَس — YAML
+   فسّرها كـflow-sequence وكسرت الملف (`ParserError`) — نفس طريقة
+   الاكتشاف والإصلاح.
+
+**قيد حقيقي مكتشف بالتجربة المباشرة، مش من التوثيق الرسمي**: جرّبت
+استدعاء `Agent(subagent_type: "reviewer")` **في نفس الجلسة دي** بعد
+إنشاء الملفين — اترفض بالرسالة الحرفية `"Agent type 'reviewer' not
+found. Available agents: claude, claude-code-guide, Explore,
+general-purpose, Plan, statusline-setup"`، **حتى بعد إصلاح الـYAML
+الاتنين**. يعني قائمة الـagent types بتتحدد مرة واحدة بس عند بداية
+الجلسة، مش بتتحدّث لحظيًا لما ملف جديد يتضاف. اتأكّد ده فعليًا (مش
+مجرد قراءة توثيق) عبر GitHub issues حقيقية في مستودع
+`anthropics/claude-code` (طلبات feature مفتوحة، مش bugs مسجّلة كحل):
+[#29202](https://github.com/anthropics/claude-code/issues/29202)،
+[#22050](https://github.com/anthropics/claude-code/issues/22050)،
+[#5738](https://github.com/anthropics/claude-code/issues/5738) — كلهم
+بيأكّدوا إن hot-reload لـ`.claude/agents/` **مش متاح لحد دلوقتي** في
+Claude Code (عكس الـSkills، اللي بتتحدّث لحظيًا فعلاً). **ده مش عيب في
+التصميم** — بالعكس، بما إن البروتوكول أصلاً محتاج جلسة جديدة تمامًا
+(نفس مبدأ العزل، نقطة بحث 1)، القيد ده مش عائق حقيقي على منهج العمل
+المقصود، بس معناه **التحقق الحي الأول لازم يحصل من جلسة جديدة فعلاً**
+(مش من نفس الجلسة اللي بنت الملفين)، مش من غير هذه الجلسة الحالية.
+
+**الحالة**: الملفين جاهزين ومُدفوعين، الـYAML سليم (اتأكّد مباشرة).
+**لسه محتاج تأكيد حي أول** (`/review <ref> -- <task>` من جلسة Claude
+Code جديدة تمامًا) — ده الاختبار الحقيقي المتبقي، مش هينفّذ من نفس
+الجلسة الحالية للسبب الموثّق فوق.
