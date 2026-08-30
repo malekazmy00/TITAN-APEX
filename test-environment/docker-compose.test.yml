@@ -48,6 +48,10 @@ services:
       # scoring -- see security/fpscanner_integration.py's own module
       # docstring.
       ENABLE_FINGERPRINT_SCORING: ${ENABLE_FINGERPRINT_SCORING:-true}
+      # docs/REQUIREMENTS.md section 9 entry 21, Step 1: log-only Referer
+      # path-consistency + session warm-up scoring -- see
+      # security/referer_session_integration.py's own module docstring.
+      ENABLE_REFERER_SESSION_CHECK: ${ENABLE_REFERER_SESSION_CHECK:-true}
       ENABLE_HONEYPOTS: ${ENABLE_HONEYPOTS:-true}
       ENABLE_DECOY_DATA: ${ENABLE_DECOY_DATA:-true}
       ENABLE_MARKUP_RANDOMIZER: ${ENABLE_MARKUP_RANDOMIZER:-true}
@@ -101,6 +105,7 @@ services:
       BOTD_LOG_PATH: /logs/botd_flags.log
       JA4_LOG_PATH: /logs/ja4_fingerprints.log
       FINGERPRINT_LOG_PATH: /logs/fingerprint_reports.log
+      REFERER_SESSION_LOG_PATH: /logs/referer_session_reports.log
     volumes:
       - ./logs:/logs
     networks:

@@ -44,6 +44,29 @@ def test_load_valid_config(tmp_path: Path) -> None:
     assert config.click_selector is None
     assert config.antibot_provider == "byparr"
     assert config.extraction_mode == "parsed_html"
+    assert config.warm_session_urls == []
+
+
+def test_warm_session_urls_is_read_from_yaml(tmp_path: Path) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 1: an ordered list,
+    read as-is (no validation beyond "it's a list of strings" -- there's
+    nothing structurally invalid about any particular URL list here, the
+    same reasoning start_urls's own lack of extra validation already
+    has)."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nwarm_session_urls:\n"
+        '  - "https://quotes.toscrape.com/"\n'
+        '  - "https://quotes.toscrape.com/category/1"\n',
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.warm_session_urls == [
+        "https://quotes.toscrape.com/",
+        "https://quotes.toscrape.com/category/1",
+    ]
 
 
 def test_render_js_and_max_concurrency_are_read_from_yaml(tmp_path: Path) -> None:

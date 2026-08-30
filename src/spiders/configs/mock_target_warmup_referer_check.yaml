@@ -1,0 +1,26 @@
+# docs/REQUIREMENTS.md section 9 entry 21, Step 1 (Referer path
+# consistency + session warm-up, Levels 1/2): a plain (no antibot
+# solving at all -- test-environment/anubis/botPolicy.yaml's own new
+# ALLOW rule lets this chain straight through) crawl against
+# mock-target's own real /warmup-home -> /warmup-category ->
+# /warmup-target navigation graph, proving GenericSpider's own
+# warm_session_urls chain (not a header forged after the fact) produces
+# a real, connected Referer + session-cookie chain -- see
+# generic_spider.py's own _parse_warm_session_step docstring for the
+# full mechanics, and security/referer_session_integration.py's own
+# module docstring for what mock-target scores on each hop.
+name: mock_target_warmup_referer_check
+start_urls:
+  - "http://localhost:8080/warmup-target"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: false
+warm_session_urls:
+  - "http://localhost:8080/warmup-home"
+  - "http://localhost:8080/warmup-category"
+selectors:
+  item: '[data-role="warmup-item"]'
+  fields:
+    item_id: "::attr(data-item-id)"
+    text: '[data-role="warmup-item-text"]::text'

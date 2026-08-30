@@ -117,6 +117,16 @@ class MockTargetConfig:
             "FINGERPRINT_LOG_PATH",
             "test-environment/mock-target/security/fingerprint_reports.log",
         )
+        # docs/REQUIREMENTS.md section 9 entry 21, Step 1: log-only,
+        # multi-signal (Referer shape + path consistency + warm-up
+        # session cookie) scoring for the /warmup-home -> /warmup-category
+        # -> /warmup-target chain -- see
+        # security/referer_session_integration.py's own module docstring.
+        self.enable_referer_session_check: bool = _env_bool("ENABLE_REFERER_SESSION_CHECK", True)
+        self.referer_session_log_path: str = os.environ.get(
+            "REFERER_SESSION_LOG_PATH",
+            "test-environment/mock-target/security/referer_session_reports.log",
+        )
 
 
 def get_config() -> MockTargetConfig:

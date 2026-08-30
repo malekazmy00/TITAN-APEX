@@ -154,8 +154,66 @@ class GenericSpider(scrapy.Spider):
         return meta
 
     def _build_start_requests(self) -> Iterator[scrapy.Request]:
+        # docs/REQUIREMENTS.md section 9 entry 21, Step 1: a non-empty
+        # `warm_session_urls` means the very first request goes there
+        # instead of straight to `start_urls` -- see
+        # `_parse_warm_session_step`'s own docstring for the full chain.
+        # Empty (every existing config) keeps this exact, unmodified
+        # direct-to-`start_urls` behavior.
+        if self.config.warm_session_urls:
+            yield scrapy.Request(
+                self.config.warm_session_urls[0],
+                callback=self._parse_warm_session_step,
+                meta={"warm_session_index": 0},
+            )
+            return
         for url in self.start_urls:
             yield scrapy.Request(url, callback=self.parse, meta=self._request_meta())
+
+    def _parse_warm_session_step(
+        self, response: Response, **kwargs: Any
+    ) -> Iterator[scrapy.Request]:
+        """docs/REQUIREMENTS.md section 9 entry 21, Step 1 (Referer path
+        consistency + session warm-up): walks ``config.warm_session_urls``
+        one real hop at a time via :meth:`~scrapy.http.Response.follow`
+        -- never a loop of independent, unrelated ``scrapy.Request``
+        calls -- specifically so Scrapy's own ``RefererMiddleware``/
+        ``CookiesMiddleware`` (both already enabled, confirmed by
+        direct code inspection: neither this spider nor its own
+        ``from_crawler`` ever touches ``SPIDER_MIDDLEWARES``/the cookie
+        middleware) build a real, connected Referer chain and accumulate
+        real session cookies across every hop -- exactly the "visit the
+        homepage/category page(s) first" technique this entry's own
+        sources document (Scrapfly/webautomation.io), not a header
+        forged after the fact. Confirmed directly against Scrapy's own
+        source (``spidermiddlewares/base.py``'s ``process_spider_output``,
+        ``spidermiddlewares/referer.py``'s ``get_processed_request``):
+        the Referer set on any request this method yields is computed
+        from *this* callback's own ``response`` -- i.e. the warm-up page
+        actually being processed right now -- automatically, with no
+        extra code needed here beyond building the right request chain.
+
+        Once every ``warm_session_urls`` hop is done, follows to every
+        real ``start_urls`` target with the *last* warm-up page as their
+        genuine Referer -- the actual point of this whole mechanism:
+        the real target is reached having already "browsed" a real,
+        connected path, not cold.
+
+        This callback itself never yields items -- ``warm_session_urls``
+        pages are pure waypoints, not something this crawl is configured
+        to extract from (they typically have no ``selectors`` at all
+        matching what this target's real content looks like).
+        """
+        index = response.meta["warm_session_index"] + 1
+        if index < len(self.config.warm_session_urls):
+            yield response.follow(
+                self.config.warm_session_urls[index],
+                callback=self._parse_warm_session_step,
+                meta={"warm_session_index": index},
+            )
+            return
+        for url in self.start_urls:
+            yield response.follow(url, callback=self.parse, meta=self._request_meta())
 
     async def start(self) -> AsyncIterator[scrapy.Request]:
         # Scrapy >= 2.13 calls this instead of start_requests() — see

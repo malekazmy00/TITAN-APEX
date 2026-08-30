@@ -26,6 +26,10 @@ from security.file_logger import get_file_logger
 from security.fpscanner_integration import log_fingerprint_report
 from security.honeypot_logger import log_honeypot_trigger
 from security.ja4_integration import JA4_HEADER_NAME, log_ja4_fingerprint
+from security.referer_session_integration import (
+    WARMUP_SESSION_COOKIE_NAME,
+    log_referer_session_check,
+)
 from structural.ab_variant import choose_variant, container_tag_for
 from structural.cookie_wall import (
     ACCEPT_PATH,
@@ -91,6 +95,9 @@ def create_app(
     botd_logger = get_file_logger("mock_target.botd", cfg.botd_log_path)
     ja4_logger = get_file_logger("mock_target.ja4", cfg.ja4_log_path)
     fingerprint_logger = get_file_logger("mock_target.fingerprint", cfg.fingerprint_log_path)
+    referer_session_logger = get_file_logger(
+        "mock_target.referer_session", cfg.referer_session_log_path
+    )
     app.config["CSRF_TOKEN_STORE"] = CsrfTokenStore()
     app.config["AUTH_SESSION_STORE"] = SessionStore(ttl_seconds=cfg.session_ttl_seconds)
 
@@ -375,6 +382,52 @@ def create_app(
             user_agent=request.headers.get("User-Agent"),
         )
         return jsonify({"status": "ok"})
+
+    # docs/REQUIREMENTS.md section 9 entry 21, Step 1 (Referer path
+    # consistency + session warm-up, Levels 1/2): a real, tiny navigation
+    # chain -- /warmup-home -> /warmup-category -> /warmup-target --
+    # deliberately allowed straight through Anubis (test-environment/
+    # anubis/botPolicy.yaml's own new ALLOW rule) so a *plain* Scrapy
+    # crawl (no antibot solving at all) can exercise the actual Referer/
+    # cookie mechanics this entry is about, in isolation from the
+    # separate, much bigger architectural question (documented, deferred
+    # to Step 2) of how a real, browser-driven antibot solve would need
+    # to carry a warm-up chain through its own single, continuous
+    # session.
+    @app.get("/warmup-home")
+    def warmup_home() -> Response:
+        has_cookie = request.cookies.get(WARMUP_SESSION_COOKIE_NAME) is not None
+        if cfg.enable_referer_session_check:
+            log_referer_session_check(
+                referer_session_logger, request.path, request.referrer, has_cookie
+            )
+        response = Response(render_template("warmup_home.html"))
+        # Only issued here, never refreshed on /warmup-category or
+        # /warmup-target -- if either of those silently reissued it when
+        # missing, a cold, disconnected hit would always look identical
+        # to a real warmed-up one, defeating the whole point of Level 2's
+        # cookie check.
+        if not has_cookie:
+            response.set_cookie(WARMUP_SESSION_COOKIE_NAME, secrets.token_hex(8))
+        return response
+
+    @app.get("/warmup-category")
+    def warmup_category() -> Response:
+        has_cookie = request.cookies.get(WARMUP_SESSION_COOKIE_NAME) is not None
+        if cfg.enable_referer_session_check:
+            log_referer_session_check(
+                referer_session_logger, request.path, request.referrer, has_cookie
+            )
+        return Response(render_template("warmup_category.html"))
+
+    @app.get("/warmup-target")
+    def warmup_target() -> Response:
+        has_cookie = request.cookies.get(WARMUP_SESSION_COOKIE_NAME) is not None
+        if cfg.enable_referer_session_check:
+            log_referer_session_check(
+                referer_session_logger, request.path, request.referrer, has_cookie
+            )
+        return Response(render_template("warmup_target.html"))
 
     return app
 

@@ -4694,10 +4694,140 @@ shape **موضوعة في obstacle map كفجوة موثّقة ومصدرها pa
 كإشارة إضافية log-only (نفس فلسفة fpscanner) بمجرد ما البنية التحتية
 دي موجودة.
 
-**الحالة**: توثيق وتصميم بس، **لسه مفيش كود اتكتب لأي من الموضوعين
-دول** — قرار المستخدم صراحة كان "سجّل الإجابات والقرارات"، مش "ابدأ
-التنفيذ". جاهز يبدأ التنفيذ (بند الـReferer/session-warmup الأول، حسب
-القرار فوق) لما المستخدم يأكّد.
+**تحديث: بند الـReferer/session-warmup Step 1 (Levels 1/2) اتنفّذ فعليًا
+— تفاصيله الكاملة تحت.** Step 2 (سياق متصفح مستمر + أداة الكوكيز
+التراكمية) لسه بحث وتصميم بس، بدون كود، زي ما اتفق عليه صراحة.
+
+#### تنفيذ Step 1: Referer path consistency + session warm-up (Levels 1/2 بس)
+
+**اكتشاف معماري حقيقي قبل أي كود (مش افتراض)**: فحصت `botPolicy.yaml`
+و`byparr_middleware.py`/`camoufox_provider.py` مباشرة — كل الـroutes
+محمية بنفس سياسة Anubis (مفيش استثناء)، وكل استدعاء لـ`provider.solve()`
+بيفتح متصفح جديد تمامًا من الصفر (صفر استمرارية cookies/referer عبر
+استدعاءات منفصلة). يعني تنفيذ warm-up على مستوى GenericSpider/Scrapy
+بس مش هيثبت صح ضد mock-target الحالي (كله خلف Anubis) من غير حل مشكلة
+الـproviders كمان — ده بالظبط اللي خلّى المستخدم يوافق على **خطوتين
+منفصلتين**: Step 1 (GenericSpider + target خفيف جديد بدون antibot
+للتحقق) دلوقتي، Step 2 (سياق متصفح مستمر في الـproviders) بحث/تصميم
+مؤجَّل.
+
+**1) `GenericSpider` (`src/spiders/generic_spider.py` + `spider_config.py`)**:
+حقل جديد `warm_session_urls: list[str]` (افتراضي `[]`، صفر تغيير لأي
+config موجود). لما يكون متظبط، `_build_start_requests()` بيروح لأول
+URL فيه بدل `start_urls` مباشرة، و`_parse_warm_session_step()` (جديدة)
+بتمشي في السلسلة hop بـhop عبر `response.follow()` الحقيقي (مش
+`scrapy.Request()` منفصلة) — لحد ما تخلص، وبعدين تتفرّع لكل
+`start_urls`. **اتأكّد مباشرة من كود Scrapy نفسه** (`spidermiddlewares/
+base.py`'s `process_spider_output`، `spidermiddlewares/referer.py`'s
+`get_processed_request`): الـReferer بيتحسب تلقائيًا من الـ`response`
+الحالي لأي request بيتعمل yield منه — مفيش كود إضافي مطلوب هنا غير
+بناء السلسلة صح، `RefererMiddleware`/`CookiesMiddleware` (الاتنين
+مفعّلين بالفعل، اتأكّد بالفحص المباشر) بيعملوا الشغل. `DefaultReferrerPolicy`
+(نفس Scrapy's default) بيبعت الـURL الكامل لأي طلب non-TLS-downgrade —
+اتأكّد من كود Scrapy نفسه (`NoReferrerWhenDowngradePolicy`).
+
+**2) `mock-target` (target خفيف جديد، بدون antibot)**:
+`security/referer_session_integration.py` (جديد، نفس بنية
+`fpscanner_integration.py`): `score_referer_shape` (Level 1 — ملحوظة
+مهمة: **مبيحسبش غياب الـReferer كمخالفة لوحده** — مصدر Scrapfly نفسه
+بيقول "الصفحة الأولى ممكن تيجي من غير Referer خالص" كبداية طبيعية،
+فالحكم على الغياب سياقي مش شكلي، ده شغل Level 2) + `score_referer_path_
+consistency` (Level 2 — تطابق مسار حقيقي `VALID_PREDECESSOR_PATHS` +
+وجود `mocktarget_warmup_session` cookie، كل واحدة نقطة مستقلة). ثلاث
+routes جديدة (`/warmup-home` → `/warmup-category` → `/warmup-target`)
+في `app.py` + templates بسيطة — `/warmup-home` بس هو اللي بيصدر
+الكوكي (لو الـcategory/target عملوا كده كمان، أي طلب "بارد" هيبان
+"مسخّن" غلط، وده يلغي هدف Level 2 بالكامل). `config.py`:
+`ENABLE_REFERER_SESSION_CHECK`/`REFERER_SESSION_LOG_PATH`، نفس نمط
+`fpscanner`.
+
+**اكتشاف حقيقي تاني أثناء التحقق المحلي (Anubis rule ordering)**: أول
+محاولة لإضافة `path_regex: ALLOW` rule لـ`/warmup-*` في `botPolicy.yaml`
+**فشلت فعليًا** — لوج Anubis نفسه أكّد إن كل الطلبات بتتعمل لها
+`"explicit deny"` بواسطة `bot/ai-catchall` (من `ai-block-aggressive.yaml`
+المستورد قبل الـrule بتاعتي) — Anubis بيقيّم القواعد بالترتيب،
+وأول match حاسم (مش WEIGH) بيكسب فورًا، فالقاعدة بتاعتي كانت متحطوطة
+متأخر أوي عشان توصل. **الحل**: نقل الـrule لأول حاجة في `bots:` list،
+قبل أي استيراد deny/challenge — اتأكّد فعليًا بعد النقل (curl مباشر
+بـuser-agent Scrapy الحقيقي، `200` + محتوى حقيقي بدل صفحة "Oh noes!").
+
+**اكتشاف حقيقي تالت (orphaned file handle)**: أثناء تصحيح مباشر،
+مسحت ملف اللوج (`rm -f`) بينما الـgunicorn worker شغّال ومفتوح عليه —
+سلوك Unix حقيقي: الملف اتشال من المسار، بس الـworker فضل يكتب على الـ
+inode القديم (invisible لأي قراءة بالمسار). **الدرس المسجَّل**: اختبار
+`test_mock_target_warmup_referer_live.py` نفسه **تصميمه سليم من
+الأساس** — بيسجّل حجم/عدد سطور "قبل" (نفس نمط `test_mock_target_
+live.py`'s الموجود لـ`HONEYPOT_LOG`)، **مبيمسحش الملف خالص** — الغلط
+كان في خطوة تصحيح يدوية بس، مش في الكود المُسلَّم.
+
+**التحقق المحلي الكامل**:
+- `ruff`/`mypy --strict` نظيفين.
+- اختبارات وحدة جديدة: `test_generic_spider.py` (6 اختبارات لسلسلة
+  الـwarm-up)، `test_spider_config.py` (اختبار قراءة الحقل الجديد)،
+  `test_referer_session_integration.py` (12 اختبار لدوال التسجيل
+  النقية)، `test_app.py` (6 اختبارات route-level جديدة). **352 اختبار
+  وحدة PASSED** (كان 346)، **192 test-environment PASSED** (كان 173،
+  +19: 12 لـreferer_session_integration + 6 route-level + تعديل
+  fixture)، تغطية 100%/95%+ محفوظة.
+- **تحقق حي حقيقي (docker compose فعليًا شغّال محليًا)**: `test_mock_
+  target_warmup_referer_check.yaml` (plain crawl، صفر antibot) اتشغّل
+  فعليًا 3 مرات متتالية، كلهم PASSED — اللوج الفعلي بتاع mock-target
+  اتقرا مباشرة بعد الفحص، مش افتراض: `level1_score: 0`، `level2_score:
+  0`، `has_warmup_session_cookie: true` للـ`/warmup-category` و
+  `/warmup-target` الاتنين، بـReferer مطابق تمامًا لمسار التنقل
+  الحقيقي (`/warmup-home` → `/warmup-category` → `/warmup-target`).
+- **صفر رجعة**: كل الـ20 اختبار حي المرتبط بـmock-target (بما فيهم
+  الـinterstitial/DOM-virtualization الحساسين من بند 17/20) لسه
+  PASSED بعد تعديل `generic_spider.py` وإعادة ترتيب `botPolicy.yaml`.
+
+**الحالة**: جاهز للـpush والتأكيد الأول على CI حقيقي.
+
+#### بحث Step 2 (مؤجَّل، توثيق فقط — سياق متصفح مستمر + أداة كوكيز تراكمية)
+
+كل الادعاءات دي اتفحصت فعليًا (WebFetch على المصدر الأساسي)، بتصحيحات
+مسجّلة بوضوح:
+
+1. **`browser_context.storage_state()`** — ✅ **مؤكَّد بالكامل** ضد
+   [توثيق Playwright الرسمي](https://playwright.dev/python/docs/api/class-browsercontext#browser-context-storage-state):
+   API حقيقي، بيصدّر cookies + localStorage (+ IndexedDB اختياريًا)
+   لملف JSON، وبيترجع عبر `browser.new_context(storage_state=...)` —
+   نفس الشكل بالظبط في الـsync API اللي المشروع ده بيستخدمه.
+
+2. **GitHub issue #36139 (بگ session cookies)** — ❌ **غير مؤكَّد
+   كما ادُّعي — تصحيح مهم**. الـissue حقيقي وبنفس الرقم
+   ([microsoft/playwright#36139](https://github.com/microsoft/playwright/issues/36139))،
+   لكنه بيوثّق مشكلة في `launch_persistent_context`/`user_data_dir`
+   (ملف profile كروم حقيقي)، **مش في `storage_state()`**. الأنكى:
+   نص الـissue نفسه بيقول العكس تمامًا — الكاتب بيستخدم
+   `storage_state()` **كحل فعلي وشغّال** للمشكلة دي: *"Using
+   `context.storage_state()` can persist session cookies by saving and
+   loading the state"*. **القرار**: أي تصميم مستقبلي لازم يستشهد
+   بالـissue ده كتحذير خاص بـ`launch_persistent_context` بس، مش دليل
+   على عيب في `storage_state()` — العكس هو الصحيح.
+
+3. **نمط RRD/time-series downsampling** — ✅ **مؤكَّد** ضد
+   [توثيق RRDtool الرسمي](https://oss.oetiker.ch/rrdtool/doc/rrdcreate.en.html)
+   (المصدر الأصلي للاسم نفسه): آلية الـRRA (Round Robin Archive) —
+   دقة كاملة لبيانات حديثة، تجميع (consolidation) تدريجي لبيانات أقدم،
+   حجم ملف ثابت مسبقًا (circular buffer، أقدم بيانات بتتمسح تلقائي).
+   **تصحيح بسيط**: الأرقام المحدَّدة اللي اتذكرت (أسبوع/شهر/6 شهور/
+   سنتين) توضيحية بس، مش قيم افتراضية موثّقة من RRDtool نفسه.
+
+4. **مكتبات بايثون جاهزة لنفس النمط** — 🟡 **السوق ضعيف فعليًا،
+   الأمانة تقتضي قول كده صراحة**. `rrdtool` (bindings حقيقية لمكتبة C،
+   آخر إصدار 2022، وتبعية C-extension حقيقية)، `pyrrd` (متروك تمامًا،
+   آخر إصدار 2011)، `whisper` (pure Python فعلاً، لكن مربوط بمشروع
+   Graphite ومعماريته، آخر إصدار 2022)، `tsdownsample` (نشط فعليًا
+   لحد 2026، لكن بيحل مشكلة مختلفة تمامًا — تبسيط عرض/رسم بياني، مش
+   تخزين متعدد الدقة، وكمان compiled Rust extension). **القرار**: مفيش
+   مكتبة بايثون نقية نشطة تحل النمط ده تحديدًا — **بناء تنفيذ مبسّط
+   خاص بينا أصح من الاعتماد على أي من دول**، لما نوصل لمرحلة تنفيذ
+   Step 2 فعليًا.
+
+**الحالة**: بحث وتوثيق بس لـStep 2 — صفر كود، زي ما اتفق عليه صراحة.
+هيتنفّذ لاحقًا كـescalation منفصل موثّق (فرع + regression شامل، نفس
+منهجية بند 17)، مدموج مع أداة الكوكيز التراكمية (تصميم RRD-style) اللي
+المستخدم طلبها.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

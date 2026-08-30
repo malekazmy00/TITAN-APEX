@@ -555,6 +555,135 @@ def test_parse_logs_and_yields_nothing_on_403(config_path: str) -> None:
     assert results == []
 
 
+# --- Referer path consistency + session warm-up, Levels 1/2 (docs/
+# REQUIREMENTS.md section 9 entry 21, Step 1) ---------------------------
+
+WARM_SESSION_CONFIG_YAML = CONFIG_YAML + (
+    "\nwarm_session_urls:\n"
+    '  - "https://quotes.toscrape.com/warmup-home"\n'
+    '  - "https://quotes.toscrape.com/warmup-category"\n'
+)
+
+
+@pytest.fixture
+def warm_session_config_path(tmp_path: Path) -> str:
+    path = tmp_path / "warm_session_target.yaml"
+    path.write_text(WARM_SESSION_CONFIG_YAML, encoding="utf-8")
+    return str(path)
+
+
+def test_start_requests_go_direct_to_start_urls_when_no_warm_session_configured(
+    config_path: str,
+) -> None:
+    """Regression sentinel: warm_session_urls defaults to an empty list --
+    every existing config (this fixture has no such field at all) must
+    keep the exact prior direct-to-start_urls behavior, unchanged."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert len(requests) == 1
+    assert requests[0].url == "https://quotes.toscrape.com/"
+    assert requests[0].callback == spider.parse
+
+
+def test_start_requests_goes_to_first_warm_session_url_when_configured(
+    warm_session_config_path: str,
+) -> None:
+    """Happy path: a configured warm_session_urls means the very first
+    request goes there, not to start_urls -- the real target is only
+    reached after the full warm-up chain (see
+    test_parse_warm_session_step_* below)."""
+    spider = GenericSpider(config_path=warm_session_config_path)
+
+    requests = _run_async_start(spider)
+
+    assert len(requests) == 1
+    assert requests[0].url == "https://quotes.toscrape.com/warmup-home"
+    assert requests[0].callback == spider._parse_warm_session_step
+    assert requests[0].meta["warm_session_index"] == 0
+
+
+def test_parse_warm_session_step_follows_to_the_next_warm_url(
+    warm_session_config_path: str,
+) -> None:
+    """Middle of the chain: two warm_session_urls configured, so finishing
+    step 0 must follow to step 1 -- not to start_urls yet."""
+    spider = GenericSpider(config_path=warm_session_config_path)
+    request = Request(
+        "https://quotes.toscrape.com/warmup-home", meta={"warm_session_index": 0}
+    )
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/warmup-home", body=b"<html></html>", request=request
+    )
+
+    results = list(spider._parse_warm_session_step(response))
+
+    assert len(results) == 1
+    assert results[0].url == "https://quotes.toscrape.com/warmup-category"
+    assert results[0].callback == spider._parse_warm_session_step
+    assert results[0].meta["warm_session_index"] == 1
+
+
+def test_parse_warm_session_step_follows_to_every_start_url_after_the_last_hop(
+    warm_session_config_path: str,
+) -> None:
+    """End of the chain: the last configured warm_session_urls hop must
+    follow to every real start_urls target, with the real per-target meta
+    (parse callback, antibot/render settings, etc.) -- not the bare
+    warm_session_index-only meta the warm-up hops themselves carry."""
+    spider = GenericSpider(config_path=warm_session_config_path)
+    request = Request(
+        "https://quotes.toscrape.com/warmup-category", meta={"warm_session_index": 1}
+    )
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/warmup-category",
+        body=b"<html></html>",
+        request=request,
+    )
+
+    results = list(spider._parse_warm_session_step(response))
+
+    assert len(results) == 1
+    assert results[0].url == "https://quotes.toscrape.com/"
+    assert results[0].callback == spider.parse
+    assert results[0].meta["playwright"] is False
+    assert "warm_session_index" not in results[0].meta
+
+
+def test_parse_warm_session_step_supports_multiple_real_start_urls(tmp_path: Path) -> None:
+    """A warm-up chain fans out to *every* start_urls target, not just the
+    first -- each with the last warm-up page as its own real Referer
+    (Scrapy's own already-enabled RefererMiddleware computes this from
+    the response each request is yielded alongside; see
+    _parse_warm_session_step's own docstring)."""
+    config_file = tmp_path / "multi_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML.replace(
+            'start_urls:\n  - "https://quotes.toscrape.com/"',
+            'start_urls:\n  - "https://quotes.toscrape.com/a"\n'
+            '  - "https://quotes.toscrape.com/b"',
+        )
+        + '\nwarm_session_urls:\n  - "https://quotes.toscrape.com/warmup-home"\n',
+        encoding="utf-8",
+    )
+    spider = GenericSpider(config_path=str(config_file))
+    request = Request(
+        "https://quotes.toscrape.com/warmup-home", meta={"warm_session_index": 0}
+    )
+    response = HtmlResponse(
+        url="https://quotes.toscrape.com/warmup-home", body=b"<html></html>", request=request
+    )
+
+    results = list(spider._parse_warm_session_step(response))
+
+    assert [r.url for r in results] == [
+        "https://quotes.toscrape.com/a",
+        "https://quotes.toscrape.com/b",
+    ]
+    assert all(r.callback == spider.parse for r in results)
+
+
 def test_parse_does_not_treat_a_normal_200_as_rejected(config_path: str) -> None:
     """Sanity/regression check: the new 401/403 branch must not somehow
     swallow an ordinary successful response too."""

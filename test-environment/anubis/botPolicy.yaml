@@ -17,6 +17,22 @@
 ## /usr/share/docs/anubis/data or in the tarball you extracted Anubis from.
 
 bots:
+  # docs/REQUIREMENTS.md section 9 entry 21, Step 1 (Referer path
+  # consistency + session warm-up): MUST be the very first rule, not
+  # merely present -- a real, CI-confirmed finding, not assumed:
+  # Anubis evaluates rules top-to-bottom with first-match-wins
+  # semantics (confirmed directly from Anubis's own request log --
+  # every one of Scrapy's plain requests here was being denied by
+  # "bot/ai-catchall" (the `ai-block-aggressive.yaml` import below,
+  # matching Scrapy's own User-Agent string) *before* an identical
+  # ALLOW rule placed after it was ever reached at all). Moved here,
+  # before every deny/challenge rule, so these specific, deliberately
+  # unprotected test paths are never shadowed by anything below,
+  # regardless of what gets added to this policy later.
+  - name: warmup-referer-check-routes
+    path_regex: ^/warmup-(home|category|target)$
+    action: ALLOW
+
   # You can import the entire default config with this macro:
   # - import: (data)/meta/default-config.yaml
 

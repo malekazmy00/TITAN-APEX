@@ -138,6 +138,20 @@ class SpiderConfig(BaseModel):
     # unchanged behavior -- unauthenticated, exactly as before this
     # entry existed.
     login: LoginConfig | None = None
+    # docs/REQUIREMENTS.md section 9 entry 21, Step 1 (Referer path
+    # consistency + session warm-up, Levels 1/2 -- Level 3's session-wide
+    # delayed classification is a separate, later step): visited in
+    # order, each one via a real Scrapy request chain (GenericSpider's
+    # own `_parse_warm_session_step`), *before* any of `start_urls` --
+    # not a cosmetic pre-request, a real navigation hop each of Scrapy's
+    # own already-enabled `RefererMiddleware`/`CookiesMiddleware` sees
+    # and acts on exactly like any other in-crawl navigation, so the
+    # real Referer chain and any real session cookies a target sets
+    # along the way are both genuinely present by the time `start_urls`
+    # is finally reached -- not simulated after the fact. Empty (the
+    # default) keeps every existing config's exact prior behavior: a
+    # direct request to `start_urls` with no warm-up hop at all.
+    warm_session_urls: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:

@@ -25,6 +25,7 @@ def config(tmp_path: Path) -> MockTargetConfig:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.feed_rate_limit_threshold = 3
     cfg.feed_rate_limit_window_seconds = 60
     cfg.feed_page_size = 4
@@ -154,6 +155,91 @@ def test_fingerprint_report_handles_a_missing_body(client: FlaskClient) -> None:
     assert response.status_code == 200
 
 
+def test_warmup_home_sets_a_session_cookie(client: FlaskClient) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 1: the real entry
+    point of the warm-up chain issues the session cookie Level 2 later
+    checks for."""
+    response = client.get("/warmup-home")
+
+    assert response.status_code == 200
+    assert "mocktarget_warmup_session" in response.headers.get("Set-Cookie", "")
+
+
+def test_warmup_home_does_not_reissue_an_existing_cookie(client: FlaskClient) -> None:
+    """Regression sentinel: silently reissuing the cookie here would make
+    every request look "warmed up" regardless of real history -- see
+    app.py's own comment on this route for why only /warmup-home ever
+    sets it."""
+    client.set_cookie("mocktarget_warmup_session", "existing-token")
+
+    response = client.get("/warmup-home")
+
+    assert "Set-Cookie" not in response.headers
+
+
+def test_warmup_category_logs_a_clean_check_with_a_real_referer_and_cookie(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    """Happy path: a real predecessor Referer + an existing warm-up
+    cookie scores 0 on both levels."""
+    client.set_cookie("mocktarget_warmup_session", "existing-token")
+
+    response = client.get(
+        "/warmup-category", headers={"Referer": "http://localhost/warmup-home"}
+    )
+
+    assert response.status_code == 200
+    log_content = Path(config.referer_session_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["level"] == "INFO"
+    assert payload["level1_score"] == 0
+    assert payload["level2_score"] == 0
+
+
+def test_warmup_category_flags_a_cold_hit_with_no_referer_or_cookie(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    """Failure-adjacent case: hitting a deep page directly, with neither
+    a real predecessor Referer nor a warm-up cookie, scores both Level 2
+    violations -- exactly what our own scraper would look like today
+    without this entry's own GenericSpider warm_session_urls change."""
+    response = client.get("/warmup-category")
+
+    assert response.status_code == 200
+    log_content = Path(config.referer_session_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["level2_score"] == 2
+
+
+def test_warmup_target_logs_a_clean_check_after_a_real_multi_hop_chain(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    """The real, full chain -- not an isolated single-route check: a
+    genuine /warmup-home visit (issuing the cookie), then /warmup-target
+    with the category page as its Referer, must score 0 on both
+    levels."""
+    client.get("/warmup-home")
+
+    response = client.get(
+        "/warmup-target", headers={"Referer": "http://localhost/warmup-category"}
+    )
+
+    assert response.status_code == 200
+    log_content = Path(config.referer_session_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["level1_score"] == 0
+    assert payload["level2_score"] == 0
+
+
+def test_warmup_target_renders_the_extractable_item(client: FlaskClient) -> None:
+    response = client.get("/warmup-target")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'data-role="warmup-item"' in body
+    assert 'data-item-id="1"' in body
+
+
 def test_feed_page_renders_the_infinite_scroll_shell(client: FlaskClient) -> None:
     """The /feed page itself ships no posts server-side -- everything comes
     from /api/feed via the scroll listener, same shape as
@@ -251,6 +337,7 @@ def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.enable_dom_virtualization = False
     app = create_app(cfg)
@@ -269,6 +356,7 @@ def test_feed_page_window_size_is_configurable(tmp_path: Path) -> None:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.dom_virtualization_window_size = 3
     app = create_app(cfg)
@@ -287,6 +375,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_markup_randomizer = False
     cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
@@ -307,6 +396,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_honeypots = False
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
@@ -328,6 +418,7 @@ def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
@@ -370,6 +461,7 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False
@@ -394,6 +486,7 @@ def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     app = create_app(cfg)
@@ -415,6 +508,7 @@ def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path)
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_placeholder_content = False
@@ -435,6 +529,7 @@ def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.placeholder_delay_ms = 2000
@@ -452,6 +547,7 @@ def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = True
     cfg.enable_shadow_dom = False  # isolate the cookie-wall layer alone
     app = create_app(cfg)
@@ -508,6 +604,7 @@ def _shadow_dom_client(tmp_path: Path) -> FlaskClient:
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False  # isolate the shadow-DOM layer alone
     cfg.enable_shadow_dom = True
     app = create_app(cfg)
@@ -553,6 +650,7 @@ def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> 
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     app = create_app(cfg)
@@ -578,6 +676,7 @@ def _auth_client(
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False  # isolate the login/session layer alone
     cfg.enable_shadow_dom = False
     cfg.protected_feed_total_pages = protected_feed_total_pages
@@ -782,6 +881,7 @@ def _interstitial_client(
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.enable_cookie_wall = False  # isolate the interstitial layer alone
     cfg.enable_shadow_dom = False
     cfg.interstitial_trigger = trigger
