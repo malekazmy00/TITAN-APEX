@@ -1,0 +1,29 @@
+# docs/REQUIREMENTS.md section 9 entry 21, Step 2 (persistent browser
+# context across warm-up + a cross-call accumulated cookie jar): the
+# real, antibot-protected counterpart to
+# mock_target_warmup_referer_check.yaml (Step 1's own plain, non-antibot
+# config) -- exercises the actual provider-level mechanism this step is
+# about: warm_session_urls walked inside one continuous Camoufox
+# browser session before /feed itself, with use_accumulated_profile
+# persisting that session's own cookies across *separate* real solve()
+# calls too (CamoufoxProvider's own default cookie_jar_path,
+# var/cookie_jar.json, is shared across every real run of this exact
+# config, on purpose -- see cookie_jar_manager.py's own module
+# docstring).
+name: mock_target_accumulated_profile
+start_urls:
+  - "http://localhost:8080/feed"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+warm_session_urls:
+  - "http://localhost:8080/warmup-home"
+  - "http://localhost:8080/warmup-category"
+use_accumulated_profile: true
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'

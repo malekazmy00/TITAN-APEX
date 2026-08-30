@@ -604,6 +604,46 @@ def test_start_requests_goes_to_first_warm_session_url_when_configured(
     assert requests[0].meta["warm_session_index"] == 0
 
 
+def test_start_requests_go_direct_to_start_urls_when_antibot_needed_even_with_warm_session_urls(
+    tmp_path: Path,
+) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 2: an antibot-
+    protected target must NOT build the Step 1 Scrapy-level hop chain
+    (each hop would trigger its own independent, disconnected
+    provider.solve() call) -- warm_session_urls instead travels in the
+    real target request's own meta, for the provider itself to walk
+    inside one continuous browser session."""
+    config_file = tmp_path / "antibot_warm_session_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        'warm_session_urls:\n  - "https://quotes.toscrape.com/warmup-home"\n',
+        encoding="utf-8",
+    )
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert len(requests) == 1
+    assert requests[0].url == "https://quotes.toscrape.com/"
+    assert requests[0].callback == spider.parse
+    assert requests[0].meta["warm_session_urls"] == ["https://quotes.toscrape.com/warmup-home"]
+
+
+def test_request_meta_includes_warm_session_urls_and_use_accumulated_profile(
+    config_path: str,
+) -> None:
+    """Both new keys reach request.meta unconditionally (harmless no-ops
+    for a target that doesn't use them -- see _request_meta's own
+    comment) -- this is what byparr_middleware.py's own process_request
+    actually reads."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["warm_session_urls"] == []
+    assert requests[0].meta["use_accumulated_profile"] is False
+
+
 def test_parse_warm_session_step_follows_to_the_next_warm_url(
     warm_session_config_path: str,
 ) -> None:

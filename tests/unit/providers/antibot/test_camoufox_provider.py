@@ -28,6 +28,9 @@ def test_solve_returns_a_populated_solution() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         assert url == "https://example.com/"
         assert timeout_ms == 30_000
@@ -63,6 +66,9 @@ def test_post_load_wait_ms_reaches_the_solve_function() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         seen["post_load_wait_ms"] = post_load_wait_ms
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -100,6 +106,9 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         raise AntibotError(f"camoufox failed to solve {url}: browser launch failed")
 
@@ -157,6 +166,9 @@ def test_browser_crash_retries_on_a_fresh_call_and_eventually_succeeds() -> None
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         nonlocal calls
         calls += 1
@@ -186,6 +198,9 @@ def test_browser_crash_exhausts_max_attempts_and_raises() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         nonlocal calls
         calls += 1
@@ -214,6 +229,9 @@ def test_non_crash_antibot_error_is_not_retried() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         nonlocal calls
         calls += 1
@@ -247,6 +265,9 @@ def test_click_selector_reaches_the_solve_function() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         seen["click_selector"] = click_selector
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -270,6 +291,9 @@ def test_click_selector_defaults_to_none_when_not_given() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         assert click_selector is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -292,6 +316,9 @@ def test_zero_post_load_wait_ms_is_allowed() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -316,6 +343,9 @@ def test_extraction_selectors_reaches_the_solve_function() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         seen["extraction_selectors"] = extraction_selectors
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -339,6 +369,9 @@ def test_extraction_selectors_defaults_to_none_when_not_given() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         assert extraction_selectors is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -362,6 +395,9 @@ def test_solve_fn_items_reach_the_returned_solution() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         return _RawSolve(
             url=url,
@@ -390,6 +426,9 @@ def test_solve_fn_items_default_to_none_when_extraction_not_used() -> None:
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -397,3 +436,134 @@ def test_solve_fn_items_default_to_none_when_extraction_not_used() -> None:
     solution = provider.solve("https://example.com/")
 
     assert solution.items is None
+
+
+# --- docs/REQUIREMENTS.md section 9 entry 21, Step 2 (persistent
+# context across warm-up + a cross-call accumulated cookie jar) --------
+
+
+def test_warm_session_urls_reaches_the_solve_function() -> None:
+    seen: dict[str, list[str] | None] = {}
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+    ) -> _RawSolve:
+        seen["warm_session_urls"] = warm_session_urls
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    provider.solve(
+        "https://example.com/", warm_session_urls=["https://example.com/", "https://example.com/category"]
+    )
+
+    assert seen["warm_session_urls"] == [
+        "https://example.com/",
+        "https://example.com/category",
+    ]
+
+
+def test_warm_session_urls_defaults_to_none_when_not_given() -> None:
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+    ) -> _RawSolve:
+        assert warm_session_urls is None
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    solution = provider.solve("https://example.com/")
+
+    assert solution.status_code == 200
+
+
+def test_use_accumulated_profile_reaches_the_solve_function() -> None:
+    seen: dict[str, bool] = {}
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+    ) -> _RawSolve:
+        seen["use_accumulated_profile"] = use_accumulated_profile
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    provider.solve("https://example.com/", use_accumulated_profile=True)
+
+    assert seen["use_accumulated_profile"] is True
+
+
+def test_use_accumulated_profile_defaults_to_false_when_not_given() -> None:
+    """Backward compatible: every existing caller (including entry 17's
+    own test suite, which depends on complete isolation between calls)
+    must keep getting a genuinely fresh, empty profile by default."""
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+    ) -> _RawSolve:
+        assert use_accumulated_profile is False
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve)
+    solution = provider.solve("https://example.com/")
+
+    assert solution.status_code == 200
+
+
+def test_cookie_jar_path_reaches_the_solve_function() -> None:
+    """The provider *instance's* own configured path, not a per-call
+    default -- docs/REQUIREMENTS.md section 9 entry 21, Step 2."""
+    seen: dict[str, str] = {}
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+    ) -> _RawSolve:
+        seen["cookie_jar_path"] = cookie_jar_path
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=fake_solve, cookie_jar_path="/tmp/my-jar.json")
+    provider.solve("https://example.com/")
+
+    assert seen["cookie_jar_path"] == "/tmp/my-jar.json"

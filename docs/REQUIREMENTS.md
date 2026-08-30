@@ -4829,10 +4829,148 @@ run [33330929519](https://github.com/malekazmy00/TITAN-APEX/actions/runs/3333092
    خاص بينا أصح من الاعتماد على أي من دول**، لما نوصل لمرحلة تنفيذ
    Step 2 فعليًا.
 
-**الحالة**: بحث وتوثيق بس لـStep 2 — صفر كود، زي ما اتفق عليه صراحة.
-هيتنفّذ لاحقًا كـescalation منفصل موثّق (فرع + regression شامل، نفس
-منهجية بند 17)، مدموج مع أداة الكوكيز التراكمية (تصميم RRD-style) اللي
-المستخدم طلبها.
+**تحديث: Step 2 اتنفّذ فعليًا على فرع منفصل
+(`claude/entry21-step2-persistent-context`) — تفاصيله الكاملة تحت.**
+
+#### تنفيذ Step 2: سياق متصفح مستمر + أداة كوكيز تراكمية RRD-style
+
+**1) سياق متصفح مستمر عبر warm-up + الهدف الحقيقي (تعديل عالي الخطورة،
+فرع منفصل + regression شامل زي بند 17)**
+
+`camoufox_provider.py`/`patchright_provider.py`'s `_default_*_solve()`
+اتعدّلوا الاتنين: بدل `browser.new_page(ignore_https_errors=True)`
+المباشرة، دلوقتي `browser.new_context(ignore_https_errors=True,
+storage_state=loaded_state)` ثم `context.new_page()` — `loaded_state`
+بيكون `None` (سلوك مطابق تمامًا للقديم) إلا لو `use_accumulated_profile=True`.
+حلقة `warm_session_urls` (لو موجودة) بتمشي على **نفس الـ`page`** قبل
+أي navigation حقيقي — `page.goto(warm_url, timeout=..., referer=last_warm_url)`
+لكل URL، بترقيم الـReferer يدويًا (اتأكّد فعليًا: `page.goto()`
+**مايحسبش** الـReferer تلقائيًا من التنقل السابق على نفس الصفحة، عكس
+الكوكيز اللي بتتشارك تلقائيًا في نفس الـcontext — لازم تمرير `referer=`
+بنفسك عشان تكتمل سلسلة الـReferer زي بند 21's Step 1). Camoufox's
+own dual-mode context manager (Browser حقيقي غالبًا، أو BrowserContext
+نادرًا في نظرية اللانش persistent) اتعامل معاه بنفس الـisinstance check
+الموجود بالفعل من بند 17 — الفرع النادر (`BrowserContext`) بيستخدم
+`use_accumulated_profile` كـno-op موثّق (مفيش "create with storage_state"
+entry point لـpersistent-context launch أصلًا، ونفس الـissue
+microsoft/playwright#36139 بيوثّق تحديدًا القيد ده، مش `storage_state()`
+نفسها).
+
+**عند نجاح الحل**: `context.storage_state()` بيتحفظ عبر
+`record_new_session()` — أي فشل في الحفظ (قرص ممتلئ، صلاحيات) بيتسجّل
+كـwarning ومايوقفش الـcrawl، مش بيتعامل معاه كـfailure حقيقي.
+
+**اتفحصت فعليًا (مش افتراض) — API mechanics قبل الكود**:
+```python
+with Camoufox(headless=True) as browser:
+    context = browser.new_context()
+    ...
+    context.add_cookies([{"name": "test_cookie", ...}])
+    state = context.storage_state()  # cookie اتلقط فعليًا، بما فيها session cookie من غير expiry
+# متصفح جديد تمامًا، منفصل:
+with Camoufox(headless=True) as browser:
+    context2 = browser.new_context(storage_state=state_path)
+    context2.cookies()  # نفس الكوكي رجع فعليًا، حتى الـsession واحدة
+```
+اتأكّد بالحرف: `browser` من `Camoufox(headless=True)` نوعه الفعلي
+`playwright.sync_api._generated.Browser` (مش union نظري بس).
+
+**2) توسيع الواجهة (`AntibotProvider`) وكل الـproviders**
+
+`AntibotProvider.solve()` اتضاف ليه `warm_session_urls`/
+`use_accumulated_profile` (best-effort contract، نفس شكل
+`login_flow`/`progressive_extraction` بالظبط) — `ByparrProvider`
+بيسجّل warning ويكمل (مفيش live page عنده أصلًا). توثيق `LoginFlow`
+القديم (كان بيقول "دمج cookie jar عبر استدعاءات منفصلة محتاج architecture
+change أكبر، خارج النطاق") اتصحّح صراحة: الجزء ده *اتنفّذ فعليًا*،
+بس بشكل أضيق (jar محفوظ في ملف، مش عملية متصفح واحدة مستمرة بين
+الاستدعاءات — والفرق ده مش مهم من منظور الهدف نفسه، لأن متصفح جديد
+بيبدأ من حالة متراكمة بيبان بالظبط زي واحد ما اتقفلش خالص).
+
+**3) `SpiderConfig`/`GenericSpider`: تفريق معماري حقيقي بين antibot
+وغير antibot**
+
+اكتشاف معماري مهم قبل التنفيذ: تنفيذ warm-up عند `antibot_needed: true`
+على مستوى Scrapy (زي Step 1) **مش هيشتغل خالص** — كل hop هيعمل
+`solve()` منفصل تمامًا (صفر استمرارية). فالحل: `_build_start_requests()`
+بقى بيفرّق:
+- `antibot_needed: false` + `warm_session_urls` → نفس سلسلة Step 1
+  (Scrapy-level، `RefererMiddleware`/`CookiesMiddleware` الحقيقيين).
+- `antibot_needed: true` + `warm_session_urls` → **تخطّي** سلسلة
+  Scrapy تمامًا، وتمرير `warm_session_urls` في meta الطلب الحقيقي —
+  الـprovider نفسه بيمشي فيها جوه نفس الجلسة (الحل الحقيقي فوق).
+
+`use_accumulated_profile: bool` حقل جديد في `SpiderConfig`، بـvalidator
+زي `login`/`extraction_mode: live_dom` بالظبط (`antibot_needed: true`
++ `antibot_provider: camoufox|patchright` إجباري).
+
+#### `cookie_jar_manager.py` — أداة الكوكيز التراكمية
+
+`src/providers/antibot/cookie_jar_manager.py` (جديد، 100% تغطية،
+25 اختبار وحدة): `JarSession` (timestamp + storage_state)،
+`RetentionBucket` (age tier + sample interval)،
+`DEFAULT_RETENTION_BUCKETS` (أسبوع دقة كاملة، شهر يومي، 6 شهور
+أسبوعي، سنتين شهري — نفس الأرقام التوضيحية المتفق عليها، مسجّلة كتوضيحية
+مش رسمية من RRDtool). `apply_rrd_retention()`: لكل bucket غير كامل
+الدقة، تقسيم لـslots زمنية بعرض `sample_interval_seconds`، واختيار
+**عشوائي** (`rng.choice`) لجلسة واحدة من كل slot — مش "الأحدث دايمًا"
+(اتأكّد باختبار مباشر: بذور rng مختلفة بتختار جلسات مختلفة من نفس الـslot،
+نفس مبدأ تجنّب البصمة المنتظمة من بند 20). `enforce_max_total_size()`:
+لو لسه أكبر من `DEFAULT_MAX_JAR_BYTES` (5 ميجابايت) بعد التقليم، يمسح
+من أقدم/أقل-دقة bucket أول حاجة، جلسة بجلسة. `merge_sessions_into_
+storage_state()`: كل الجلسات المحفوظة بتتدمج في storage_state واحد حقيقي
+نشط (مش قائمة snapshots منفصلة — متصفح حقيقي عنده cookie jar واحد بس)،
+تعارض بيتحل لصالح الجلسة الأحدث زمنيًا.
+
+**"cookies من مواقع غير مرتبطة بالهدف" — صفر كود إضافي مطلوب**: الـjar
+**مشترك على مستوى المشروع كله، مش لكل target لوحده** —
+`DEFAULT_COOKIE_JAR_PATH = "var/cookie_jar.json"` ثابتة، مش
+per-target-configurable. بما إن المشروع بيزحف targets كتير مختلفة
+(mock-target، quotes.toscrape، إلخ)، التنوع ده بيحصل تلقائيًا كنتيجة
+معمارية، مش محتاج كود خاص لمحاكاته.
+
+#### التحقق المحلي والحي (كامل، مش جزئي)
+
+- `ruff`/`mypy --strict` نظيفين على كل الملفات المتأثرة (7 ملفات src
+  + الوحدة الجديدة).
+- **398 اختبار وحدة PASSED** (كان 352، +46: 25 لـ`cookie_jar_manager.py`
+  + باقي الاختبارات الجديدة عبر الـproviders/middleware/spider_config)،
+  **35 عقد PASSED** (كان 29، +6: اختبارين جدد × 3 providers لـ
+  `warm_session_urls`/`use_accumulated_profile`)، **192
+  test-environment PASSED** (بدون تغيير — الميزة دي كلها src-side).
+  تغطية 95%+ محفوظة، `cookie_jar_manager.py` نفسه 100%.
+- **صفر رجعة على اختبارات بند 17 الحساسة**: `test_mock_target_
+  interstitial_live.py` (3 اختبارات) + `test_mock_target_dom_
+  virtualization_{progressive_,}live.py` (4 اختبارات) — كلهم PASSED
+  بعد التعديل، مؤكَّد إن العزلة الافتراضية (`use_accumulated_profile=False`)
+  لسه سليمة 100%.
+- **تحقق حي مباشر (script مستقل، قبل بناء اختبار integration رسمي)**:
+  - Call 1: `warm_session_urls=[/warmup-home, /warmup-category]` →
+    `/feed` (antibot_needed حقيقي)، `use_accumulated_profile=True`.
+    الكوكيز الراجعة شملت `mocktarget_warmup_session` (من `/warmup-home`)
+    **جنب** كوكيز Anubis الحقيقية و`mocktarget_session` بتاعة `/feed`
+    نفسها — دليل مباشر إن السياق فعلاً واحد مستمر.
+  - Call 2: **متصفح منفصل تمامًا**، `/feed` مباشرة **من غير أي
+    warm_session_urls خالص**، `use_accumulated_profile=True` بنفس
+    ملف الـjar. الكوكيز الراجعة شملت **نفس قيمة**
+    `mocktarget_warmup_session` (`911b432b36feda48`) بالظبط — دليل
+    قاطع إن الـjar بيربط بين استدعاءين منفصلين تمامًا.
+  - لوج mock-target's referer_session أكّد كمان إن تمرير `referer=`
+    اليدوي اشتغل صح: `/warmup-category` سجّلت `referer:
+    "http://localhost:8080/warmup-home"` رغم إن التنقل كله عبر
+    Camoufox حقيقي، `level1_score`/`level2_score` الاتنين 0.
+- **اختبار integration رسمي جديد**
+  (`tests/integration/test_mock_target_accumulated_profile_live.py`):
+  يشغّل نفس الـconfig **مرتين منفصلتين تمامًا** (subprocess جديد كل
+  مرة)، وبيتأكّد من لوج `/warmup-home`'s الخاص بـmock-target نفسه:
+  الجولة الأولى (jar فاضي) `has_warmup_session_cookie: false`،
+  الجولة التانية (نفس الـjar، عملية منفصلة تمامًا) `has_warmup_session_cookie:
+  true` — **دليل تلقائي، مش يدوي، لكل push مستقبلي**. اتشغّل مرتين
+  للتأكد من الاستقرار، الاتنين PASSED.
+- كل الـ8 اختبار حي المرتبط (بند 17 + بند 21 Step 1 + Step 2) اتأكّدوا
+  مع بعض في تشغيلة واحدة، صفر تعارض.
+
+**الحالة**: جاهز للـpush والتأكيد الأول على CI حقيقي.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

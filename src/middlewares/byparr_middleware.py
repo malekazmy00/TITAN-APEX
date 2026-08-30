@@ -160,6 +160,11 @@ class ByparrMiddleware:
         extraction_selectors = request.meta.get("extraction_selectors")
         progressive_extraction = bool(request.meta.get("progressive_extraction"))
         login_flow = request.meta.get("login_flow")
+        # docs/REQUIREMENTS.md section 9 entry 21, Step 2: forwarded
+        # straight through to the provider -- see
+        # AntibotProvider.solve()'s own docstring for the full contract.
+        warm_session_urls = request.meta.get("warm_session_urls")
+        use_accumulated_profile = bool(request.meta.get("use_accumulated_profile"))
         try:
             solution = provider.solve(
                 request.url,
@@ -167,6 +172,8 @@ class ByparrMiddleware:
                 extraction_selectors=extraction_selectors,
                 progressive_extraction=progressive_extraction,
                 login_flow=login_flow,
+                warm_session_urls=warm_session_urls,
+                use_accumulated_profile=use_accumulated_profile,
             )
         except AntibotError as exc:
             self.logger.error(

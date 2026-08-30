@@ -16,3 +16,10 @@ dist/
 # test-environment/docker-compose.test.yml mounts this as mock-target's
 # security/*.log volume -- a runtime artifact, never committed.
 test-environment/logs/
+
+# docs/REQUIREMENTS.md section 9 entry 21, Step 2: CamoufoxProvider/
+# PatchrightProvider's own default accumulated-cookie-jar path -- a real
+# runtime artifact (accumulates across real solve() calls over time,
+# only when a target opts in via use_accumulated_profile), never
+# committed.
+var/

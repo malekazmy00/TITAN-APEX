@@ -67,6 +67,9 @@ def _camoufox_ok_solve(
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
     login_flow: LoginFlow | None = None,
+    warm_session_urls: list[str] | None = None,
+    use_accumulated_profile: bool = False,
+    cookie_jar_path: str = "unused-in-tests.json",
 ) -> _CamoufoxRawSolve:
     return _CamoufoxRawSolve(
         url="https://example.com/protected",
@@ -84,6 +87,9 @@ def _camoufox_failing_solve(
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
     login_flow: LoginFlow | None = None,
+    warm_session_urls: list[str] | None = None,
+    use_accumulated_profile: bool = False,
+    cookie_jar_path: str = "unused-in-tests.json",
 ) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
@@ -104,6 +110,9 @@ def _patchright_ok_solve(
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
     login_flow: LoginFlow | None = None,
+    warm_session_urls: list[str] | None = None,
+    use_accumulated_profile: bool = False,
+    cookie_jar_path: str = "unused-in-tests.json",
 ) -> _PatchrightRawSolve:
     return _PatchrightRawSolve(
         url="https://example.com/protected",
@@ -121,6 +130,9 @@ def _patchright_failing_solve(
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
     login_flow: LoginFlow | None = None,
+    warm_session_urls: list[str] | None = None,
+    use_accumulated_profile: bool = False,
+    cookie_jar_path: str = "unused-in-tests.json",
 ) -> _PatchrightRawSolve:
     raise AntibotError(f"patchright failed to solve {url}: unsolvable")
 
@@ -233,5 +245,35 @@ def test_solve_accepts_an_optional_login_flow_without_crashing(
     )
 
     solution = provider.solve("https://example.com/protected", login_flow=login_flow)
+
+    assert isinstance(solution, Solution)
+
+
+def test_solve_accepts_an_optional_warm_session_urls_without_crashing(
+    provider: AntibotProvider,
+) -> None:
+    """warm_session_urls (docs/REQUIREMENTS.md section 9 entry 21, Step 2)
+    is best-effort, not part of the required contract (AntibotProvider.solve's
+    own docstring) -- every provider must still accept it and return a
+    Solution without crashing, even one (ByparrProvider) that cannot
+    actually act on it and only logs a warning instead."""
+    solution = provider.solve(
+        "https://example.com/protected",
+        warm_session_urls=["https://example.com/", "https://example.com/category"],
+    )
+
+    assert isinstance(solution, Solution)
+
+
+def test_solve_accepts_an_optional_use_accumulated_profile_without_crashing(
+    provider: AntibotProvider,
+) -> None:
+    """use_accumulated_profile (docs/REQUIREMENTS.md section 9 entry 21,
+    Step 2) is best-effort, not part of the required contract
+    (AntibotProvider.solve's own docstring) -- every provider must still
+    accept it and return a Solution without crashing, even one
+    (ByparrProvider) that cannot actually act on it and only logs a
+    warning instead."""
+    solution = provider.solve("https://example.com/protected", use_accumulated_profile=True)
 
     assert isinstance(solution, Solution)

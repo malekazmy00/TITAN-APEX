@@ -95,6 +95,7 @@ from src.providers.antibot._tracing import (
     render_load_event_log,
     trace_dir_from_env,
 )
+from src.providers.antibot.cookie_jar_manager import load_accumulated_state, record_new_session
 
 DEFAULT_TIMEOUT_MS = 30_000
 # docs/REQUIREMENTS.md section 9 entry 17: the accepted mitigation for a
@@ -192,6 +193,16 @@ DEFAULT_PROGRESSIVE_NETWORK_IDLE_TIMEOUT_MS = 5_000
 # at all -- doesn't say either way (a timeout means no response arrived
 # to read it from in the first place).
 DEFAULT_PROGRESSIVE_MAX_CONSECUTIVE_SCROLL_STALLS = 3
+# docs/REQUIREMENTS.md section 9 entry 21, Step 2: one shared, project-
+# -wide default -- deliberately *not* per-target -- so the accumulated
+# jar naturally mixes cookies from every real target this project ever
+# solves, not just one (see cookie_jar_manager.py's own module docstring
+# for why that's exactly the "organic, unrelated-site cookies" property
+# this entry's own design asked for, with zero extra code needed for it
+# specifically). "var/" matches this project's own existing convention
+# for local, non-source runtime state (Anubis's own botPolicy.yaml
+# comments its own optional honeypot IP log at "./var/honeypot.addrs").
+DEFAULT_COOKIE_JAR_PATH = "var/cookie_jar.json"
 
 
 class _RawSolve(NamedTuple):
@@ -212,9 +223,22 @@ class _RawSolve(NamedTuple):
 
 
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
-# progressive_extraction, login_flow) -> raw browser result
+# progressive_extraction, login_flow, warm_session_urls,
+# use_accumulated_profile, cookie_jar_path) -> raw browser result
 CamoufoxSolveFn = Callable[
-    [str, int, int, "str | None", "LiveDomSelectors | None", bool, "LoginFlow | None"], _RawSolve
+    [
+        str,
+        int,
+        int,
+        "str | None",
+        "LiveDomSelectors | None",
+        bool,
+        "LoginFlow | None",
+        "list[str] | None",
+        bool,
+        str,
+    ],
+    _RawSolve,
 ]
 
 
@@ -267,6 +291,9 @@ def _default_camoufox_solve(  # pragma: no cover
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
     login_flow: LoginFlow | None = None,
+    warm_session_urls: list[str] | None = None,
+    use_accumulated_profile: bool = False,
+    cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
 ) -> _RawSolve:
     """Drive a real Camoufox browser: navigate, (optionally) click, wait
     past ``load``, read, close.
@@ -351,6 +378,40 @@ def _default_camoufox_solve(  # pragma: no cover
     response speak" approach the JSON/plaintext-viewer handling above
     already has. A no-op (behaves exactly like ``login_flow=None``) when
     not given.
+
+    ``warm_session_urls`` (docs/REQUIREMENTS.md section 9 entry 21, Step
+    2): when given, ``page.goto()`` visits each URL, in order, *before*
+    ``login_flow``/``url`` itself -- all on this exact same ``page``, so
+    any cookies a warm-up page sets are already present in this
+    browser's cookie jar by the time the real navigation happens (a real
+    browser context naturally carries cookies across navigations on the
+    same page; nothing else needs to be done here to make that true).
+    This is the actual fix for the gap Step 1 (entry 21) documented and
+    left open: a warm-up chain built purely at the Scrapy/GenericSpider
+    level never reached here at all, since every ``solve()`` call
+    launches its own independent browser with no connection to any
+    other Scrapy request's own headers/cookies. A no-op (behaves exactly
+    like ``warm_session_urls=None``) when not given, or given empty.
+
+    ``use_accumulated_profile``/``cookie_jar_path`` (docs/REQUIREMENTS.md
+    section 9 entry 21, Step 2): when ``use_accumulated_profile`` is
+    ``True``, the browser context this whole function drives (not just
+    ``page``, since ``storage_state`` is a context-creation-time option)
+    is created from whatever cookies/storage
+    :func:`~src.providers.antibot.cookie_jar_manager.load_accumulated_state`
+    finds already saved at ``cookie_jar_path`` -- real state from many
+    *separate*, earlier ``solve()`` calls, not just this one. On a
+    successful solve, this call's own final
+    ``context.storage_state()`` is saved back via
+    :func:`~src.providers.antibot.cookie_jar_manager.record_new_session`,
+    so the *next* call (this target's or any other's -- the jar is
+    shared project-wide, not per-target, see that module's own module
+    docstring for why that's deliberate) starts from an even more
+    "lived-in" profile. ``False`` (the default) keeps every existing
+    caller's exact prior behavior: a genuinely fresh, empty browser
+    profile every single call, with nothing read from or written to
+    ``cookie_jar_path`` at all -- the same complete isolation entry 17's
+    own test suite depends on.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
@@ -447,9 +508,6 @@ def _default_camoufox_solve(  # pragma: no cover
             # instead of assuming.
             if isinstance(browser, PlaywrightBrowser):
                 browser.on("disconnected", _mark_browser_crashed)
-            else:
-                browser.on("close", _mark_browser_crashed)
-            try:
                 # ignore_https_errors=True (docs/REQUIREMENTS.md section
                 # 9, JA4/TLS experiment -- ported from claude/ja4-experiment
                 # onto this branch, entry 17's own follow-up): unconditional,
@@ -459,22 +517,88 @@ def _default_camoufox_solve(  # pragma: no cover
                 # existing plain-http:// target here negotiates no TLS at
                 # all, so this is a genuine no-op for them; it only takes
                 # effect against the JA4-proxy target's self-signed cert.
-                # Real Playwright option (Browser.new_page forwards
-                # straight to new_context()); mypy sees `browser` as
-                # camoufox's own untyped Union[Browser, BrowserContext]
-                # (no py.typed marker -- same root cause as this line's
-                # existing no-untyped-call ignore above, and the same
-                # union this function's own isinstance check above
-                # confirms via reveal_type) and can't narrow it to the
-                # concrete Browser NewBrowser's default,
-                # non-persistent-context code path always returns here
-                # (persistent_context is never passed above) -- confirmed
-                # by reading camoufox's own source (sync_api.py's
-                # NewBrowser), not assumed.
-                page = browser.new_page(ignore_https_errors=True)  # type: ignore[call-arg]
+                #
+                # docs/REQUIREMENTS.md section 9 entry 21, Step 2:
+                # `storage_state` is a real, documented context-creation
+                # -time-only option (there's no separate "load state into
+                # an already-open context" call) -- confirmed directly,
+                # both against Playwright's own docs and by hand against
+                # a real Camoufox session (save, then reload in a
+                # completely separate browser instance -- even a session
+                # cookie with no explicit expiry survived the round
+                # trip). `None` (`use_accumulated_profile=False`, or
+                # `True` but no jar saved yet) behaves identically to
+                # never passing `storage_state` at all -- Playwright's
+                # own real default, a genuinely fresh, empty profile.
+                loaded_state = (
+                    load_accumulated_state(cookie_jar_path) if use_accumulated_profile else None
+                )
+                context = browser.new_context(
+                    ignore_https_errors=True, storage_state=loaded_state  # type: ignore[arg-type]
+                )
+            else:
+                browser.on("close", _mark_browser_crashed)
+                # docs/REQUIREMENTS.md section 9 entry 21, Step 2: a
+                # persistent-context launch (never actually exercised by
+                # this project's own Camoufox(headless=True) call --
+                # confirmed by entry 17's own investigation: `browser` is
+                # always the concrete `Browser` type at runtime here, not
+                # this branch) has no equivalent "create with
+                # storage_state" entry point at all -- the real,
+                # confirmed limitation GitHub issue
+                # microsoft/playwright#36139 documents is specifically
+                # about this launch mode (`launch_persistent_context`/
+                # `user_data_dir`), not about `storage_state()` itself
+                # (this entry's own correction: the issue's own reporter
+                # uses `storage_state()` as the *working fix* for it).
+                # `use_accumulated_profile` is a documented no-op here
+                # rather than a silently-partial application.
+                context = browser
+            try:
+                page = context.new_page()
                 page.on("crash", _mark_browser_crashed)
                 if trace_dir is not None:
                     page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
+                # `None` for the very first navigation (a real cold
+                # start has no Referer either -- Scrapfly's own source,
+                # entry 21's own citation, is explicit that this is
+                # normal) -- set to each warm-up hop's own URL as the
+                # loop advances, then used as the real `url` navigation's
+                # own Referer below, so the *whole* chain (not just
+                # cookies) matches what Step 1's Scrapy-level version
+                # already gets for free from RefererMiddleware.
+                last_warm_session_url: str | None = None
+                if warm_session_urls:
+                    # docs/REQUIREMENTS.md section 9 entry 21, Step 2:
+                    # every one of these navigations shares this exact
+                    # page/context, so any cookie a warm-up page sets is
+                    # already in this browser's real cookie jar by the
+                    # time the actual login_flow/url navigation below
+                    # happens -- a real browser context naturally carries
+                    # cookies across navigations on the same page, so
+                    # nothing else needs to be done here to make that
+                    # true. The real fix for the gap Step 1 (entry 21)
+                    # documented and left open: a warm-up chain built
+                    # purely at the Scrapy/GenericSpider level never
+                    # reached here at all, since every solve() call
+                    # launches its own independent browser with no
+                    # connection to any other Scrapy request's own
+                    # headers/cookies.
+                    #
+                    # `referer=` is passed explicitly here -- confirmed
+                    # directly against Playwright's own source
+                    # (`Page.goto`'s real signature): unlike cookies,
+                    # ``page.goto()`` never automatically derives Referer
+                    # from whatever the same page navigated to
+                    # previously (each call is like a URL typed directly,
+                    # not a followed link) -- without this, the warm-up
+                    # chain would still connect cookies but silently
+                    # produce no real Referer chain at all, missing half
+                    # of what Step 1 (entry 21) already established.
+                    for warm_url in warm_session_urls:
+                        page.goto(warm_url, timeout=timeout_ms, referer=last_warm_session_url)
+                        page.wait_for_timeout(post_load_wait_ms)
+                        last_warm_session_url = warm_url
                 try:
                     # Tracks the *last* main-frame navigation response,
                     # not just the first one `goto()` returns -- see this
@@ -531,7 +655,14 @@ def _default_camoufox_solve(  # pragma: no cover
                         )
                         initial_response = last_main_frame_response
                     else:
-                        initial_response = page.goto(url, timeout=timeout_ms)
+                        # docs/REQUIREMENTS.md section 9 entry 21, Step
+                        # 2: the real target's own Referer, completing
+                        # the chain the warm-up loop above started --
+                        # `None` (this function's own prior, unchanged
+                        # behavior) when no warm-up ran at all.
+                        initial_response = page.goto(
+                            url, timeout=timeout_ms, referer=last_warm_session_url
+                        )
                     if click_selector:
                         page.click(click_selector, timeout=timeout_ms)
                     # The one thing ByparrProvider structurally cannot
@@ -1299,6 +1430,41 @@ def _default_camoufox_solve(  # pragma: no cover
                             "load_event_log_path": load_event_log_path,
                         },
                     )
+                    if use_accumulated_profile:
+                        # docs/REQUIREMENTS.md section 9 entry 21, Step
+                        # 2: only on a genuinely successful solve --
+                        # deliberately not attempted in any exception
+                        # path (a half-failed solve's own partial state
+                        # isn't worth the added complexity of persisting
+                        # it too). Never allowed to fail the actual
+                        # crawl over a jar-write problem (a full disk, a
+                        # permissions issue) -- logged, not propagated:
+                        # losing the accumulated profile for next time is
+                        # a real degradation, not a reason an otherwise-
+                        # successful solve should raise.
+                        try:
+                            # Playwright's own StorageState is a real,
+                            # concrete TypedDict, structurally
+                            # compatible with cookie_jar_manager.py's own
+                            # plain dict[str, Any] contract (deliberately
+                            # loosely typed there -- see that module's
+                            # own module docstring for why it stays
+                            # engine-agnostic) -- mypy just doesn't
+                            # recognize a TypedDict as a `dict[str,
+                            # Any]` subtype automatically.
+                            record_new_session(
+                                cookie_jar_path,
+                                context.storage_state(),  # type: ignore[arg-type]
+                            )
+                        except OSError as exc:
+                            logger.warning(
+                                "camoufox_provider.cookie_jar_save_failed",
+                                extra={
+                                    "url": url,
+                                    "cookie_jar_path": cookie_jar_path,
+                                    "reason": str(exc),
+                                },
+                            )
                     return _RawSolve(
                         url=page.url,
                         html=html,
@@ -1367,6 +1533,7 @@ class CamoufoxProvider(AntibotProvider):
         solve_fn: CamoufoxSolveFn | None = None,
         logger: Logger | None = None,
         max_browser_crash_attempts: int = DEFAULT_MAX_BROWSER_CRASH_ATTEMPTS,
+        cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
     ) -> None:
         if timeout_ms <= 0:
             raise AntibotError(f"timeout_ms must be > 0, got {timeout_ms}")
@@ -1381,6 +1548,13 @@ class CamoufoxProvider(AntibotProvider):
         self._solve_fn = solve_fn or _default_camoufox_solve
         self.logger = logger or get_logger(__name__)
         self._max_browser_crash_attempts = max_browser_crash_attempts
+        # docs/REQUIREMENTS.md section 9 entry 21, Step 2: one path per
+        # provider *instance*, not per solve() call -- see
+        # cookie_jar_manager.py's own module docstring for why this is
+        # deliberately one project-wide default in practice
+        # (DEFAULT_COOKIE_JAR_PATH), configurable here mainly for tests
+        # that need real isolation (a tmp_path of their own).
+        self._cookie_jar_path = cookie_jar_path
 
     def solve(
         self,
@@ -1389,6 +1563,8 @@ class CamoufoxProvider(AntibotProvider):
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
     ) -> Solution:
         # docs/REQUIREMENTS.md section 9 entry 17: a real, kernel-log-
         # confirmed Firefox engine crash (BrowserCrashedError's own
@@ -1410,6 +1586,9 @@ class CamoufoxProvider(AntibotProvider):
                     extraction_selectors,
                     progressive_extraction,
                     login_flow,
+                    warm_session_urls,
+                    use_accumulated_profile,
+                    self._cookie_jar_path,
                 )
             except BrowserCrashedError as exc:
                 if attempt >= self._max_browser_crash_attempts:

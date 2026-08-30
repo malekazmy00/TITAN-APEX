@@ -66,6 +66,7 @@ from src.providers.antibot._scroll import (
     scroll_to_load_lazy_content,
 )
 from src.providers.antibot._tracing import build_trace_path, trace_dir_from_env
+from src.providers.antibot.cookie_jar_manager import load_accumulated_state, record_new_session
 
 DEFAULT_TIMEOUT_MS = 30_000
 # Same value and same reasoning as CamoufoxProvider's identical constant
@@ -103,6 +104,11 @@ _FEED_CONTAINER_SELECTOR = '[data-role="feed"]'
 # (docs/REQUIREMENTS.md section 9 entry 17's "Eighth revision") -- see
 # camoufox_provider.py's own comment for the full explanation.
 DEFAULT_PROGRESSIVE_HOVER_TIMEOUT_MS = 3_000
+# Same value and same reasoning as CamoufoxProvider's identical constant
+# (docs/REQUIREMENTS.md section 9 entry 21, Step 2) -- see
+# camoufox_provider.py's own comment for the full explanation: one
+# shared, project-wide default rather than per-target.
+DEFAULT_COOKIE_JAR_PATH = "var/cookie_jar.json"
 
 
 class _RawSolve(NamedTuple):
@@ -125,7 +131,19 @@ class _RawSolve(NamedTuple):
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
 # progressive_extraction, login_flow) -> raw browser result
 PatchrightSolveFn = Callable[
-    [str, int, int, "str | None", "LiveDomSelectors | None", bool, "LoginFlow | None"], _RawSolve
+    [
+        str,
+        int,
+        int,
+        "str | None",
+        "LiveDomSelectors | None",
+        bool,
+        "LoginFlow | None",
+        "list[str] | None",
+        bool,
+        str,
+    ],
+    _RawSolve,
 ]
 
 
@@ -157,9 +175,19 @@ def _default_patchright_solve(  # pragma: no cover
     extraction_selectors: LiveDomSelectors | None = None,
     progressive_extraction: bool = False,
     login_flow: LoginFlow | None = None,
+    warm_session_urls: list[str] | None = None,
+    use_accumulated_profile: bool = False,
+    cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
 ) -> _RawSolve:
     """Drive a real Patchright-stealthed Chromium: navigate, (optionally)
     click, wait past ``load``, read, close.
+
+    ``warm_session_urls``/``use_accumulated_profile``/``cookie_jar_path``
+    (docs/REQUIREMENTS.md section 9 entry 21, Step 2): same real
+    mechanics and reasoning as
+    :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
+    identical parameters -- see that function's own docstring for the
+    full explanation.
 
     ``click_selector``: same reasoning as
     :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
@@ -270,10 +298,47 @@ def _default_patchright_solve(  # pragma: no cover
             # every existing plain-http:// target (no TLS handshake
             # happens there at all), only takes effect against the
             # JA4-proxy target's self-signed cert.
-            page = browser.new_page(ignore_https_errors=True)
+            #
+            # docs/REQUIREMENTS.md section 9 entry 21, Step 2: same
+            # `storage_state`-at-context-creation-time mechanism as
+            # camoufox_provider.py's identical change -- see that
+            # module's own comment for the full reasoning (confirmed
+            # directly, both against Playwright's own docs and by hand).
+            # `browser.new_page()` here always creates a fresh context
+            # implicitly (`p.chromium.launch()` above never returns a
+            # persistent context -- this module's own comment on
+            # `browser.on("disconnected", ...)` above already confirms
+            # that), so there's no isinstance branch needed the way
+            # Camoufox's own dual-mode context manager requires --
+            # `browser.new_context()` is unconditionally the real thing
+            # to call here.
+            loaded_state = (
+                load_accumulated_state(cookie_jar_path) if use_accumulated_profile else None
+            )
+            context = browser.new_context(
+                ignore_https_errors=True, storage_state=loaded_state  # type: ignore[arg-type]
+            )
+            page = context.new_page()
             page.on("crash", _mark_browser_crashed)
             if trace_dir is not None:
                 page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
+            # Same reasoning as camoufox_provider.py's identical variable
+            # (docs/REQUIREMENTS.md section 9 entry 21, Step 2).
+            last_warm_session_url: str | None = None
+            if warm_session_urls:
+                # docs/REQUIREMENTS.md section 9 entry 21, Step 2: same
+                # reasoning as camoufox_provider.py's identical block --
+                # every one of these navigations shares this exact
+                # page/context, so any cookie a warm-up page sets is
+                # already in this browser's real cookie jar by the time
+                # the actual login_flow/url navigation below happens.
+                # `referer=` chained explicitly for the same reason
+                # camoufox_provider.py's identical block documents:
+                # page.goto() never derives it automatically.
+                for warm_url in warm_session_urls:
+                    page.goto(warm_url, timeout=timeout_ms, referer=last_warm_session_url)
+                    page.wait_for_timeout(post_load_wait_ms)
+                    last_warm_session_url = warm_url
             try:
                 try:
                     # Tracks the *last* main-frame navigation response --
@@ -327,7 +392,12 @@ def _default_patchright_solve(  # pragma: no cover
                         )
                         initial_response = last_main_frame_response
                     else:
-                        initial_response = page.goto(url, timeout=timeout_ms)
+                        # docs/REQUIREMENTS.md section 9 entry 21, Step
+                        # 2: same reasoning as camoufox_provider.py's
+                        # identical call.
+                        initial_response = page.goto(
+                            url, timeout=timeout_ms, referer=last_warm_session_url
+                        )
                     if click_selector:
                         page.click(click_selector, timeout=timeout_ms)
                     # The same capability CamoufoxProvider's own
@@ -660,6 +730,26 @@ def _default_patchright_solve(  # pragma: no cover
                             ),
                         },
                     )
+                    if use_accumulated_profile:
+                        # docs/REQUIREMENTS.md section 9 entry 21, Step
+                        # 2: same reasoning as camoufox_provider.py's
+                        # identical block -- only on a genuinely
+                        # successful solve, never allowed to fail the
+                        # actual crawl over a jar-write problem.
+                        try:
+                            record_new_session(
+                                cookie_jar_path,
+                                context.storage_state(),  # type: ignore[arg-type]
+                            )
+                        except OSError as exc:
+                            logger.warning(
+                                "patchright_provider.cookie_jar_save_failed",
+                                extra={
+                                    "url": url,
+                                    "cookie_jar_path": cookie_jar_path,
+                                    "reason": str(exc),
+                                },
+                            )
                     return _RawSolve(
                         url=page.url,
                         html=html,
@@ -693,6 +783,7 @@ class PatchrightProvider(AntibotProvider):
         solve_fn: PatchrightSolveFn | None = None,
         logger: Logger | None = None,
         max_browser_crash_attempts: int = DEFAULT_MAX_BROWSER_CRASH_ATTEMPTS,
+        cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
     ) -> None:
         if timeout_ms <= 0:
             raise AntibotError(f"timeout_ms must be > 0, got {timeout_ms}")
@@ -707,6 +798,9 @@ class PatchrightProvider(AntibotProvider):
         self._solve_fn = solve_fn or _default_patchright_solve
         self.logger = logger or get_logger(__name__)
         self._max_browser_crash_attempts = max_browser_crash_attempts
+        # Same reasoning as CamoufoxProvider's identical field (docs/
+        # REQUIREMENTS.md section 9 entry 21, Step 2).
+        self._cookie_jar_path = cookie_jar_path
 
     def solve(
         self,
@@ -715,6 +809,8 @@ class PatchrightProvider(AntibotProvider):
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
     ) -> Solution:
         # docs/REQUIREMENTS.md section 9 entry 17: same bounded
         # browser-crash retry as CamoufoxProvider.solve()'s identical
@@ -729,6 +825,9 @@ class PatchrightProvider(AntibotProvider):
                     extraction_selectors,
                     progressive_extraction,
                     login_flow,
+                    warm_session_urls,
+                    use_accumulated_profile,
+                    self._cookie_jar_path,
                 )
             except BrowserCrashedError as exc:
                 if attempt >= self._max_browser_crash_attempts:

@@ -203,6 +203,70 @@ def test_login_flow_logs_a_warning_and_still_solves() -> None:
     assert extra["url"] == "https://example.com/"
 
 
+def test_warm_session_urls_logs_a_warning_and_still_solves() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 2: Byparr's /v1 API
+    has no live page to navigate a warm-up chain through -- passing
+    warm_session_urls must not crash or silently drop it; it must log
+    clearly and still solve without ever attempting the warm-up."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    solution = provider.solve(
+        "https://example.com/", warm_session_urls=["https://example.com/category"]
+    )
+
+    assert solution.status_code == 200  # still solves despite the unsupported warm-up
+    message, extra = logged[0]
+    assert message == "byparr_provider.warm_session_urls_unsupported"
+    assert extra["url"] == "https://example.com/"
+
+
+def test_use_accumulated_profile_logs_a_warning_and_still_solves() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 2: Byparr's /v1 API
+    has no browser context to load/save a profile into -- passing
+    use_accumulated_profile must not crash or silently drop it; it must
+    log clearly and still solve with no profile applied."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    solution = provider.solve("https://example.com/", use_accumulated_profile=True)
+
+    assert solution.status_code == 200  # still solves despite the unsupported profile
+    message, extra = logged[0]
+    assert message == "byparr_provider.use_accumulated_profile_unsupported"
+    assert extra["url"] == "https://example.com/"
+
+
 def test_progressive_extraction_logs_a_warning_and_still_solves() -> None:
     """docs/REQUIREMENTS.md section 9 entry 14: Byparr's /v1 API returns
     HTML only, no live page to scroll -- passing progressive_extraction
