@@ -4780,7 +4780,12 @@ live.py`'s الموجود لـ`HONEYPOT_LOG`)، **مبيمسحش الملف خا
   الـinterstitial/DOM-virtualization الحساسين من بند 17/20) لسه
   PASSED بعد تعديل `generic_spider.py` وإعادة ترتيب `botPolicy.yaml`.
 
-**الحالة**: جاهز للـpush والتأكيد الأول على CI حقيقي.
+**تحديث (بعد الـpush) — اتأكّد فعليًا على CI حقيقي:** GitHub Actions
+run [33330929519](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33330929519)
+(commit `f18e8e0`)، `completed`/`success`. اللوج الفعلي اتفتح وقُرِئ
+مباشرة: `test_warm_session_chain_produces_a_real_clean_referer_and_cookie_trail`
+**PASSED**، والسويت الكامل **38 passed, 0 failed** (كان 37 قبل الإضافة
+— بالظبط الاختبار الجديد الواحد، صفر رجعة). **Step 1 مقفول رسميًا.**
 
 #### بحث Step 2 (مؤجَّل، توثيق فقط — سياق متصفح مستمر + أداة كوكيز تراكمية)
 
