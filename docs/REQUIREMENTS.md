@@ -4469,11 +4469,18 @@ Firefox/Camoufox headless مع نقطة الأصل بالظبط) — مش باج
     اختبار: parsed_html/live_dom) — **PASSED كلهم**، نفس عدد الـitems
     المتوقَّع (40 post_id) بدون أي رجعة.
 
-**الحالة**: جاهز للـpush والتأكيد الأول على CI حقيقي (فتح اللوج الفعلي،
-مش الاكتفاء بنتيجة PASS/FAIL مجردة، زي العادة). بند 3 (بنية corpus
-الحركات المسجّلة) مؤجَّل/موازي، برضه مع تحذير session-replay bot
-detection (ReMouse dataset) اللي اتسجّل في docstring الموديول الجديد
-كـforward-reference لتصميم مستقبلي.
+**تحديث (بعد الـpush) — اتأكّد فعليًا على CI حقيقي:** GitHub Actions
+run [33325632675](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33325632675)
+(commit `dea1fd2`)، `completed`/`success`. اللوج الفعلي اتفتح
+وقُرِئ مباشرة (مش الاكتفاء بنتيجة PASS/FAIL مجردة): **346 unit + 29
+contract + 173 test-environment + 37 integration = صفر فشل**. الأهم:
+`test_camoufox_dismisses_the_interstitial_and_yields_every_batch`
+(الاختبار اللي كان بيعلّق محليًا قبل الإصلاح) خلص فعليًا في أقل من
+دقيقة على CI نفسه، بنفس التسلسل الزمني اللي اتأكّد محليًا. بند 10
+(بالكامل، بما فيه الخطوتين 1 و2 من محاكاة الماوس) مقفول رسميًا. بند 3
+(بنية corpus الحركات المسجّلة) مؤجَّل/موازي، برضه مع تحذير
+session-replay bot detection (ReMouse dataset) اللي اتسجّل في
+docstring الموديول الجديد كـforward-reference لتصميم مستقبلي.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
