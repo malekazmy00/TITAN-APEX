@@ -23,6 +23,7 @@ from security.auth import (
 )
 from security.botd_integration import VENDORED_SCRIPT_PATH, log_botd_report
 from security.file_logger import get_file_logger
+from security.fpscanner_integration import log_fingerprint_report
 from security.honeypot_logger import log_honeypot_trigger
 from security.ja4_integration import JA4_HEADER_NAME, log_ja4_fingerprint
 from structural.ab_variant import choose_variant, container_tag_for
@@ -89,6 +90,7 @@ def create_app(
     honeypot_logger = get_file_logger("mock_target.honeypot", cfg.honeypot_log_path)
     botd_logger = get_file_logger("mock_target.botd", cfg.botd_log_path)
     ja4_logger = get_file_logger("mock_target.ja4", cfg.ja4_log_path)
+    fingerprint_logger = get_file_logger("mock_target.fingerprint", cfg.fingerprint_log_path)
     app.config["CSRF_TOKEN_STORE"] = CsrfTokenStore()
     app.config["AUTH_SESSION_STORE"] = SessionStore(ttl_seconds=cfg.session_ttl_seconds)
 
@@ -148,6 +150,7 @@ def create_app(
                 classes=_classes(),
                 botd_enabled=cfg.enable_botd,
                 botd_script_path=VENDORED_SCRIPT_PATH,
+                fingerprint_scoring_enabled=cfg.enable_fingerprint_scoring,
                 container_tag=container_tag,
                 placeholder_enabled=cfg.enable_placeholder_content,
                 placeholder_text=PLACEHOLDER_TEXT,
@@ -349,6 +352,17 @@ def create_app(
     def botd_report() -> Response:
         payload: dict[str, Any] = request.get_json(silent=True) or {}
         log_botd_report(botd_logger, payload)
+        return jsonify({"status": "logged"})
+
+    @app.post("/fingerprint-report")
+    def fingerprint_report() -> Response:
+        # docs/REQUIREMENTS.md section 9 entry 19: same "log-only,
+        # never enforce" shape as /botd-report above -- see
+        # security/fpscanner_integration.py's own module docstring for
+        # the two signals collected client-side and why this stays a
+        # score, not a verdict.
+        payload: dict[str, Any] = request.get_json(silent=True) or {}
+        log_fingerprint_report(fingerprint_logger, payload)
         return jsonify({"status": "logged"})
 
     @app.get("/honeypot-trap/<token>")

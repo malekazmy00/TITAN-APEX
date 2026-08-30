@@ -32,6 +32,13 @@ class MockTargetConfig:
 
     def __init__(self) -> None:
         self.enable_botd: bool = _env_bool("ENABLE_BOTD", True)
+        # docs/REQUIREMENTS.md section 9 entry 19: log-only, multi-signal
+        # (WebGL absence + viewport/screen consistency) automation
+        # scoring -- see security/fpscanner_integration.py's own module
+        # docstring for the full evidence trail on why these two signals
+        # specifically, and why this stays a toggleable, independent
+        # layer rather than folded into BotD's own script.
+        self.enable_fingerprint_scoring: bool = _env_bool("ENABLE_FINGERPRINT_SCORING", True)
         self.enable_honeypots: bool = _env_bool("ENABLE_HONEYPOTS", True)
         self.enable_decoy_data: bool = _env_bool("ENABLE_DECOY_DATA", True)
         self.enable_markup_randomizer: bool = _env_bool("ENABLE_MARKUP_RANDOMIZER", True)
@@ -105,6 +112,10 @@ class MockTargetConfig:
         # itself.
         self.ja4_log_path: str = os.environ.get(
             "JA4_LOG_PATH", "test-environment/mock-target/security/ja4_fingerprints.log"
+        )
+        self.fingerprint_log_path: str = os.environ.get(
+            "FINGERPRINT_LOG_PATH",
+            "test-environment/mock-target/security/fingerprint_reports.log",
         )
 
 

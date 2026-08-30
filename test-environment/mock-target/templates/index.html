@@ -97,5 +97,35 @@
     });
   </script>
   {% endif %}
+
+  {% if fingerprint_scoring_enabled %}
+  <script>
+    // docs/REQUIREMENTS.md section 9 entry 19: two independently-
+    // evidenced signals, not vendored from anywhere -- see
+    // security/fpscanner_integration.py's own module docstring for the
+    // full reasoning on why these two, specifically, and why BotD's own
+    // detectWebGL()/detectWindowSize() checks (loaded just above) don't
+    // already cover them.
+    (function () {
+      let webglAvailable = false;
+      try {
+        const canvas = document.createElement("canvas");
+        webglAvailable = !!(canvas.getContext("webgl") || canvas.getContext("experimental-webgl"));
+      } catch (e) {
+        webglAvailable = false;
+      }
+      const viewportConsistent =
+        window.innerWidth <= window.screen.width && window.innerHeight <= window.screen.height;
+      fetch("/fingerprint-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ webglAvailable: webglAvailable, viewportConsistent: viewportConsistent }),
+      }).catch(() => {
+        // Same "never let a detection error break the page" rule as
+        // BotD's own script above.
+      });
+    })();
+  </script>
+  {% endif %}
 </body>
 </html>

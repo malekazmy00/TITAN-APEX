@@ -24,6 +24,7 @@ def config(tmp_path: Path) -> MockTargetConfig:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.feed_rate_limit_threshold = 3
     cfg.feed_rate_limit_window_seconds = 60
     cfg.feed_page_size = 4
@@ -128,6 +129,31 @@ def test_botd_report_handles_a_missing_body(client: FlaskClient) -> None:
     assert response.status_code == 200
 
 
+def test_fingerprint_report_logs_the_posted_result(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 19: same log-only shape as
+    /botd-report above -- confirms the score itself (not just the raw
+    report) actually reaches the log line."""
+    response = client.post(
+        "/fingerprint-report", json={"webglAvailable": False, "viewportConsistent": True}
+    )
+
+    assert response.status_code == 200
+    log_content = Path(config.fingerprint_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["level"] == "INFO"
+    assert payload["score"] == 1
+
+
+def test_fingerprint_report_handles_a_missing_body(client: FlaskClient) -> None:
+    """Failure-adjacent case: a POST with no/invalid JSON body must not
+    500 -- treated as an empty report (score 0)."""
+    response = client.post("/fingerprint-report")
+
+    assert response.status_code == 200
+
+
 def test_feed_page_renders_the_infinite_scroll_shell(client: FlaskClient) -> None:
     """The /feed page itself ships no posts server-side -- everything comes
     from /api/feed via the scroll listener, same shape as
@@ -224,6 +250,7 @@ def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.enable_dom_virtualization = False
     app = create_app(cfg)
@@ -241,6 +268,7 @@ def test_feed_page_window_size_is_configurable(tmp_path: Path) -> None:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.dom_virtualization_window_size = 3
     app = create_app(cfg)
@@ -258,6 +286,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_markup_randomizer = False
     cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
@@ -277,6 +306,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_honeypots = False
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
@@ -297,6 +327,7 @@ def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
@@ -338,6 +369,7 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False
@@ -361,6 +393,7 @@ def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     app = create_app(cfg)
@@ -381,6 +414,7 @@ def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path)
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_placeholder_content = False
@@ -400,6 +434,7 @@ def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.placeholder_delay_ms = 2000
@@ -416,6 +451,7 @@ def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = True
     cfg.enable_shadow_dom = False  # isolate the cookie-wall layer alone
     app = create_app(cfg)
@@ -471,6 +507,7 @@ def _shadow_dom_client(tmp_path: Path) -> FlaskClient:
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False  # isolate the shadow-DOM layer alone
     cfg.enable_shadow_dom = True
     app = create_app(cfg)
@@ -515,6 +552,7 @@ def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> 
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     app = create_app(cfg)
@@ -539,6 +577,7 @@ def _auth_client(
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False  # isolate the login/session layer alone
     cfg.enable_shadow_dom = False
     cfg.protected_feed_total_pages = protected_feed_total_pages
@@ -742,6 +781,7 @@ def _interstitial_client(
     cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
     cfg.botd_log_path = str(tmp_path / "botd.log")
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.enable_cookie_wall = False  # isolate the interstitial layer alone
     cfg.enable_shadow_dom = False
     cfg.interstitial_trigger = trigger
