@@ -7,6 +7,7 @@ import pytest
 from src.core.exceptions import (
     AIAnalyzerError,
     AntibotError,
+    BrowserCrashedError,
     ConfigError,
     SpiderError,
     StorageError,
@@ -22,8 +23,20 @@ def test_all_project_exceptions_are_titan_apex_errors() -> None:
         StorageError,
         AntibotError,
         AIAnalyzerError,
+        BrowserCrashedError,
     ):
         assert issubclass(exc_type, TitanApexError)
+
+
+def test_browser_crashed_error_is_also_catchable_as_antibot_error() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17: unlike the sibling
+    exception types above, BrowserCrashedError is deliberately a
+    *subclass* of AntibotError, not a sibling -- every existing
+    ``except AntibotError`` catch site must keep working unchanged for
+    it, while a caller that wants to distinguish it specifically still
+    can (catch BrowserCrashedError before the broader AntibotError)."""
+    with pytest.raises(AntibotError):
+        raise BrowserCrashedError("camoufox's browser engine crashed mid-solve")
 
 
 def test_config_error_can_be_raised_and_caught_specifically() -> None:

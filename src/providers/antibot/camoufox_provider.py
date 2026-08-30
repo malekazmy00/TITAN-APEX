@@ -65,7 +65,7 @@ from logging import Logger
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from src.core.exceptions import AntibotError
+from src.core.exceptions import AntibotError, BrowserCrashedError
 from src.core.interfaces.antibot_provider import (
     AntibotProvider,
     LiveDomSelectors,
@@ -93,6 +93,16 @@ from src.providers.antibot._tracing import (
 )
 
 DEFAULT_TIMEOUT_MS = 30_000
+# docs/REQUIREMENTS.md section 9 entry 17: the accepted mitigation for a
+# real, kernel-log-confirmed Firefox engine segfault (BrowserCrashedError's
+# own docstring has the full evidence) that has no known upstream fix --
+# retry the *whole* solve on a fresh browser instance (the crash is in
+# the engine itself, not this project's own logic, so nothing about a
+# fresh instance would carry the same fault forward) up to this many
+# total attempts. 3 matches this project's own established "bounded,
+# not open-ended retry" convention elsewhere (e.g. entry 17's own
+# consecutive-scroll-stall tolerance).
+DEFAULT_MAX_BROWSER_CRASH_ATTEMPTS = 3
 # How long to wait after the page's `load` event before reading content
 # and closing the browser -- long enough for a fast (difficulty-2, per
 # Anubis's own shipped thresholds) proof-of-work challenge to compute and
@@ -218,6 +228,33 @@ CamoufoxSolveFn = Callable[
 # structural, not accidental). `CamoufoxProvider.solve()` itself (the
 # part that unit tests actually exercise, via the injectable `solve_fn`)
 # is unaffected -- coverage there stays real and enforced.
+def _classify_solve_exception(
+    browser_crashed: bool, url: str, exc: Exception
+) -> AntibotError:
+    """docs/REQUIREMENTS.md section 9 entry 17: the one piece of the
+    crash-recovery logic that's genuinely pure (no real browser/page
+    object involved) and independently unit-tested here, deliberately
+    pulled *out* of :func:`_default_camoufox_solve`'s own
+    ``# pragma: no cover`` body -- the same reason
+    ``randomized_scroll_delta``/``count_apparmor_camoufox_denials`` live
+    as standalone functions instead of inline: this is the actual
+    decision (did ``page.on("crash")``/``browser.on(...)`` really fire?)
+    a test can exercise directly with a plain ``bool``, without needing
+    to fake an entire browser session.
+
+    Returns (not raises) so a caller decides when/whether to actually
+    raise it (and can attach ``from exc`` at that point) --
+    :class:`~src.core.exceptions.BrowserCrashedError` only when
+    ``browser_crashed`` is ``True``, plain
+    :class:`~src.core.exceptions.AntibotError` otherwise.
+    """
+    if browser_crashed:
+        return BrowserCrashedError(
+            f"camoufox's browser engine crashed mid-solve for {url}: {exc}"
+        )
+    return AntibotError(f"camoufox failed to solve {url}: {exc}")
+
+
 def _default_camoufox_solve(  # pragma: no cover
     url: str,
     timeout_ms: int,
@@ -320,6 +357,7 @@ def _default_camoufox_solve(  # pragma: no cover
     """
     from camoufox.exceptions import CamoufoxNotInstalled
     from camoufox.sync_api import Camoufox
+    from playwright.sync_api import Browser as PlaywrightBrowser
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import Response as PlaywrightResponse
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -374,8 +412,42 @@ def _default_camoufox_solve(  # pragma: no cover
         # are genuine Playwright objects, typed as Any below the same
         # way playwright_middleware.py already treats them) as untyped.
         with Camoufox(headless=True) as browser:  # type: ignore[no-untyped-call]
+            # docs/REQUIREMENTS.md section 9 entry 17's real-CI-confirmed
+            # finding: an occasional genuine Firefox engine segfault
+            # (dmesg's own "DOM Worker[...]: segfault ... in libxul.so",
+            # a long-standing, unresolved-upstream class of Firefox crash
+            # -- see BrowserCrashedError's own docstring) previously
+            # surfaced only as a generic PlaywrightError ("Target page,
+            # context or browser has been closed") from whatever call
+            # happened to be in flight when it hit -- a real crash,
+            # correctly classified as *some* AntibotError, but never
+            # distinguishable from any other solve failure.
+            # `browser_crashed` is bound *before* `browser.new_page()`
+            # (not "later") specifically so it stays defined even if that
+            # very call is what the crash interrupts -- the exception
+            # handler at the bottom of this function reads it regardless
+            # of exactly where a crash happened to hit.
+            browser_crashed = False
+
+            def _mark_browser_crashed(*_args: object) -> None:
+                nonlocal browser_crashed
+                browser_crashed = True
+
+            # Camoufox's own context manager can hand back either a
+            # genuine multi-context Browser or a persistent
+            # BrowserContext depending on its own launch mode (confirmed
+            # by mypy itself: `reveal_type(browser)` here resolves to
+            # `Browser | BrowserContext`, not one fixed type) -- their
+            # disconnection events have different names ("disconnected"
+            # vs. "close"), so this checks which one it actually got
+            # instead of assuming.
+            if isinstance(browser, PlaywrightBrowser):
+                browser.on("disconnected", _mark_browser_crashed)
+            else:
+                browser.on("close", _mark_browser_crashed)
             try:
                 page = browser.new_page()
+                page.on("crash", _mark_browser_crashed)
                 if trace_dir is not None:
                     page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
                 try:
@@ -1151,9 +1223,22 @@ def _default_camoufox_solve(  # pragma: no cover
         # nothing invented.
         logger.error(
             "camoufox_provider.solve_crashed",
-            extra={"url": url, "apparmor_denials_during_solve": apparmor_denials_during_solve},
+            extra={
+                "url": url,
+                "apparmor_denials_during_solve": apparmor_denials_during_solve,
+                "browser_crashed": browser_crashed,
+            },
         )
-        raise AntibotError(f"camoufox failed to solve {url}: {exc}") from exc
+        # docs/REQUIREMENTS.md section 9 entry 17: BrowserCrashedError
+        # only when page.on("crash")/browser.on("disconnected") actually
+        # fired -- a real, classified engine crash, not merely "some
+        # PlaywrightError happened" (a denied request or a legitimate
+        # timeout raises PlaywrightError too, and must not be retried the
+        # same way -- CamoufoxProvider.solve()'s own retry loop below
+        # only catches this specific subclass). See
+        # _classify_solve_exception's own docstring for why this
+        # decision is a separate, directly-unit-tested pure function.
+        raise _classify_solve_exception(browser_crashed, url, exc) from exc
 
 
 class CamoufoxProvider(AntibotProvider):
@@ -1165,15 +1250,21 @@ class CamoufoxProvider(AntibotProvider):
         post_load_wait_ms: int = DEFAULT_POST_LOAD_WAIT_MS,
         solve_fn: CamoufoxSolveFn | None = None,
         logger: Logger | None = None,
+        max_browser_crash_attempts: int = DEFAULT_MAX_BROWSER_CRASH_ATTEMPTS,
     ) -> None:
         if timeout_ms <= 0:
             raise AntibotError(f"timeout_ms must be > 0, got {timeout_ms}")
         if post_load_wait_ms < 0:
             raise AntibotError(f"post_load_wait_ms must be >= 0, got {post_load_wait_ms}")
+        if max_browser_crash_attempts <= 0:
+            raise AntibotError(
+                f"max_browser_crash_attempts must be > 0, got {max_browser_crash_attempts}"
+            )
         self._timeout_ms = timeout_ms
         self._post_load_wait_ms = post_load_wait_ms
         self._solve_fn = solve_fn or _default_camoufox_solve
         self.logger = logger or get_logger(__name__)
+        self._max_browser_crash_attempts = max_browser_crash_attempts
 
     def solve(
         self,
@@ -1183,19 +1274,46 @@ class CamoufoxProvider(AntibotProvider):
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
     ) -> Solution:
-        try:
-            raw = self._solve_fn(
-                url,
-                self._timeout_ms,
-                self._post_load_wait_ms,
-                click_selector,
-                extraction_selectors,
-                progressive_extraction,
-                login_flow,
-            )
-        except AntibotError:
-            self.logger.error("camoufox_provider.solve_failed", extra={"url": url})
-            raise
+        # docs/REQUIREMENTS.md section 9 entry 17: a real, kernel-log-
+        # confirmed Firefox engine crash (BrowserCrashedError's own
+        # docstring) is retried, on a fresh browser instance each time
+        # (self._solve_fn's own `with Camoufox(...)` already creates a
+        # brand-new one on every call -- nothing carries over) -- bounded
+        # by max_browser_crash_attempts, never open-ended. Any *other*
+        # AntibotError (a denied request, a legitimate timeout, no items
+        # found) is not retried at all -- retrying those would either
+        # waste time on a failure retrying can't fix, or silently mask a
+        # real, reproducible problem behind an eventual lucky pass.
+        for attempt in range(1, self._max_browser_crash_attempts + 1):
+            try:
+                raw = self._solve_fn(
+                    url,
+                    self._timeout_ms,
+                    self._post_load_wait_ms,
+                    click_selector,
+                    extraction_selectors,
+                    progressive_extraction,
+                    login_flow,
+                )
+            except BrowserCrashedError as exc:
+                if attempt >= self._max_browser_crash_attempts:
+                    self.logger.error(
+                        "camoufox_provider.solve_failed",
+                        extra={
+                            "url": url,
+                            "browser_crash_attempts_exhausted": attempt,
+                        },
+                    )
+                    raise
+                self.logger.warning(
+                    "camoufox_provider.browser_crash_retry",
+                    extra={"url": url, "attempt": attempt, "reason": str(exc)},
+                )
+                continue
+            except AntibotError:
+                self.logger.error("camoufox_provider.solve_failed", extra={"url": url})
+                raise
+            break
 
         return Solution(
             url=raw.url,

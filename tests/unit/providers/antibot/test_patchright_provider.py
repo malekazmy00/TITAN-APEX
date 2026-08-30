@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.exceptions import AntibotError
+from src.core.exceptions import AntibotError, BrowserCrashedError
 from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
 from src.providers.antibot.patchright_provider import (
     PatchrightProvider,
+    _classify_solve_exception,
     _RawSolve,
 )
 
@@ -107,6 +108,113 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
 
     with pytest.raises(AntibotError, match="browser launch failed"):
         provider.solve("https://example.com/")
+
+
+def test_classify_solve_exception_returns_browser_crashed_error_when_a_real_crash_fired() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17: same direct test of the
+    real classification decision as camoufox_provider.py's identical
+    test -- see its own docstring for the full reasoning."""
+    result = _classify_solve_exception(
+        browser_crashed=True, url="https://example.com/", exc=Exception("Target closed")
+    )
+
+    assert isinstance(result, BrowserCrashedError)
+    assert "browser engine crashed" in str(result)
+
+
+def test_classify_solve_exception_returns_plain_antibot_error_when_no_crash_fired() -> None:
+    result = _classify_solve_exception(
+        browser_crashed=False, url="https://example.com/", exc=Exception("denied")
+    )
+
+    assert type(result) is AntibotError
+    assert not isinstance(result, BrowserCrashedError)
+
+
+def test_browser_crash_retries_on_a_fresh_call_and_eventually_succeeds() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17: same bounded
+    browser-crash retry as CamoufoxProvider's identical behavior -- see
+    its own test of the same name for the full reasoning."""
+    calls = 0
+
+    def flaky_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+    ) -> _RawSolve:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise BrowserCrashedError(f"patchright's browser engine crashed mid-solve for {url}")
+        return _RawSolve(url=url, html="<html>solved</html>", status=200, cookies={})
+
+    provider = PatchrightProvider(solve_fn=flaky_solve, max_browser_crash_attempts=3)
+
+    solution = provider.solve("https://example.com/")
+
+    assert calls == 3
+    assert solution.html == "<html>solved</html>"
+
+
+def test_browser_crash_exhausts_max_attempts_and_raises() -> None:
+    """Bounded, not open-ended."""
+    calls = 0
+
+    def always_crashes(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+    ) -> _RawSolve:
+        nonlocal calls
+        calls += 1
+        raise BrowserCrashedError(f"patchright's browser engine crashed mid-solve for {url}")
+
+    provider = PatchrightProvider(solve_fn=always_crashes, max_browser_crash_attempts=3)
+
+    with pytest.raises(BrowserCrashedError):
+        provider.solve("https://example.com/")
+
+    assert calls == 3
+
+
+def test_non_crash_antibot_error_is_not_retried() -> None:
+    """A real, reproducible solve failure that isn't a browser crash must
+    not be retried the same way."""
+    calls = 0
+
+    def denied_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+    ) -> _RawSolve:
+        nonlocal calls
+        calls += 1
+        raise AntibotError(f"patchright failed to solve {url}: denied")
+
+    provider = PatchrightProvider(solve_fn=denied_solve, max_browser_crash_attempts=3)
+
+    with pytest.raises(AntibotError, match="denied"):
+        provider.solve("https://example.com/")
+
+    assert calls == 1
+
+
+def test_non_positive_max_browser_crash_attempts_raises_antibot_error() -> None:
+    """Failure case: a non-positive retry bound is meaningless."""
+    with pytest.raises(AntibotError, match="max_browser_crash_attempts must be > 0"):
+        PatchrightProvider(max_browser_crash_attempts=0)
 
 
 def test_click_selector_reaches_the_solve_function() -> None:

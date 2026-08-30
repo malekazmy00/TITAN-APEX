@@ -44,7 +44,7 @@ from datetime import UTC, datetime
 from logging import Logger
 from typing import Any, NamedTuple
 
-from src.core.exceptions import AntibotError
+from src.core.exceptions import AntibotError, BrowserCrashedError
 from src.core.interfaces.antibot_provider import (
     AntibotProvider,
     LiveDomSelectors,
@@ -64,6 +64,10 @@ from src.providers.antibot._scroll import (
 from src.providers.antibot._tracing import build_trace_path, trace_dir_from_env
 
 DEFAULT_TIMEOUT_MS = 30_000
+# Same value and same reasoning as CamoufoxProvider's identical constant
+# (docs/REQUIREMENTS.md section 9 entry 17) -- see camoufox_provider.py's
+# own comment for the full explanation.
+DEFAULT_MAX_BROWSER_CRASH_ATTEMPTS = 3
 # Same reasoning and same default as CamoufoxProvider's
 # DEFAULT_POST_LOAD_WAIT_MS (camoufox_provider.py) -- long enough for
 # Anubis's own real, difficulty-2-by-default proof-of-work challenge to
@@ -127,6 +131,20 @@ PatchrightSolveFn = Callable[
 # and is exercised only via tests/integration -- see that module's own
 # comment for the full explanation. PatchrightProvider.solve() itself
 # (unit-tested via the injectable solve_fn) is unaffected.
+def _classify_solve_exception(
+    browser_crashed: bool, url: str, exc: Exception
+) -> AntibotError:
+    """docs/REQUIREMENTS.md section 9 entry 17: same pure,
+    independently-unit-tested crash-classification decision as
+    camoufox_provider.py's identical function -- see its own docstring
+    for the full reasoning."""
+    if browser_crashed:
+        return BrowserCrashedError(
+            f"patchright's browser engine crashed mid-solve for {url}: {exc}"
+        )
+    return AntibotError(f"patchright failed to solve {url}: {exc}")
+
+
 def _default_patchright_solve(  # pragma: no cover
     url: str,
     timeout_ms: int,
@@ -211,8 +229,22 @@ def _default_patchright_solve(  # pragma: no cover
                 "(run: patchright install chromium)"
             ) from exc
 
+        # docs/REQUIREMENTS.md section 9 entry 17: same real, kernel-log-
+        # confirmed browser-engine-crash mitigation as
+        # camoufox_provider.py's identical wiring -- p.chromium.launch()
+        # here always returns a genuine (non-persistent-context) Browser,
+        # so "disconnected" applies directly, no isinstance check needed
+        # the way Camoufox's own dual-mode context manager requires.
+        browser_crashed = False
+
+        def _mark_browser_crashed(*_args: object) -> None:
+            nonlocal browser_crashed
+            browser_crashed = True
+
+        browser.on("disconnected", _mark_browser_crashed)
         try:
             page = browser.new_page()
+            page.on("crash", _mark_browser_crashed)
             if trace_dir is not None:
                 page.context.tracing.start(screenshots=True, snapshots=True, sources=True)
             try:
@@ -568,7 +600,11 @@ def _default_patchright_solve(  # pragma: no cover
                         html_snapshots=html_snapshots,
                     )
                 except PatchrightError as exc:
-                    raise AntibotError(f"patchright failed to solve {url}: {exc}") from exc
+                    # docs/REQUIREMENTS.md section 9 entry 17: same
+                    # BrowserCrashedError distinction as
+                    # camoufox_provider.py's identical branch -- see
+                    # _classify_solve_exception's own docstring.
+                    raise _classify_solve_exception(browser_crashed, url, exc) from exc
             finally:
                 if trace_dir is not None:
                     page.context.tracing.stop(path=build_trace_path(trace_dir, url, "patchright"))
@@ -587,15 +623,21 @@ class PatchrightProvider(AntibotProvider):
         post_load_wait_ms: int = DEFAULT_POST_LOAD_WAIT_MS,
         solve_fn: PatchrightSolveFn | None = None,
         logger: Logger | None = None,
+        max_browser_crash_attempts: int = DEFAULT_MAX_BROWSER_CRASH_ATTEMPTS,
     ) -> None:
         if timeout_ms <= 0:
             raise AntibotError(f"timeout_ms must be > 0, got {timeout_ms}")
         if post_load_wait_ms < 0:
             raise AntibotError(f"post_load_wait_ms must be >= 0, got {post_load_wait_ms}")
+        if max_browser_crash_attempts <= 0:
+            raise AntibotError(
+                f"max_browser_crash_attempts must be > 0, got {max_browser_crash_attempts}"
+            )
         self._timeout_ms = timeout_ms
         self._post_load_wait_ms = post_load_wait_ms
         self._solve_fn = solve_fn or _default_patchright_solve
         self.logger = logger or get_logger(__name__)
+        self._max_browser_crash_attempts = max_browser_crash_attempts
 
     def solve(
         self,
@@ -605,19 +647,39 @@ class PatchrightProvider(AntibotProvider):
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
     ) -> Solution:
-        try:
-            raw = self._solve_fn(
-                url,
-                self._timeout_ms,
-                self._post_load_wait_ms,
-                click_selector,
-                extraction_selectors,
-                progressive_extraction,
-                login_flow,
-            )
-        except AntibotError:
-            self.logger.error("patchright_provider.solve_failed", extra={"url": url})
-            raise
+        # docs/REQUIREMENTS.md section 9 entry 17: same bounded
+        # browser-crash retry as CamoufoxProvider.solve()'s identical
+        # loop -- see its own comment for the full reasoning.
+        for attempt in range(1, self._max_browser_crash_attempts + 1):
+            try:
+                raw = self._solve_fn(
+                    url,
+                    self._timeout_ms,
+                    self._post_load_wait_ms,
+                    click_selector,
+                    extraction_selectors,
+                    progressive_extraction,
+                    login_flow,
+                )
+            except BrowserCrashedError as exc:
+                if attempt >= self._max_browser_crash_attempts:
+                    self.logger.error(
+                        "patchright_provider.solve_failed",
+                        extra={
+                            "url": url,
+                            "browser_crash_attempts_exhausted": attempt,
+                        },
+                    )
+                    raise
+                self.logger.warning(
+                    "patchright_provider.browser_crash_retry",
+                    extra={"url": url, "attempt": attempt, "reason": str(exc)},
+                )
+                continue
+            except AntibotError:
+                self.logger.error("patchright_provider.solve_failed", extra={"url": url})
+                raise
+            break
 
         return Solution(
             url=raw.url,

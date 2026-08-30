@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.exceptions import AntibotError
+from src.core.exceptions import AntibotError, BrowserCrashedError
 from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
 from src.providers.antibot.camoufox_provider import (
     CamoufoxProvider,
+    _classify_solve_exception,
     _RawSolve,
 )
 
@@ -106,6 +107,130 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
 
     with pytest.raises(AntibotError, match="browser launch failed"):
         provider.solve("https://example.com/")
+
+
+def test_classify_solve_exception_returns_browser_crashed_error_when_a_real_crash_fired() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17, answering a user review's
+    direct question: does the classification logic itself (not just the
+    retry loop around an already-classified fake exception) actually
+    convert a real page.on("crash")/browser.on(...) firing into
+    BrowserCrashedError? This is the exact decision
+    _default_camoufox_solve's own (untestable-without-a-real-browser,
+    `# pragma: no cover`) except-block makes -- pulled out as a pure
+    function specifically so this is checkable directly, without faking
+    an entire browser session."""
+    result = _classify_solve_exception(
+        browser_crashed=True, url="https://example.com/", exc=Exception("Target closed")
+    )
+
+    assert isinstance(result, BrowserCrashedError)
+    assert "browser engine crashed" in str(result)
+
+
+def test_classify_solve_exception_returns_plain_antibot_error_when_no_crash_fired() -> None:
+    """The other half: a PlaywrightError that isn't a real engine crash
+    (a denied request, a legitimate timeout -- browser_crashed stays
+    False) must classify as plain AntibotError, not BrowserCrashedError
+    -- CamoufoxProvider.solve()'s own retry loop must not retry these."""
+    result = _classify_solve_exception(
+        browser_crashed=False, url="https://example.com/", exc=Exception("denied")
+    )
+
+    assert type(result) is AntibotError
+    assert not isinstance(result, BrowserCrashedError)
+
+
+def test_browser_crash_retries_on_a_fresh_call_and_eventually_succeeds() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 17: a real, kernel-log-
+    confirmed Firefox engine crash (BrowserCrashedError specifically, not
+    any other AntibotError) is retried -- solve_fn is called again (a
+    fresh browser instance in the real, non-injected path, since
+    _default_camoufox_solve's own `with Camoufox(...)` always creates a
+    new one), not given up on after the first failure."""
+    calls = 0
+
+    def flaky_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+    ) -> _RawSolve:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise BrowserCrashedError(f"camoufox's browser engine crashed mid-solve for {url}")
+        return _RawSolve(url=url, html="<html>solved</html>", status=200, cookies={})
+
+    provider = CamoufoxProvider(solve_fn=flaky_solve, max_browser_crash_attempts=3)
+
+    solution = provider.solve("https://example.com/")
+
+    assert calls == 3  # two crashes, then a fresh third attempt succeeded
+    assert solution.html == "<html>solved</html>"
+
+
+def test_browser_crash_exhausts_max_attempts_and_raises() -> None:
+    """Bounded, not open-ended: a browser that keeps crashing every
+    single attempt still gives up after max_browser_crash_attempts, not
+    forever."""
+    calls = 0
+
+    def always_crashes(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+    ) -> _RawSolve:
+        nonlocal calls
+        calls += 1
+        raise BrowserCrashedError(f"camoufox's browser engine crashed mid-solve for {url}")
+
+    provider = CamoufoxProvider(solve_fn=always_crashes, max_browser_crash_attempts=3)
+
+    with pytest.raises(BrowserCrashedError):
+        provider.solve("https://example.com/")
+
+    assert calls == 3  # exactly the configured bound, not more
+
+
+def test_non_crash_antibot_error_is_not_retried() -> None:
+    """A real, reproducible solve failure that *isn't* a browser crash
+    (a denied request, no items found, ...) must not be retried the same
+    way -- retrying it would either waste time or mask a real problem
+    behind an eventual lucky pass."""
+    calls = 0
+
+    def denied_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+    ) -> _RawSolve:
+        nonlocal calls
+        calls += 1
+        raise AntibotError(f"camoufox failed to solve {url}: denied")
+
+    provider = CamoufoxProvider(solve_fn=denied_solve, max_browser_crash_attempts=3)
+
+    with pytest.raises(AntibotError, match="denied"):
+        provider.solve("https://example.com/")
+
+    assert calls == 1  # not retried at all
+
+
+def test_non_positive_max_browser_crash_attempts_raises_antibot_error() -> None:
+    """Failure case: a non-positive retry bound is meaningless."""
+    with pytest.raises(AntibotError, match="max_browser_crash_attempts must be > 0"):
+        CamoufoxProvider(max_browser_crash_attempts=0)
 
 
 def test_click_selector_reaches_the_solve_function() -> None:
