@@ -4482,6 +4482,223 @@ contract + 173 test-environment + 37 integration = صفر فشل**. الأهم:
 session-replay bot detection (ReMouse dataset) اللي اتسجّل في
 docstring الموديول الجديد كـforward-reference لتصميم مستقبلي.
 
+### 21. بحث مستقل من المستخدم: موضوعين جديدين لجدول التصعيد — Referer/session warm-up/تصنيف مؤجّل، وshape التنقل/فخاخ إضافية (توثيق وتصميم فقط، بدون تنفيذ)
+
+**السياق:** بعد قفل بند 10 بالكامل، المستخدم عمل بحث مستقل وطرح موضوعين
+جديدين للتحقق والتصميم — مرحلة توثيق/تصميم صريحة، مش تنفيذ (نفس نمط
+مراحل fpscanner/JA4 قبل التنفيذ). كل مصدر اتفحص مباشرة (WebFetch/
+WebSearch على المصدر الأساسي، مش نتيجة بحث سطحية) — بعض الادعاءات
+اتأكّدت بالكامل، وبعضها احتاج تصحيح دقيق (مسجّل بالكامل تحت، مش مخفي).
+
+#### موضوع 1: Referer path consistency + Session warm-up + تصنيف مؤجّل
+
+**تأكيد الفجوة (`grep` مباشر على `docs/REQUIREMENTS.md` و
+`docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md`):** صفر نتيجة لأي من
+"Referer"/"referrer"/"warm-up"/"تصنيف مؤجل"/"رجعي" في أي مكان — الطبقات
+التلاتة دي فعلاً مش متغطية خالص في items 1-20 الحالية.
+
+**فحص المصادر (النتيجة الكاملة، بما فيها التصحيحات):**
+
+1. **تطابق مسار الـReferer** — ✅ **مؤكَّد بالكامل**. مصدر أساسي حقيقي:
+   [Scrapfly — "HTTP Referer Header: Complete Guide for Web Scraping"](https://scrapfly.io/blog/posts/http-referer-header-complete-guide-for-web-scraping).
+   نص حرفي: *"A wrong value can be worse than a missing value"* — لأن
+   *"A server now sees an impossible path"*. وبيرفض صراحة الحل
+   المبسّط (Referer عام من محرك بحث) لأنه غير منطقي لـ APIs/طلبات
+   خلفية. وعلى endpoints داخلية عميقة، حتى **غياب** الـReferer
+   بيبان غير طبيعي: *"Large volumes of direct requests to `/product/123`...
+   with no Referer can still look unnatural."*
+
+2. **"Referer Scrapeground" كأداة اختبار مستقلة** — 🟡 **مؤكَّد جزئيًا
+   (تصحيح تسمية)**. مش أداة مستقلة بالاسم ده — هي قسم واحد
+   ([scrapfly.io/scrapeground/headers/referer](https://scrapfly.io/scrapeground/headers/referer))
+   جوه منصة تعليمية أشمل ([scrapfly.io/scrapeground](https://scrapfly.io/scrapeground/))،
+   والـtarget الفعلي اللي بيتفحص عليه فحص الـReferer هو
+   **web-scraping.dev** (endpoint `/testimonials`، وصفها الرسمي:
+   *"mock e-commerce website designed to test popular web scraping
+   patterns"*) — بيتطلب `Referer` يطابق الصفحة الحالية عشان الـAPI
+   يرد بيانات. **مؤكَّد إنها منصة تعليمية معلنة صراحة للاختبار
+   العام** (مش محتاجة إذن، زي bot.sannysoft بالظبط) — مفيدة كتأكيد
+   خارجي مستقبلي لو احتجنا نختبر تصميمنا ضد target تاني غير
+   mock-target بتاعنا.
+
+3. **"Session warm-up"** — 🟡 **مؤكَّد جزئيًا (تصحيح مصطلح)**. التقنية
+   حقيقية وموثّقة، لكن المصطلح الفعلي في المجال هو **"warm sessions"
+   / "session warming"**، مش "pre-walking" (المصطلح ده مش موجود في أي
+   مصدر اتفحص — صياغة شخصية، مش مصطلح معتمد). المصدر (تقني مستقل، مش
+   من شركة بائعة):
+   [webautomation.io — anti-bot bypass guide](https://webautomation.io/blog/ultimate-guide-to-web-scraping-antibot-and-blocking-systems-and-how-to-bypass-them/):
+   *"warm sessions before deep crawling"*. جودة المصدر: تقني حقيقي،
+   لكن ثانوي (مش من توثيق بائع رسمي زي Akamai/Cloudflare نفسهم) —
+   مسجّل بوضوح، مش مموّه كأقوى مما هو.
+
+4. **تصنيف مؤجّل/رجعي (patent حقيقي)** — ✅ **مؤكَّد بالكامل**. Patent
+   حقيقي وممنوح فعليًا (مش مجرد طلب): **US10708281B1** ("Content
+   delivery network (CDN) bot detection using primitive and compound
+   feature sets")، **Akamai Technologies, Inc.**
+   ([patents.google.com](https://patents.google.com/patent/US10708281B1/en))،
+   ونفس اللغة في الاستمرار **US20220329622A1**. نص حرفي من سيناريو
+   الاستخدام الموضّح في الـpatent نفسه: *"a client makes a request for
+   a HTML page... the edge server validates a bot detection session
+   cookie and fetches the content from the origin if not found in
+   cache"* [يشتغل fingerprinting] *"After a while, the client sends a
+   request for another page view... If the client has completed the
+   fingerprinting but was flagged as a bot, the edge takes the action
+   associated with a bot detection rule."* — **تطابق دقيق مع الادعاء**:
+   الطلب الأول بيتخدم عادي، التصنيف بيتراكم عبر cookie الجلسة، والإجراء
+   بيتطبّق بس على الطلب **التالي**، مش رجعيًا.
+
+5. **arXiv 2606.14525** — 🟡 **مؤكَّد جزئيًا (تصحيح مهم في الادعاء
+   نفسه، مش مجرد تفصيل)**. الورقة حقيقية وموجودة فعليًا (ID صحيح، يونيو
+   2026): **"Detecting Bot Detection: Prevalence, Techniques, and
+   Implications for Web Measurement Research"** (Ralf Gundelach,
+   Michael Mühlhauser, Dominik Herrmann). بتستخدم فعلًا مصطلحي "Tier 1"
+   و"Tier 3" — **لكن** دول بيصنّفوا **إشارات JS المستخدَمة للفحص نفسها
+   حسب غموض نيّتها** (Tier 1 = خاصية زي `navigator.webdriver` مفيهاش
+   استخدام شرعي غير كشف الأتمتة؛ Tier 3 = خاصية زي `navigator.userAgent`
+   ممكن تتستخدم لأغراض تانية غير كشف البوت)، **مش نظام تصنيف صناعي
+   رسمي للجلسات/الـCDN زي ما كان الادعاء الأصلي بيقول**. **القرار**:
+   الورقة دي **متسحبة من الاستشهاد كدليل على نظام Tier 1/Tier 3 صناعي**
+   — الدليل الحقيقي والمباشر على "تصنيف مؤجّل صناعي" هو Akamai patent
+   (نقطة 4 فوق)، مش الورقة الأكاديمية دي. الورقة نفسها تفيد فقط
+   كخلفية عامة عن مشهد bot detection، لو احتجناها لسياق تاني مستقبلًا.
+
+**التصميم المقترح (level 1/2/3، نفس فلسفة التصعيد التدريجي وnفس مبدأ
+"log-only أول + نظام نقاط، مش حكم فردي" اللي بند 19 أسّسه بالفعل):**
+
+- **Level 1 (وجود/شكل)**: هل `Referer` header موجود، وهل شكله URL صحيح
+  أصلًا؟ فحص لحظي بسيط، أضعف إشارة، متوقَّع دايمًا يكون جزء من نظام
+  نقاط أكبر مش حكم لوحده (نفس مبدأ fpscanner).
+- **Level 2 (تطابق مسار + session)**: هل مسار الـReferer فعلًا "حافة"
+  منطقية في خريطة تنقل mock-target الحقيقية (مثلًا `/` → `/feed` صحيح،
+  لكن `/feed` بـReferer فاضي أو من دومين خارجي غير منطقي)؟ + هل فيه
+  session/consent cookie من زيارة سابقة فعلية (دليل على session
+  warm-up حقيقي، مش قفزة مباشرة)؟
+- **Level 3 (سلوك جلسة كامل + تصنيف مؤجّل)**: تجميع انتهاكات
+  Level 1/2 عبر الجلسة كلها (state، مش فحص لحظي)، وبعد عتبة معينة،
+  تسجيل "تصنيف" للجلسة يتطبّق (تصوريًا — log-only فعليًا في هذه
+  المرحلة) على الطلبات **التالية** بس، مش رجعيًا — نفس آلية Akamai
+  patent بالظبط.
+
+**تصميم مقترح لإضافتها في mock-target (توثيق تصميم، لسه مش كود
+حقيقي):**
+
+- `security/referer_session_integration.py` (جديد، نفس بنية
+  `fpscanner_integration.py`): دالة نقية `score_referer_consistency(...)`
+  بتاخد الـReferer الحالي + المسار الحالي + هل session cookie موجود +
+  خريطة ثابتة صغيرة لـ"المسارات السابقة المنطقية" لكل route (مثلًا
+  `{"/feed": {"/", "/feed"}, "/login": {"/"}, ...}`) وترجع نقطة لكل
+  إشارة (Level 1 + Level 2)، زي `score_fingerprint_report` بالظبط.
+- state جلسة عبر الطلبات (Level 3): كائن `SessionNavigationTracker`
+  (نفس نمط `SessionStore`/`FeedRateLimiter` الموجودين بالفعل —
+  in-memory، injectable clock) بيجمّع نقاط كل طلب لكل session/IP، وبعد
+  `REFERER_VIOLATION_THRESHOLD` (config جديد)، بيسجّل log واضح إن
+  الجلسة اتصنّفت "مشبوهة" من الطلب رقم كذا فصاعدًا — **بدون** ما
+  يأثّر على الطلبات اللي فاتت (log-only، نفس مبدأ بند 19).
+- **ملحوظة معمارية مهمة اتأكّدت من الكود مباشرة**: `GenericSpider`
+  الحالي (`src/spiders/generic_spider.py`) بيروح مباشرة لـ`start_urls`
+  من غير أي زيارة لصفحة رئيسية/تصنيف الأول (`start_requests` بيبني
+  الطلبات من `start_urls` مباشرة) — يعني لو الطبقة دي اتفعّلت على
+  mock-target دلوقتي، السكرابر بتاعنا نفسه هيتصنّف "مشبوه" فورًا Level
+  2، مش لأن فيه باج، لكن لأن معندناش session warm-up من الأساس. ده
+  **مش عيب في التصميم المقترح** — العكس، ده بالظبط الفجوة الحقيقية اللي
+  المستخدم بيسأل عنها، ومصدر توثيقي إضافي إن Scrapy نفسه (عبر
+  `RefererMiddleware`، مفعّل بالفعل) بيبني الـReferer صح تلقائيًا مع
+  `response.follow()` — بس السكرابر بتاعنا لازم فعليًا **يزور** صفحات
+  وسيطة الأول (تغيير في `GenericSpider`/`SpiderConfig`، مش في
+  mock-target) عشان يستفيد من كده. هذا نفسه سبب تسلسل موضوع 2's نقطة 3
+  تحت.
+
+#### موضوع 2: شكل التنقل، سلوك التابات، وفخاخ إضافية
+
+**1. فحص الكود المباشر — `decoy_data.py` (`generate_decoy_twin`):**
+ثابتة/deterministic بالكامل — الـseed المستخدَم
+(`f"{seed}:decoy:{real_post.post_id}"`) بيعتمد بس على هوية البوست نفسه،
+صفر اعتماد على IP/سلوك/اشتباه الطالب. **مؤكَّد: عندنا decoy ثابت، مش
+تسميم نشط/تفاعلي.**
+
+**2. فحص الكود المباشر — `honeypots.py` + بحث شامل عن "redirect" في
+`test-environment/mock-target/`:** الـredirects الوحيدة الموجودة فعليًا
+في `app.py` وظيفية بحتة (login flow: `redirect("/")`،
+`redirect("/feed-protected")`) — **صفر آلية redirect-loop trap من أي
+نوع**. `honeypots.py` فيه بس الأربع طرق إخفاء الروابط الموثّقة
+(`display-none`/`visibility-hidden`/`opacity-offscreen`/`aria-hidden`).
+**مؤكَّد: مفيش redirect-loop trap منفصل عن الـ4 honeypot methods
+الحاليين.**
+
+**3. مصادر شكل التنقل وسلوك التابات (فحص مباشر، بتصحيح دقيق):**
+
+- **Navigation-graph shape** — ✅ **مؤكَّد بالكامل، patent ممنوح
+  فعليًا** (مش مجرد طلب): **US11463462B2** ("Bot behavior detection")،
+  **Microsoft Technology Licensing, LLC**، اتقدّم يونيو 2019، اتمنح
+  أكتوبر 2022
+  ([patents.google.com](https://patents.google.com/patent/US11463462B2/en)).
+  نص حرفي من الـabstract: *"the entity's requests sent to a website are
+  used to generate a graph. The graph may be used to create an image...
+  A machine learning model... trained using a first training set of
+  images that correspond to bots and a second training set... can
+  determine whether the entity is a bot or a human by performing an
+  image classification"* — عبر CNN تحديدًا. الـpatent نفسه بيوضّح
+  الاستقلالية عن IP/UA صراحة كنقطة قوته الأساسية: *"a bot can easily
+  use a proxy IP address or tamper with its user agent"*، على عكس
+  *"conventional bot detection... [that] use the identity fields."*
+
+- **دراسة Jeff Huang عن التابات المتعددة** — 🟡 **مؤكَّدة، لكن رقم
+  واحد محتاج تصحيح**. المصدر الأساسي الحقيقي (اتقرا كامل):
+  Jeff Huang & Ryen W. White, ["Parallel Browsing Behavior on the
+  Web"](https://jeffhuang.com/papers/ParallelBrowsing_HT10.pdf)، ACM
+  Hypertext 2010 (HT'10)، جامعة واشنطن (الانتماء الصحيح وقت النشر —
+  Huang انتقل لـBrown University بعدين، لكن الورقة دي بالذات UW).
+  - نموذج foreground/background: ✅ مؤكَّد حرفيًا (مبني على Miyata &
+    Norman 1986): *"the current active tab is the foreground task and
+    has the user's attention, while other tabs may be loading in the
+    background."*
+  - الرقم 57.4%: ✅ مؤكَّد حرفيًا، لكن بدقة أكتر: *"57.4% of tab
+    sessions had at least one tab switch"* — "tab sessions" تحديدًا
+    (تصفّح كامل جوه تاب واحد)، مش "جلسات تصفح" عمومًا.
+  - **exponent k≈3.2: ❌ منسوب غلط**. الورقة بتذكر **قانونين قوة
+    منفصلين**: *"exponents k = 3.2 and k = 3.5 respectively"* —
+    **k=3.2 لـ outclicks (نقرات خروج)، وk=3.5 لتبديل التابات نفسه**.
+    يعني لو أي تصميم مستقبلي محتاج نموذج تبديل تابات، الرقم الصحيح
+    المطلوب استخدامه هو **k≈3.5**، مش 3.2.
+  - **القرار**: زي ما المستخدم نفسه قال، الأرقام دي **مرجعية للمستقبل
+    بس** — التابات المتعددة بتشارك cookies وبتظهر كجلسة واحدة للسيرفر،
+    فمفيش بند اختبار منفصل مطلوب لها دلوقتي. الأرقام (**المصحَّحة**)
+    مسجّلة هنا كمرجع، مربوطة ببند navigation-graph shape، مش بند قائم
+    بذاته.
+
+- **تسميم البيانات النشط + طريقة الكشف** — ✅ **مؤكَّد**. مصدر حقيقي:
+  [Scrapfly — "What are Honeypots and How to Avoid Them in Web
+  Scraping"](https://scrapfly.io/blog/posts/what-are-honeypots-and-how-to-avoid-them):
+  *"a website detecting a scraper can serve different product details
+  such as price or images, which leads to corrupting scraping
+  datasets"*، وطريقة الكشف الموثّقة بالحرف: *"scraping the target web
+  page through two distinct web scrapers with different configurations,
+  such as the IP address, and comparing the results."* أمثلة إضافية
+  حقيقية: Cloudflare AI Labyrinth (تسميم على نطاق واسع، مسجّل بالفعل
+  في obstacle map)، ومشروع مفتوح المصدر
+  [Miasma](https://github.com/austin-weeks/miasma) (فخ HTTP بيقدّم
+  محتوى "مسموم" تحديدًا للبوتات اللي بتتبع روابط honeypot مخفية).
+
+**القرار النهائي (سؤال المستخدم رقم 3، موضوع 2):** navigation-graph
+shape **موضوعة في obstacle map كفجوة موثّقة ومصدرها patent حقيقي
+ممنوح — لكن مش أولوية تنفيذ فورية**. السبب المعماري المباشر (مش تقدير
+شخصي): بند 1 فوق (Referer/session warm-up) وnavigation-graph shape
+الاتنين محتاجين **نفس التغيير الأساسي بالظبط** في `GenericSpider` —
+تصفّح متعدد الصفحات حقيقي قبل الوصول للهدف، بدل القفزة المباشرة
+لـ`start_urls` الحالية. تنفيذ navigation-graph shape قبل ما بند
+الـReferer يتنفّذ (ويضيف قدرة التصفّح متعدد الصفحات دي للسكرابر) هيبقى
+اختبار ضد سكرابر لسه بيعمل نفس القفزة المباشرة — يعني هيتصنّف فورًا
+بشكل تافه (trivial)، مش اختبار حقيقي لقدرة الكشف. **الترتيب الصح**:
+بند الـReferer/session-warmup الأول (بيبني قدرة التصفّح متعدد الصفحات
+اللي الاتنين محتاجينها)، وnavigation-graph shape يتبني فوقه بعدين
+كإشارة إضافية log-only (نفس فلسفة fpscanner) بمجرد ما البنية التحتية
+دي موجودة.
+
+**الحالة**: توثيق وتصميم بس، **لسه مفيش كود اتكتب لأي من الموضوعين
+دول** — قرار المستخدم صراحة كان "سجّل الإجابات والقرارات"، مش "ابدأ
+التنفيذ". جاهز يبدأ التنفيذ (بند الـReferer/session-warmup الأول، حسب
+القرار فوق) لما المستخدم يأكّد.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
