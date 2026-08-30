@@ -4206,6 +4206,115 @@ BrowserContext]`؛ بند 17 (تحقيق مستقل تمامًا، بعدها ب
 (8443) لسه، ده بالظبط اللي Step D هيضيفه. الدمج مؤكَّد بالكامل، صفر
 رجعة على بند 17، جاهزين لـStep D فعليًا.
 
+### 19. Step D الفعلية: JA4 اتنفى بدليل قاطع — التركيز اتحوّل لـfpscanner (JS/browser-behavior)، مش رفض بنيوي
+
+**الاكتشاف الأول (اتفحص مباشرة، مش بحث نظري بس):** اخترقت الـJA4
+proxy فعليًا بمتصفحينا الحقيقيين. **Camoufox** وصل لتحدي Anubis
+فعليًا وسجّل fingerprint حقيقي (`t13d1617h2_86a278354501_3cbfd9057e0d`،
+مختلف عن `curl` العادي). **Patchright** اترفض من Anubis (نفس الـ
+`bot/headless-chrome` rule الموثّق من قبل) **قبل** ما الطلب يوصل
+لطبقة الـJA4 observation أصلاً — يعني تصنيف JA4 مستحيل يشوف حركة
+Patchright خالص طالما Anubis قدامها.
+
+**الاكتشاف الحاسم (مصدر أساسي مباشر، مش مدونة SEO):** فتحت
+[daijro/camoufox issue #555](https://github.com/daijro/camoufox/issues/555)
+مباشرة. النص الحرفي: **JA3, JA4, وAkamai-H2 hash متطابقين 100%
+بالحرف** بين Firefox عادي وCamoufox (نفس القيم بالظبط للاتنين،
+مؤكَّد بأداة فحص فعلية `tls.browserleaks.com/json`). السبب: Camoufox
+بيصلّح بصمة TLS على مستوى C++/Rust جوه محرك Firefox نفسه، مش بيقلّدها
+بـJS — يعني **مفيش JA4 "مزيّف" نكتشفه، لأن مفيش فرق أصلاً**. قرار
+المستخدم صح 100%: **نوقف مسار تصنيف JA4 نهائيًا** — بناء قاعدة عليه
+هيفشل بنيويًا، مش لأن التصميم غلط لكن لأن مفيش إشارة حقيقية نصنّف
+عليها من الأساس.
+
+#### أين الإشارة الحقيقية إذن؟ نفس issue #555 وثّق تناقض JS/browser-behavior حقيقي
+
+بما إن الشبكة متطابقة، أي كشف فعلي لازم يبقى على مستوى JS. issue
+#555 نفسه وثّق حالة حقيقية (Hilton.com/Akamai): Firefox عادي بياخد
+200 + تحدي JS قابل للحل، Camoufox بياخد 403 مباشر — رغم إن JA3/JA4/
+HTTP2 متطابقين تمامًا لنفس الحالة. الإشارة المحددة اللي الـissue
+وثّقها بالأرقام: **تناقض viewport/screen** — viewport بتاع Playwright
+(1280×720 وقتها) مش متطابق مع أبعاد الشاشة اللي JS بيقرأها (1920×1920).
+
+**اتفحص مباشرة على بيئتنا (مش افتراض استمرارية):**
+```
+innerWidth: 1280, innerHeight: 720
+screenWidth: 3072, screenHeight: 1728
+```
+الأرقام **مختلفة تمامًا** عن الـissue — يعني القيم نفسها config/
+version-dependent، **مش توقيع ثابت نحفظه كـblacklist**. الفحص الصح
+هو مبدأ الاتساق العام (`innerWidth <= screenWidth &&
+innerHeight <= screenHeight`)، مش قيم محددة.
+
+**إشارة تانية مستقلة، مؤكَّدة من مصادر متعددة:** Camoufox بيعطّل
+WebGL بالكامل افتراضيًا (مفيش dataset كافي لتدوير بصمته). **اتفحص
+مباشرة**: `canvas.getContext('webgl')` رجع `null` فعليًا على Camoufox
+عندنا — غياب تام، مش قيمة مزيّفة.
+
+**فئة تالتة اتلقيت (SpiderMonkey/Cloudflare)، أمانة صريحة:** لقيت
+الادعاء متكرر في عدة مصادر (فحوصات محرك SpiderMonkey مش قابلة
+للإخفاء بالكامل في تحديات Cloudflare)، **لكن مقدرتش ألاقي مصدر
+أساسي/تقني يحدد الفحص بالظبط** — فئة موثّقة، مش اختبار محدد قابل
+للتنفيذ عندنا دلوقتي. **مسجَّلة كفجوة بحثية مفتوحة، مش مُنفَّذة.**
+
+#### فحص تعارض حقيقي مع BotD (فحص كود، مش بحث خارجي) — صفر ازدواجية
+
+قُرئ `static/vendor/botd.esm.js` مباشرة (مش افتراض):
+- `detectWebGL()`: بيفحص `vendor == 'Brian Paul' && renderer ==
+  'Mesa OffScreen'` (توقيع headless-Chrome قديم محدد) — **لو الـcontext
+  `null` تمامًا (حالة Camoufox)، `getWebGL()` بترمي استثناء قبل ما
+  توصل للمقارنة دي أصلاً** — صفر تداخل مع فحصنا الجديد (غياب تام،
+  مش توقيع محدد).
+- `detectWindowSize()`: بيفحص `outerWidth === 0 && outerHeight === 0`
+  (توقيع "مفيش window chrome خالص" قديم) — **اتفحص مباشرة على
+  Camoufox عندنا: `outerWidth=1728, outerHeight=1084`، مش صفر خالص**
+  — BotD مايشوفش المشكلة دي أبدًا، ومؤكَّد من `test-environment/logs/
+  botd_flags.log`: **`"bot": false` في كل تقرير Camoufox حقيقي
+  اتسجّل طول تاريخ المشروع، صفر استثناء** — تأكيد مستقل إضافي إن
+  فحوصنا الجديدة مش متكررة مع BotD.
+
+#### المبدأ التصميمي (بحث مؤكَّد، مصادر حقيقية)
+
+- **"صفر إشارة واحدة دليل قاطع على الأتمتة لوحدها"** — مؤكَّد من
+  مصادر متعددة مستقلة (Intuned's "How bot detection works"، Castle's
+  "Bot detection 101": أنظمة حقيقية بتجمّع عشرات الإشارات الضعيفة في
+  نقاط خطر واحدة، مش قرار من إشارة واحدة).
+- **"سجّل في وضع مراقبة الأول، قرّر التنفيذ بعد ما تدرس بيانات
+  حقيقية"** — توصية موثّقة من Microsoft وF5 (bot-management docs):
+  ابدأ بتسجيل بدون إنفاذ، حلّل الأنماط، بعدين قرّر عتبة الحظر.
+
+#### التنفيذ (log-only، نظام نقاط، مش حكم فردي)
+
+`security/fpscanner_integration.py` (جديد): `score_fingerprint_report`
+(دالة نقية، بتجمع نقطة لكل إشارة مستقلة — 0-2، أبدًا حكم `bool`
+واحد) + `log_fingerprint_report` (بيسجّل عند INFO **دايمًا**، بدون أي
+عتبة WARNING — القرار ده مؤجَّل عمدًا لمرحلة لاحقة بعد دراسة بيانات
+حقيقية، نفس مبدأ Microsoft/F5 فوق). سكريبت JS صغير مخصص (مش vendored،
+كودنا احنا) في `templates/index.html` بيجمع الإشارتين ويبعتهم لـ
+`/fingerprint-report` (نفس شكل `/botd-report` بالظبط). `config.py`:
+`ENABLE_FINGERPRINT_SCORING` (افتراضي `true`) + `FINGERPRINT_LOG_PATH`،
+نفس نمط `ja4_log_path`.
+
+**اتّحقّق محليًا:** `ruff` نظيف، **173 test-environment test PASSED**
+(كان 165، +8: 6 اختبارات جديدة لـ`fpscanner_integration.py` + 2
+route-level في `test_app.py`)، تغطية 100% محفوظة (`fpscanner_
+integration.py` نفسه 100%). `scripts/verify-like-ci.sh` بالكامل نظيف.
+
+**تأكيد end-to-end حقيقي (مش افتراض إن السكريبت شغّال)**: Camoufox
+حقيقي عدّى الـcookie wall ووصل لـ`/`، ولوج `fingerprint_reports.log`
+سجّل فعليًا:
+```json
+{"report": {"webglAvailable": false, "viewportConsistent": false}, "score": 2}
+```
+اتكرر مرتين متتاليتين بنفس النتيجة (`score: 2` الاتنين) — الاتنين
+الإشارتين بيطلقوا فعليًا على Camoufox حقيقي، مش نظري.
+
+**السويت الكامل لـ`tests/integration/` محليًا**: **29 passed، 7
+failed (نفس فئة "مفيش إنترنت حقيقي" المعروفة بالحرف، صفر تغيير)، 1
+skipped** — صفر رجعة.
+
+**لسه معملتش push** — جاهز للتأكيد على CI حقيقي.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
