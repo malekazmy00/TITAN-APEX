@@ -152,6 +152,17 @@ class SpiderConfig(BaseModel):
     # default) keeps every existing config's exact prior behavior: a
     # direct request to `start_urls` with no warm-up hop at all.
     warm_session_urls: list[str] = Field(default_factory=list)
+    # docs/REQUIREMENTS.md section 9 entry 21, Step 2: opt-in, per-target
+    # -- when True and antibot_needed is also True, the real browser-
+    # driving provider (Camoufox/Patchright) starts this solve() call's
+    # browser context from a cross-call accumulated cookie/storage
+    # profile, and saves its own resulting state back into it on
+    # success (src.providers.antibot.cookie_jar_manager's own module
+    # docstring has the full mechanism). False (the default) keeps
+    # every existing target's exact prior behavior: a genuinely fresh,
+    # empty browser profile every single solve() call -- the same
+    # complete isolation entry 17's own test suite depends on.
+    use_accumulated_profile: bool = False
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:
@@ -223,6 +234,25 @@ class SpiderConfig(BaseModel):
             raise ValueError(
                 "login requires antibot_provider 'camoufox' or 'patchright' "
                 f"(a real, live browser page) -- got {self.antibot_provider!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _use_accumulated_profile_requires_a_real_browser_provider(self) -> SpiderConfig:
+        if not self.use_accumulated_profile:
+            return self
+        # Same real structural requirement as login/extraction_mode/
+        # progressive_extraction: only a provider with a real browser
+        # context (camoufox/patchright) has anything to load a saved
+        # profile into or save one back out of at all (docs/REQUIREMENTS.md
+        # section 9 entry 21, Step 2) -- ByparrProvider's own /v1 API
+        # never hands this process a browser context.
+        if not self.antibot_needed:
+            raise ValueError("use_accumulated_profile requires antibot_needed: true")
+        if self.antibot_provider not in ("camoufox", "patchright"):
+            raise ValueError(
+                "use_accumulated_profile requires antibot_provider 'camoufox' or "
+                f"'patchright' (a real browser context) -- got {self.antibot_provider!r}"
             )
         return self
 

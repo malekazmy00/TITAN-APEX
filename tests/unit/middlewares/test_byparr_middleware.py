@@ -37,6 +37,8 @@ class _FakeProvider(AntibotProvider):
         self.last_extraction_selectors: LiveDomSelectors | None = None
         self.last_progressive_extraction: bool = False
         self.last_login_flow: LoginFlow | None = None
+        self.last_warm_session_urls: list[str] | None = None
+        self.last_use_accumulated_profile: bool = False
 
     def solve(
         self,
@@ -45,11 +47,15 @@ class _FakeProvider(AntibotProvider):
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
     ) -> Solution:
         self.last_click_selector = click_selector
         self.last_extraction_selectors = extraction_selectors
         self.last_progressive_extraction = progressive_extraction
         self.last_login_flow = login_flow
+        self.last_warm_session_urls = warm_session_urls
+        self.last_use_accumulated_profile = use_accumulated_profile
         if self._error is not None:
             raise self._error
         assert self._solution is not None
@@ -294,6 +300,82 @@ def test_process_request_passes_login_flow_from_meta_to_the_provider() -> None:
     middleware.process_request(request, spider=object())
 
     assert fake_provider.last_login_flow == login_flow
+
+
+def test_process_request_passes_warm_session_urls_from_meta_to_the_provider() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 2:
+    request.meta["warm_session_urls"] (set by GenericSpider from
+    SpiderConfig.warm_session_urls) must reach whichever provider is
+    selected, same passthrough contract as every other optional
+    capability here."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    request = Request(
+        "https://example.com/",
+        meta={
+            "antibot_needed": True,
+            "warm_session_urls": ["https://example.com/", "https://example.com/category"],
+        },
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_warm_session_urls == [
+        "https://example.com/",
+        "https://example.com/category",
+    ]
+
+
+def test_process_request_passes_use_accumulated_profile_from_meta_to_the_provider() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21, Step 2:
+    request.meta["use_accumulated_profile"] (set by GenericSpider from
+    SpiderConfig.use_accumulated_profile) must reach whichever provider
+    is selected, same passthrough contract as every other optional
+    capability here."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    request = Request(
+        "https://example.com/",
+        meta={"antibot_needed": True, "use_accumulated_profile": True},
+    )
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_use_accumulated_profile is True
+
+
+def test_process_request_defaults_use_accumulated_profile_to_false_when_absent_from_meta() -> None:
+    """Backward compatible: every existing request.meta (no such key at
+    all) must keep getting the safe, isolated default."""
+    solution = Solution(
+        url="https://example.com/",
+        html="<html>solved</html>",
+        status_code=200,
+        cookies={},
+        solved_at=datetime.now(tz=UTC),
+    )
+    fake_provider = _FakeProvider(solution=solution)
+    middleware = ByparrMiddleware(byparr_provider=fake_provider, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"antibot_needed": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert fake_provider.last_use_accumulated_profile is False
+    assert fake_provider.last_warm_session_urls is None
 
 
 def test_process_request_attaches_html_snapshots_when_the_provider_captured_them() -> None:

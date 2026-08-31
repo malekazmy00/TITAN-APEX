@@ -123,6 +123,15 @@ class GenericSpider(scrapy.Spider):
             "extraction_selectors": extraction_selectors,
             "progressive_extraction": self.config.progressive_extraction,
             "login_flow": None,
+            # docs/REQUIREMENTS.md section 9 entry 21, Step 2: harmless
+            # to always include -- ByparrMiddleware only ever reads this
+            # meta at all when antibot_needed is also True (its own
+            # process_request's first check), so for a plain
+            # (antibot_needed: False) target this is simply never
+            # looked at, the same "no-op for everything that doesn't use
+            # it" shape every other optional meta key here already has.
+            "warm_session_urls": self.config.warm_session_urls,
+            "use_accumulated_profile": self.config.use_accumulated_profile,
             # docs/REQUIREMENTS.md section 9 entry 15: a real, discovered
             # prerequisite gap, not incidental -- Scrapy's own
             # HttpErrorMiddleware (spider middleware, enabled by default)
@@ -154,13 +163,29 @@ class GenericSpider(scrapy.Spider):
         return meta
 
     def _build_start_requests(self) -> Iterator[scrapy.Request]:
-        # docs/REQUIREMENTS.md section 9 entry 21, Step 1: a non-empty
-        # `warm_session_urls` means the very first request goes there
-        # instead of straight to `start_urls` -- see
-        # `_parse_warm_session_step`'s own docstring for the full chain.
-        # Empty (every existing config) keeps this exact, unmodified
-        # direct-to-`start_urls` behavior.
-        if self.config.warm_session_urls:
+        # docs/REQUIREMENTS.md section 9 entry 21: a non-empty
+        # `warm_session_urls` changes the very first request(s) built --
+        # exactly *how* depends on `antibot_needed`, a real, confirmed
+        # architectural split (entry 21 Step 2's own investigation, not
+        # a guess): every `provider.solve()` call
+        # (CamoufoxProvider/PatchrightProvider) launches its own
+        # completely independent browser with zero cookie/Referer
+        # continuity from any other Scrapy request -- confirmed by
+        # reading byparr_middleware.py/camoufox_provider.py directly.
+        # So a Step 1-style *Scrapy-level* hop chain (multiple separate
+        # requests, each independently reaching ByparrMiddleware) would
+        # never actually connect the warm-up to the real target at all
+        # for an antibot-protected one: each hop would trigger its own
+        # unrelated solve(). Step 2's real fix instead skips the
+        # Scrapy-level chain entirely and lets the provider itself walk
+        # `warm_session_urls` inside one continuous browser session
+        # (`_request_meta()`'s own `warm_session_urls` key, read by
+        # `camoufox_provider.py`/`patchright_provider.py`'s own
+        # `_default_*_solve` functions). For a plain (`antibot_needed:
+        # False`) target, Scrapy's own request/response cycle *is* the
+        # real navigation -- Step 1's original chain (real Referer/
+        # Cookie middleware doing genuine work) stays exactly as it was.
+        if self.config.warm_session_urls and not self.config.antibot_needed:
             yield scrapy.Request(
                 self.config.warm_session_urls[0],
                 callback=self._parse_warm_session_step,

@@ -532,3 +532,55 @@ def test_login_requires_a_real_browser_provider(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="requires antibot_provider"):
         load_spider_config(str(config_file))
+
+
+# --- use_accumulated_profile (docs/REQUIREMENTS.md section 9 entry 21,
+# Step 2) --------------------------------------------------------------
+
+
+def test_use_accumulated_profile_defaults_to_false(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.use_accumulated_profile is False
+
+
+def test_use_accumulated_profile_is_read_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        "use_accumulated_profile: true\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.use_accumulated_profile is True
+
+
+def test_use_accumulated_profile_requires_antibot_needed(tmp_path: Path) -> None:
+    """Failure case: no antibot_needed means no provider ever drives a
+    real browser context to load/save a profile into at all."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_provider: camoufox\nuse_accumulated_profile: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_needed"):
+        load_spider_config(str(config_file))
+
+
+def test_use_accumulated_profile_requires_a_real_browser_provider(tmp_path: Path) -> None:
+    """Failure case: byparr (the default antibot_provider) has no
+    browser context to load/save a profile into."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nuse_accumulated_profile: true\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="requires antibot_provider"):
+        load_spider_config(str(config_file))

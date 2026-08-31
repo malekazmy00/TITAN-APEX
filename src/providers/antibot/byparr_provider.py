@@ -70,7 +70,35 @@ class ByparrProvider(AntibotProvider):
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
     ) -> Solution:
+        if warm_session_urls:
+            # Same structural gap as login_flow/progressive_extraction
+            # below (docs/REQUIREMENTS.md section 9 entry 21, Step 2):
+            # navigating through a real warm-up chain within one shared
+            # browser session needs a live browser page -- Byparr's
+            # /v1 protocol is a stateless "fetch and return HTML" HTTP
+            # call with no page handle this process ever sees.
+            self.logger.warning(
+                "byparr_provider.warm_session_urls_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API has no live page to walk a warm-up chain on",
+                },
+            )
+        if use_accumulated_profile:
+            # Same structural gap: an accumulated cookie/storage profile
+            # needs a real browser context to load into and save from --
+            # Byparr's /v1 protocol never hands this process a browser
+            # context at all.
+            self.logger.warning(
+                "byparr_provider.use_accumulated_profile_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API has no browser context to load/save a profile into",
+                },
+            )
         if login_flow is not None:
             # Same structural gap as extraction_selectors/click_selector
             # below (docs/REQUIREMENTS.md section 9 entry 15): filling

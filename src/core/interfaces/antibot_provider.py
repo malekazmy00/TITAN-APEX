@@ -53,14 +53,26 @@ class LoginFlow(BaseModel):
     A real, discovered architectural constraint this shape works around
     rather than assumes away: each :meth:`AntibotProvider.solve` call
     launches (and tears down) its own fresh browser -- cookies never
-    persist *across* separate ``solve()`` calls. So "session persistence"
-    is demonstrated *within* one browser session across multiple
-    in-browser navigations (login, then the actual target URL, then
-    optionally a next-page link) inside a single ``solve()`` call, not
-    across separate Scrapy-level requests reusing a shared cookie jar --
-    a real, live cookie jar shared *across* requests would need a
-    persistent browser context, a materially bigger architecture change
-    out of scope for this round.
+    persist *across* separate ``solve()`` calls **by default**. So
+    "session persistence" here is demonstrated *within* one browser
+    session across multiple in-browser navigations (login, then the
+    actual target URL, then optionally a next-page link) inside a single
+    ``solve()`` call, not across separate Scrapy-level requests reusing
+    a live, shared browser process.
+
+    **Update (docs/REQUIREMENTS.md section 9 entry 21, Step 2):** the
+    "materially bigger architecture change" this docstring used to say
+    was out of scope has since landed, in a specific, narrower form --
+    :meth:`AntibotProvider.solve`'s own ``use_accumulated_profile``
+    parameter persists cookies/storage state *across* separate
+    ``solve()`` calls via a real, file-backed cookie jar
+    (:mod:`src.providers.antibot.cookie_jar_manager`), not by keeping one
+    live browser process/context open between calls (that specific
+    "share one continuous session between requests" architecture is
+    still not what this does, and still isn't needed for the real,
+    demonstrated goal: a new browser starting from previously-accumulated
+    state looks the same, from the target's own perspective, as one that
+    never closed at all).
 
     ``username_field``/``password_field``/``submit_selector`` are CSS
     selectors for the real DOM form's own input/button elements. The
@@ -131,6 +143,8 @@ class AntibotProvider(ABC):
         extraction_selectors: LiveDomSelectors | None = None,
         progressive_extraction: bool = False,
         login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
     ) -> Solution:
         """Solve whatever anti-bot challenge protects ``url``.
 
@@ -193,6 +207,41 @@ class AntibotProvider(ABC):
         (``ByparrProvider``) must not crash or silently drop it -- log a
         clear warning and solve ``url`` directly, unauthenticated, same
         as if ``login_flow`` had not been given at all.
+
+        ``warm_session_urls`` (docs/REQUIREMENTS.md section 9 entry 21,
+        Step 2): same best-effort contract as the other parameters --
+        when given, a provider with a real, live browser page navigates
+        to each URL, in order, within the *same* browser session (the
+        same page/context ``url`` itself is ultimately solved with, not
+        a separate one), before navigating to ``url``. This is the real
+        fix for the gap :class:`LoginFlow`'s own docstring used to
+        describe as permanent (see that docstring's own updated note):
+        since every navigation here shares one real browser context,
+        cookies/session state a warm-up page sets genuinely carry
+        forward to ``url``'s own navigation, the way a real user
+        browsing a real site would accumulate them. A provider that
+        cannot support it (``ByparrProvider``) must not crash or
+        silently drop it -- log a clear warning and solve ``url``
+        directly, with no warm-up at all, same as if
+        ``warm_session_urls`` had not been given.
+
+        ``use_accumulated_profile`` (docs/REQUIREMENTS.md section 9
+        entry 21, Step 2): same best-effort contract -- when ``True``, a
+        provider with a real, live browser page starts this ``solve()``
+        call's own browser context from a *cross-call* accumulated
+        cookie/storage profile (built up over many real, separate
+        ``solve()`` calls over real time -- see
+        :mod:`src.providers.antibot.cookie_jar_manager`'s own module
+        docstring for the full mechanism and its RRD-style retention),
+        and saves this call's own resulting state back into that same
+        accumulated profile on success. ``False`` (the default) keeps
+        every existing caller's exact prior behavior: a genuinely fresh,
+        empty browser profile every single call, the same complete
+        isolation entry 17's own test suite depends on. A provider that
+        cannot support it (``ByparrProvider``) must not crash or
+        silently drop it -- log a clear warning and solve with a fresh
+        profile regardless, same as if ``use_accumulated_profile`` were
+        ``False``.
 
         Implementations must raise
         :class:`src.core.exceptions.AntibotError` (never a bare

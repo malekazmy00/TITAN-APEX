@@ -4829,10 +4829,343 @@ run [33330929519](https://github.com/malekazmy00/TITAN-APEX/actions/runs/3333092
    خاص بينا أصح من الاعتماد على أي من دول**، لما نوصل لمرحلة تنفيذ
    Step 2 فعليًا.
 
-**الحالة**: بحث وتوثيق بس لـStep 2 — صفر كود، زي ما اتفق عليه صراحة.
-هيتنفّذ لاحقًا كـescalation منفصل موثّق (فرع + regression شامل، نفس
-منهجية بند 17)، مدموج مع أداة الكوكيز التراكمية (تصميم RRD-style) اللي
-المستخدم طلبها.
+**تحديث: Step 2 اتنفّذ فعليًا على فرع منفصل
+(`claude/entry21-step2-persistent-context`) — تفاصيله الكاملة تحت.**
+
+#### تنفيذ Step 2: سياق متصفح مستمر + أداة كوكيز تراكمية RRD-style
+
+**1) سياق متصفح مستمر عبر warm-up + الهدف الحقيقي (تعديل عالي الخطورة،
+فرع منفصل + regression شامل زي بند 17)**
+
+`camoufox_provider.py`/`patchright_provider.py`'s `_default_*_solve()`
+اتعدّلوا الاتنين: بدل `browser.new_page(ignore_https_errors=True)`
+المباشرة، دلوقتي `browser.new_context(ignore_https_errors=True,
+storage_state=loaded_state)` ثم `context.new_page()` — `loaded_state`
+بيكون `None` (سلوك مطابق تمامًا للقديم) إلا لو `use_accumulated_profile=True`.
+حلقة `warm_session_urls` (لو موجودة) بتمشي على **نفس الـ`page`** قبل
+أي navigation حقيقي — `page.goto(warm_url, timeout=..., referer=last_warm_url)`
+لكل URL، بترقيم الـReferer يدويًا (اتأكّد فعليًا: `page.goto()`
+**مايحسبش** الـReferer تلقائيًا من التنقل السابق على نفس الصفحة، عكس
+الكوكيز اللي بتتشارك تلقائيًا في نفس الـcontext — لازم تمرير `referer=`
+بنفسك عشان تكتمل سلسلة الـReferer زي بند 21's Step 1). Camoufox's
+own dual-mode context manager (Browser حقيقي غالبًا، أو BrowserContext
+نادرًا في نظرية اللانش persistent) اتعامل معاه بنفس الـisinstance check
+الموجود بالفعل من بند 17 — الفرع النادر (`BrowserContext`) بيستخدم
+`use_accumulated_profile` كـno-op موثّق (مفيش "create with storage_state"
+entry point لـpersistent-context launch أصلًا، ونفس الـissue
+microsoft/playwright#36139 بيوثّق تحديدًا القيد ده، مش `storage_state()`
+نفسها).
+
+**عند نجاح الحل**: `context.storage_state()` بيتحفظ عبر
+`record_new_session()` — أي فشل في الحفظ (قرص ممتلئ، صلاحيات) بيتسجّل
+كـwarning ومايوقفش الـcrawl، مش بيتعامل معاه كـfailure حقيقي.
+
+**اتفحصت فعليًا (مش افتراض) — API mechanics قبل الكود**:
+```python
+with Camoufox(headless=True) as browser:
+    context = browser.new_context()
+    ...
+    context.add_cookies([{"name": "test_cookie", ...}])
+    state = context.storage_state()  # cookie اتلقط فعليًا، بما فيها session cookie من غير expiry
+# متصفح جديد تمامًا، منفصل:
+with Camoufox(headless=True) as browser:
+    context2 = browser.new_context(storage_state=state_path)
+    context2.cookies()  # نفس الكوكي رجع فعليًا، حتى الـsession واحدة
+```
+اتأكّد بالحرف: `browser` من `Camoufox(headless=True)` نوعه الفعلي
+`playwright.sync_api._generated.Browser` (مش union نظري بس).
+
+**2) توسيع الواجهة (`AntibotProvider`) وكل الـproviders**
+
+`AntibotProvider.solve()` اتضاف ليه `warm_session_urls`/
+`use_accumulated_profile` (best-effort contract، نفس شكل
+`login_flow`/`progressive_extraction` بالظبط) — `ByparrProvider`
+بيسجّل warning ويكمل (مفيش live page عنده أصلًا). توثيق `LoginFlow`
+القديم (كان بيقول "دمج cookie jar عبر استدعاءات منفصلة محتاج architecture
+change أكبر، خارج النطاق") اتصحّح صراحة: الجزء ده *اتنفّذ فعليًا*،
+بس بشكل أضيق (jar محفوظ في ملف، مش عملية متصفح واحدة مستمرة بين
+الاستدعاءات — والفرق ده مش مهم من منظور الهدف نفسه، لأن متصفح جديد
+بيبدأ من حالة متراكمة بيبان بالظبط زي واحد ما اتقفلش خالص).
+
+**3) `SpiderConfig`/`GenericSpider`: تفريق معماري حقيقي بين antibot
+وغير antibot**
+
+اكتشاف معماري مهم قبل التنفيذ: تنفيذ warm-up عند `antibot_needed: true`
+على مستوى Scrapy (زي Step 1) **مش هيشتغل خالص** — كل hop هيعمل
+`solve()` منفصل تمامًا (صفر استمرارية). فالحل: `_build_start_requests()`
+بقى بيفرّق:
+- `antibot_needed: false` + `warm_session_urls` → نفس سلسلة Step 1
+  (Scrapy-level، `RefererMiddleware`/`CookiesMiddleware` الحقيقيين).
+- `antibot_needed: true` + `warm_session_urls` → **تخطّي** سلسلة
+  Scrapy تمامًا، وتمرير `warm_session_urls` في meta الطلب الحقيقي —
+  الـprovider نفسه بيمشي فيها جوه نفس الجلسة (الحل الحقيقي فوق).
+
+`use_accumulated_profile: bool` حقل جديد في `SpiderConfig`، بـvalidator
+زي `login`/`extraction_mode: live_dom` بالظبط (`antibot_needed: true`
++ `antibot_provider: camoufox|patchright` إجباري).
+
+#### `cookie_jar_manager.py` — أداة الكوكيز التراكمية
+
+`src/providers/antibot/cookie_jar_manager.py` (جديد، 100% تغطية،
+25 اختبار وحدة): `JarSession` (timestamp + storage_state)،
+`RetentionBucket` (age tier + sample interval)،
+`DEFAULT_RETENTION_BUCKETS` (أسبوع دقة كاملة، شهر يومي، 6 شهور
+أسبوعي، سنتين شهري — نفس الأرقام التوضيحية المتفق عليها، مسجّلة كتوضيحية
+مش رسمية من RRDtool). `apply_rrd_retention()`: لكل bucket غير كامل
+الدقة، تقسيم لـslots زمنية بعرض `sample_interval_seconds`، واختيار
+**عشوائي** (`rng.choice`) لجلسة واحدة من كل slot — مش "الأحدث دايمًا"
+(اتأكّد باختبار مباشر: بذور rng مختلفة بتختار جلسات مختلفة من نفس الـslot،
+نفس مبدأ تجنّب البصمة المنتظمة من بند 20). `enforce_max_total_size()`:
+لو لسه أكبر من `DEFAULT_MAX_JAR_BYTES` (5 ميجابايت) بعد التقليم، يمسح
+من أقدم/أقل-دقة bucket أول حاجة، جلسة بجلسة. `merge_sessions_into_
+storage_state()`: كل الجلسات المحفوظة بتتدمج في storage_state واحد حقيقي
+نشط (مش قائمة snapshots منفصلة — متصفح حقيقي عنده cookie jar واحد بس)،
+تعارض بيتحل لصالح الجلسة الأحدث زمنيًا.
+
+**"cookies من مواقع غير مرتبطة بالهدف" — صفر كود إضافي مطلوب**: الـjar
+**مشترك على مستوى المشروع كله، مش لكل target لوحده** —
+`DEFAULT_COOKIE_JAR_PATH = "var/cookie_jar.json"` ثابتة، مش
+per-target-configurable. بما إن المشروع بيزحف targets كتير مختلفة
+(mock-target، quotes.toscrape، إلخ)، التنوع ده بيحصل تلقائيًا كنتيجة
+معمارية، مش محتاج كود خاص لمحاكاته.
+
+#### التحقق المحلي والحي (كامل، مش جزئي)
+
+- `ruff`/`mypy --strict` نظيفين على كل الملفات المتأثرة (7 ملفات src
+  + الوحدة الجديدة).
+- **398 اختبار وحدة PASSED** (كان 352، +46: 25 لـ`cookie_jar_manager.py`
+  + باقي الاختبارات الجديدة عبر الـproviders/middleware/spider_config)،
+  **35 عقد PASSED** (كان 29، +6: اختبارين جدد × 3 providers لـ
+  `warm_session_urls`/`use_accumulated_profile`)، **192
+  test-environment PASSED** (بدون تغيير — الميزة دي كلها src-side).
+  تغطية 95%+ محفوظة، `cookie_jar_manager.py` نفسه 100%.
+- **صفر رجعة على اختبارات بند 17 الحساسة**: `test_mock_target_
+  interstitial_live.py` (3 اختبارات) + `test_mock_target_dom_
+  virtualization_{progressive_,}live.py` (4 اختبارات) — كلهم PASSED
+  بعد التعديل، مؤكَّد إن العزلة الافتراضية (`use_accumulated_profile=False`)
+  لسه سليمة 100%.
+- **تحقق حي مباشر (script مستقل، قبل بناء اختبار integration رسمي)**:
+  - Call 1: `warm_session_urls=[/warmup-home, /warmup-category]` →
+    `/feed` (antibot_needed حقيقي)، `use_accumulated_profile=True`.
+    الكوكيز الراجعة شملت `mocktarget_warmup_session` (من `/warmup-home`)
+    **جنب** كوكيز Anubis الحقيقية و`mocktarget_session` بتاعة `/feed`
+    نفسها — دليل مباشر إن السياق فعلاً واحد مستمر.
+  - Call 2: **متصفح منفصل تمامًا**، `/feed` مباشرة **من غير أي
+    warm_session_urls خالص**، `use_accumulated_profile=True` بنفس
+    ملف الـjar. الكوكيز الراجعة شملت **نفس قيمة**
+    `mocktarget_warmup_session` (`911b432b36feda48`) بالظبط — دليل
+    قاطع إن الـjar بيربط بين استدعاءين منفصلين تمامًا.
+  - لوج mock-target's referer_session أكّد كمان إن تمرير `referer=`
+    اليدوي اشتغل صح: `/warmup-category` سجّلت `referer:
+    "http://localhost:8080/warmup-home"` رغم إن التنقل كله عبر
+    Camoufox حقيقي، `level1_score`/`level2_score` الاتنين 0.
+- **اختبار integration رسمي جديد**
+  (`tests/integration/test_mock_target_accumulated_profile_live.py`):
+  يشغّل نفس الـconfig **مرتين منفصلتين تمامًا** (subprocess جديد كل
+  مرة)، وبيتأكّد من لوج `/warmup-home`'s الخاص بـmock-target نفسه:
+  الجولة الأولى (jar فاضي) `has_warmup_session_cookie: false`،
+  الجولة التانية (نفس الـjar، عملية منفصلة تمامًا) `has_warmup_session_cookie:
+  true` — **دليل تلقائي، مش يدوي، لكل push مستقبلي**. اتشغّل مرتين
+  للتأكد من الاستقرار، الاتنين PASSED.
+- كل الـ8 اختبار حي المرتبط (بند 17 + بند 21 Step 1 + Step 2) اتأكّدوا
+  مع بعض في تشغيلة واحدة، صفر تعارض.
+
+**تحديث (بعد الـpush) — اتأكّد فعليًا على CI حقيقي:** GitHub Actions
+run [33339163520](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33339163520)
+(فرع `claude/entry21-step2-persistent-context`، commit `795024e`)،
+`completed`/`success`. اللوج الفعلي اتفتح وقُرِئ مباشرة: **398 unit +
+35 contract + 192 test-environment + 39 integration = صفر فشل** (كان
+38 integration في run بند 21 Step 1 — بالظبط الاختبار الجديد الواحد).
+`test_accumulated_profile_carries_a_cookie_into_a_completely_separate_later_run`
+PASSED — ولوج الـrun الثاني نفسه (مش محلي بس) أكّد تاني إن
+`mocktarget_warmup_session` ظهرت في كوكيز `/feed` من غير أي
+`warm_session_urls` في الطلب التاني خالص.
+
+**تصحيح: ادعاء الإغلاق أعلاه كان سابق لأوانه.** أول تطبيق فعلي لبروتوكول
+المراجعة المستقلة (بند 10) على الفرع ده لقى عيب حقيقي مُتكرَّر
+(reproduced) فاتنا خالص في التطوير والاختبار المحلي والـCI السابق كله —
+موثّق كامل تحت.
+
+#### مراجعة مستقلة أولى: race condition حقيقي في `cookie_jar_manager.py`
+
+سيشن مراجعة منفصلة تمامًا (بروتوكول بند 10) راجعت الـdiff (2046 سطر —
+أكبر من الحد الأقصى الموصى به 400 سطر، ملحوظة العملية تحت) ولقت:
+
+- **عيب أساسي، خطورة عالية، مُتكرَّر فعليًا (مش نظري):**
+  `record_new_session()` كانت بتعمل `load_jar()` → تعديل في الذاكرة →
+  `save_jar()` من غير أي قفل بينهم — classic lost-update race. بما إن
+  كل استدعاء `solve()` حقيقي بيشتغل على OS thread منفصل فعليًا (عبر
+  Twisted's `deferToThread`، مش مجرد async interleaving)، أي استدعائين
+  متزامنين لـ`record_new_session()` على نفس الـjar ممكن كل واحد يحمّل
+  نفس الحالة القديمة، كل واحد يضيف الجلسة بتاعته في الذاكرة، وأيًّا كان
+  اللي يحفظ آخر واحد بيمسح تعديل التاني بصمت تام (من غير أي error أو
+  لوج). المراجع كرّر البگ فعليًا: 20 كاتب متزامن، جلسة واحدة بس نجت في
+  الـjar النهائي.
+- **ملحوظة أقل خطورة:** `except OSError` حوالين استدعاء
+  `record_new_session()`/`context.storage_state()` بعد الـsolve في
+  الـproviders الاتنين ما كانتش بتغطي `PlaywrightError`/`PatchrightError`
+  الفعلية اللي `storage_state()` نفسها ممكن ترميها — استثناء حقيقي مش
+  subclass من `OSError`.
+- ملاحظات تانية: `save_jar()` كانت بتكتب مباشرة على الملف (مش atomic)،
+  ومفيش اختبار concurrent-writer حقيقي كان موجود يقدر يمسك رجعة لهذا
+  البگ تحديدًا.
+
+**الإصلاح المُطبَّق (نفس الفرع، commit جديد):**
+
+1. **قفل حقيقي على مستوى الـOS** (`fcntl.flock`, POSIX-only — نفس
+   افتراض Linux-only اللي المشروع بالفعل بياخده في أماكن تانية، مش
+   افتراض جديد) حوالين الـcritical section الكامل في
+   `record_new_session()` (load → retention → size cap → save)، عبر
+   ملف قفل منفصل تمامًا (`<jar_path>.lock`) — مش الـjar file نفسها،
+   عشان القفل يفضل منفصل مكانيًا عن محتوى الـjar الفعلي.
+2. **`save_jar()` بقت atomic**: كتابة لملف temp فريد (بالـPID + thread
+   id) في نفس الفولدر، بعدين `Path.replace()` (rename atomic على
+   POSIX) بدل الكتابة المباشرة — بيحمي أي قارئ متزامن من قراءة محتوى
+   جزئي/تالف حتى من غير قفل على القراءة (القراءة اتقصدت متسيبش
+   locked — الـrename الـatomic وحده كافي لضمان القارئ يشوف إما
+   المحتوى القديم الكامل أو الجديد الكامل، أبدًا نص كتابة).
+3. **الـexcept اتوسّع**: `except (OSError, PlaywrightError)` في
+   `camoufox_provider.py`، `except (OSError, PatchrightError)` في
+   `patchright_provider.py` — اتأكّد فعليًا (تنفيذ Python مباشر) إن
+   `TimeoutError` بتاعة كل مكتبة subclass من الـ`Error` بتاعتها، يعني
+   الاستثناء الواحد ده كافي يغطي الاتنين.
+4. **اختبار concurrent-writer حقيقي جديد**
+   (`test_record_new_session_survives_many_concurrent_writers`): 20
+   real OS threads (عبر `ThreadPoolExecutor`، بالظبط زي
+   `deferToThread` الحقيقي) بيبدأوا مع بعض بالظبط (`threading.Barrier`)
+   كل واحد بيسجّل جلسة بكوكي مختلف على نفس الـjar path، وبيتأكّد إن
+   الـ20 كلهم نجوا. **اتأكّد إن الاختبار فعلاً بيمسك رجعة البگ**: لما
+   شغّلناه مؤقتًا من غير القفل، فشل فورًا (2 من 20 بس نجوا، مش 20) —
+   دليل مباشر إن الاختبار ده حقيقي مش placebo، مش بس افتراض إنه هيمسك
+   رجعة.
+
+**التحقق المحلي بعد الإصلاح:** `ruff check` نظيف، `mypy --strict` صفر
+مشاكل على الثلاث ملفات المعدّلة، 400 unit test (بما فيهم الـ27 بتاعة
+`cookie_jar_manager.py` نفسها، منهم الاختبار الجديد) + 192
+test-environment، كلهم PASSED، تغطية 100%.
+
+**تحديث (بعد الـpush) — اتأكّد فعليًا على CI حقيقي:** GitHub Actions run
+[33387691302](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33387691302)
+(فرع `claude/entry21-step2-persistent-context`، commit `911b6bf`)،
+`completed`/`success`. اللوج الفعلي اتفتح وقُرِئ مباشرة (مش بس
+الـconclusion): **400 unit + 35 contract + 192 test-environment + 39
+integration = صفر فشل**، بما فيهم
+`test_accumulated_profile_carries_a_cookie_into_a_completely_separate_later_run`
+نفسها PASSED — دليل مباشر إن قفل الـfcntl.flock الجديد ماكسرش أي سلوك
+حقيقي كان شغّال قبل كده (لا التراكم عبر استدعاءات منفصلة، ولا عزلة بند
+17). صفر رجعة.
+
+**ملحوظة عملية للمستقبل (طلب صريح من المستخدم):** أي تعديل عالي الخطورة
+جاي لازم يتقسّم لدفعات مراجعة أصغر من الأول (أقل من 400 سطر لكل دفعة)،
+مش يتراجع كوحدة واحدة ضخمة بعد ما يخلص بالكامل — بالظبط زي ما حصل هنا
+(2046 سطر في مراجعة واحدة، أكبر من الحد الموصى بيه في بند 10 نفسه).
+
+**بند 10/21 (Step 1 + Step 2) لسه مش مقفول رسميًا.** محتاجين جولتين
+مراجعة مستقلة نظيفتين متتاليتين (سيشنز منفصلة تمامًا كل مرة) قبل
+اعتباره مقفول — الجولة دي (الأولى) لقت عيب حقيقي واتصلح، فمحسوبة "غير
+نظيفة"؛ لازم نبدأ العدّ من جولة نظيفة تالية.
+
+#### مراجعة مستقلة ثانية (Pass 2) — على الإصلاح نفسه (diff `455b9f3..5e7379a`، ~310 سطر)
+
+**ملحوظة أمانة عن الآلية**: القيد المعروف مسبقًا (بند 10 — custom
+agents مبيعملوش hot-reload وسط السيشن نفسها) اتأكّد تاني هنا بشكل
+مختلف شوية: `.claude/agents/reviewer.md` كان موجود بس على فرع
+`claude/osint-scraping-platform-wnuyk6`، مش على الفرع الحالي
+(`claude/entry21-step2-persistent-context`) — لمّا اتنسخ للفرع الحالي
+وحاولنا نستدعي `subagent_type: "reviewer"` فعليًا، لسه معملش hot-reload
+(نفس الخطأ: "Agent type 'reviewer' not found"). البديل: استخدمنا
+`subagent_type: "general-purpose"` (سياق منفصل تمامًا برضه — صفر رؤية
+لمحادثة البناء، نفس شرط العزلة الأساسي) مع تمرير بروتوكول بند 10 كامل
+كتعليمات مباشرة، وطلبنا منه يقرأ `docs/REQUIREMENTS.md` بنفسه أولاً —
+بديل عملي، مش انحراف عن جوهر البروتوكول (العزلة)، بس أداة `ReportFindings`
+نفسها ماكانتش متاحة له فعزّل تقرير نصي مُهيكَل بدل كده، ونفس القيد
+مسجّل هنا صراحة مش مسكوت عنه.
+
+**نتيجة Pass 2: نظيفة — صفر عيوب حقيقية.** المراجع تحقّق بنفسه (مش
+افتراضًا) من كل نقطة:
+- **القفل صحيح**: قرأ `cookie_jar_manager.py` كامل، أكّد إن
+  `_locked_jar_file()` بتغطي تسلسل load→retention→size-cap→save كامل،
+  الفك بيحصل في `finally` حتى مع استثناء، و`flock` بيقفل صح بين threads
+  حقيقية في نفس الـprocess (مش بس بين processes).
+- **اختبار عملي حقيقي للتأكد إن الاختبار الجديد فعلاً بيمسك رجعة
+  البگ**: نسخ الريبو لمكان منفصل (من غير أي تعديل على الريبو الأصلي)،
+  عطّل القفل، شغّل الاختبار 3 مرات — فشل في كل مرة (1-2 من 20 نجوا)،
+  رجّع القفل، شغّله 5 مرات — نجح في كل مرة، صفر flakiness.
+- **تأكّد بنفسه مباشرة في Python** (مش من تعليقات الكود) إن
+  `PlaywrightError`/`PatchrightError` مش subclasses من `OSError`، وإن
+  `TimeoutError` بتاعة كل مكتبة IS subclass من الـ`Error` بتاعتها.
+- **اختبار عملي لـatomicity الـ`save_jar()`**: محاكاة فشل أثناء الكتابة
+  وأثناء الـrename — تأكّد من تنظيف ملف الـtemp في الحالتين؛ stress test
+  (كتابة مستمرة + قراءتين متزامنتين) — صفر قراءة جزئية/تالفة.
+- **شغّل `scripts/verify-like-ci.sh` فعليًا** (مش بس قرأ الكود): نفس
+  الأرقام بالظبط (400 unit + 35 contract + 192 test-environment، تغطية
+  95.50% محليًا هنا تحديدًا [ملحوظة: الرقم ده لتغطية `pytest tests/unit`
+  وحدها زي ما الscript بيحسبها، مختلف عن الـ100% المُبلَّغ في تشغيلة CI
+  الحقيقية اللي بتضيف تغطية `mock-target` كمان — مفيش تعارض حقيقي، مجرد
+  نطاقي قياس مختلفين] — الجيت أعلى من حد 85% في الحالتين).
+- **قيد بيئة صريح، مش عيب**: مقدرش يتأكّد من نتيجة CI الحقيقية
+  (33387691302) بنفسه — الـGitHub API رجّع 404 من الـsandbox بتاعته (لا
+  `gh` auth ولا Docker daemon)، نفس قيد البيئة الموثّق من الأول في
+  المشروع، مش دليل تلفيق.
+- ملاحظات "other feedback" (مش عيوب): فروع `except (OSError,
+  PlaywrightError)`/`except (OSError, PatchrightError)` تحت
+  `# pragma: no cover` زي أخواتها في نفس الملف (نمط قديم موجود، مش حاجة
+  جديدة مخبّاة)؛ `fcntl.flock` محلي لسيرفر واحد — لو `var/cookie_jar.json`
+  اتحط يومًا على network filesystem مشترك بين أكتر من host، سلوك
+  `flock` فوق NFS مش مضمون — خارج نطاق العيب المُصلَح هنا (كان
+  single-host/multi-thread)، ملحوظة نطاق مستقبلي بس.
+
+**النتيجة**: Pass 2 نظيفة. لسه محتاجين **جولة نظيفة واحدة كمان** (Pass
+3، سيشن منفصلة تمامًا تاني) عشان نوصل لجولتين نظيفتين متتاليتين ويُعتبر
+بند 21 مقفول رسميًا. لا push نهائي ولا دمج قبل كده.
+
+#### مراجعة مستقلة ثالثة (Pass 3) — عيب حقيقي جديد، فاتنا على الـPass الأول والتاني
+
+سيشن تالتة منفصلة تمامًا (برضه `general-purpose` بسبب نفس قيد الـ
+hot-reload، موثّق صراحة في تقريرها هي كمان) أعادت التحقق من الصفر (مش
+افتراضًا إن تقرير Pass 2 صح) — بما فيها إعادة تكرار البگ فعليًا في نسخة
+منفصلة من الريبو (عطّلت القفل، شغّلت الاختبار 3 مرات ففشل، رجّعته
+فنجح 5 مرات)، والتحقق المباشر من الـexception hierarchy في Python،
+واختبار عملي لـatomicity الكتابة تحت فشل محاكى، واختبارات edge case
+إضافية (سباق على إنشاء مجلد الأب لأول مرة، `storage_state` فاضي/مشوّه
+بالتوازي مع جلسات سليمة) — كلها عدّت من غير مشاكل.
+
+**لكن لقت عيب حقيقي جديد، فات على الـPass الأول والتاني الاتنين**:
+فرع تنظيف الفشل في `save_jar()` نفسها (`except BaseException:
+tmp_path.unlink(missing_ok=True); raise`) — الكود اللي بالظبط الإصلاح
+ده أضافه — **مكنش عليه أي اختبار خالص**. قاست التغطية بنفسها 3 طرق
+مختلفة، الثلاثة اتفقوا: `cookie_jar_manager.py` كانت 98% (3 سطور
+مفقودة: 353-355، بالظبط الـexcept ده)، مش 100% زي ما التوثيق ادّعى
+بعد الإصلاح مباشرة. الفرق ده حقيقي ومحدد — مش نفس فرق النطاق
+(unit-only محلي مقابل CI اللي بيضيف تغطية mock-target) اللي Pass 2
+شرحه لرقم التغطية الكلي، لأن تغطية mock-target مالهاش أي تأثير على رقم
+ملف `cookie_jar_manager.py` نفسه.
+
+**السيناريو الحقيقي للفشل**: تعديل مستقبلي (مثلاً تضييق الـ`except`
+لـ`OSError` بس فيفوّت `TypeError` من `json.dumps()` على محتوى
+`storage_state` مش قابل للتسلسل، أو حذف سطر `unlink()` بالغلط) ممكن
+يرجّع بصمت — يسيب ملفات `.tmp` متراكمة عند كل فشل كتابة، أو يسرّب نوع
+استثناء محدّش متوقعه — وصفر اختبار كان هيمسك الرجعة دي، لأن بوابة
+الـ85% الكلية مبتتأثرش بفجوة 3 سطور في ملف واحد.
+
+**الإصلاح المُطبَّق**: اتضاف اختباران جديدان
+(`test_save_jar_cleans_up_its_temp_file_when_the_write_itself_fails`،
+`test_save_jar_cleans_up_its_temp_file_when_the_rename_itself_fails`)
+بيعملوا `monkeypatch` لـ`Path.write_text`/`Path.replace` عشان يرموا
+استثناء، وبيتأكّدوا (أ) الاستثناء بيتنشر مش بيتبلع، (ب) صفر ملف `.tmp`
+متسيب، (ج) محتوى الـjar الأصلي متلمّسش. النتيجة: تغطية
+`cookie_jar_manager.py` رجعت 100% فعليًا (اتأكّد محليًا: `pytest
+tests/unit/providers/antibot/test_cookie_jar_manager.py --cov=...
+--cov-report=term-missing` → `128 stmts, 0 miss, 100%`)، فادّعاء
+التوثيق بقى صحيح فعلاً مش مجرد مُصحَّح. `ruff`/`mypy --strict` نظاف،
+402 unit test (بدل 400) + باقي الـsuite كله PASSED محليًا.
+
+**نتيجة Pass 3 حسب البروتوكول نفسه**: مش نظيفة — عيب حقيقي واحد
+اتلاقى. **عدّاد الجولات النظيفة المتتالية اترجّع للصفر** (Pass 2 كانت
+نظيفة، بس Pass 3 مش نظيفة — يبقى مفيش جولتين متتاليتين نظيفتين لسه).
+محتاجين نبدأ العدّ من جديد: جولتين مراجعة مستقلة نظيفتين متتاليتين
+كمان بعد الإصلاح ده. بند 21 لسه مش مقفول. لا push نهائي ولا دمج قبل
+كده.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
