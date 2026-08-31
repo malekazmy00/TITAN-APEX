@@ -741,7 +741,18 @@ def _default_patchright_solve(  # pragma: no cover
                                 cookie_jar_path,
                                 context.storage_state(),  # type: ignore[arg-type]
                             )
-                        except OSError as exc:
+                        # OSError: a real filesystem problem in
+                        # cookie_jar_manager.py's own save_jar()/locking
+                        # (a full disk, a permissions issue, the .lock
+                        # file's own open()). PatchrightError: raised by
+                        # context.storage_state() itself if the browser
+                        # context has already gone away by this point
+                        # (e.g. a crash between the solve completing and
+                        # this save running) -- confirmed a real,
+                        # separate exception type from OSError (not a
+                        # subclass of it), so it needs its own place in
+                        # this tuple, not just OSError alone.
+                        except (OSError, PatchrightError) as exc:
                             logger.warning(
                                 "patchright_provider.cookie_jar_save_failed",
                                 extra={

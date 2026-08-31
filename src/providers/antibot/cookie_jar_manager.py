@@ -78,13 +78,53 @@ have many sessions, some have none, e.g. a real vacation). Retaining
 "the newest session in each time slot" every single time would itself
 be a suspiciously regular selection rule; :func:`apply_rrd_retention`
 picks uniformly at random among a slot's real candidates instead.
+
+**Real, independent-reviewer-found bug, fixed here (docs/REQUIREMENTS.md
+section 9 entry 21's own reviewer session)**: :func:`record_new_session`'s
+own load-modify-save sequence used to be a plain, unlocked
+read-modify-write against one shared file -- exactly the kind of thing
+this module's own docstring already knew to worry about for retention
+correctness, but had not actually protected against for *concurrent
+writers*. Reproduced directly by the reviewer (real OS threads, via
+Twisted's ``deferToThread``, which is genuinely how every real
+``solve()`` call already runs): two concurrent callers each load the
+same old state, each append their own new session in memory, and
+whichever one saves *last* silently overwrites the other's -- 19 of 20
+concurrently-recorded sessions vanished in the reviewer's own
+reproduction, with no error and nothing in any log. :func:`record_new_session`
+now holds a real, OS-level exclusive lock (``fcntl.flock``, POSIX --
+this project only ever targets Linux, the same assumption its own
+AppArmor/dmesg diagnostics elsewhere already make, so no new
+cross-platform dependency is justified for this) across its *entire*
+load+modify+save critical section, via a dedicated lock file
+(``<jar_path>.lock``, never the jar file itself, so locking and the
+jar's own real content stay conceptually and mechanically separate).
+:func:`save_jar` also now writes to a unique temporary file first and
+renames it into place (atomic on POSIX) rather than truncating the
+real jar file in place -- a real, if lower-severity, secondary risk
+the same reviewer flagged (a process killed mid-write could otherwise
+corrupt the jar; :func:`load_jar`'s own corruption tolerance was
+already a safety net for that, but preventing it outright is strictly
+better than merely tolerating it after the fact).
+
+Reads (:func:`load_jar`/:func:`load_accumulated_state`) are
+deliberately **not** locked -- the atomic rename above already
+guarantees any reader either sees the complete old file or the
+complete new one, never a partial write, which is the actual property
+a reader needs; adding read-side locking on top would only add
+contention with no correctness gain here.
 """
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
+import os
 import random
+import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -277,6 +317,25 @@ def save_jar(jar_path: str, sessions: list[JarSession]) -> None:
     """Writes ``sessions`` to ``jar_path``, creating parent directories
     as needed.
 
+    Writes atomically: the new content goes to a uniquely-named
+    temporary file in the same directory first (same filesystem, so the
+    rename below is guaranteed atomic on POSIX, not a cross-device
+    copy), then :meth:`Path.replace` renames it over ``jar_path`` in one
+    atomic step. A reader (:func:`load_jar`) racing this write therefore
+    always sees either the complete old file or the complete new one,
+    never a truncated/partial one -- this is what actually protects
+    concurrent *readers*; concurrent *writers* still need the real
+    locking in :func:`record_new_session`, which this function alone
+    cannot provide (a rename is atomic, but "read old content, compute
+    new content, rename it in" is still a read-modify-write sequence
+    with a race across two separate calls to this function).
+
+    The temporary file's name includes both the PID and the current
+    thread's identity so that two concurrent writers (which
+    :func:`record_new_session`'s own lock already serializes against
+    each other in practice, but this function is also callable
+    directly/independently) can never collide on the same temp path.
+
     Raises:
         OSError: if ``jar_path``'s parent directory cannot be created,
             or the file cannot be written (e.g. a permissions problem)
@@ -287,7 +346,50 @@ def save_jar(jar_path: str, sessions: list[JarSession]) -> None:
     """
     path = Path(jar_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([s.to_dict() for s in sessions]), encoding="utf-8")
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp_path.write_text(json.dumps([s.to_dict() for s in sessions]), encoding="utf-8")
+        tmp_path.replace(path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+@contextlib.contextmanager
+def _locked_jar_file(jar_path: str) -> Iterator[None]:
+    """Holds a real, OS-level exclusive lock (``fcntl.flock``) across
+    the entire load-modify-save critical section in
+    :func:`record_new_session`, using a dedicated ``<jar_path>.lock``
+    file -- never the jar file itself, so locking stays mechanically
+    separate from the jar's own real content (:func:`save_jar` is free
+    to rename a fresh file into ``jar_path`` without disturbing the
+    lock file's own identity/fd).
+
+    POSIX-only (``fcntl``) -- an already-established, project-wide
+    assumption (this project only ever targets Linux; see e.g. the
+    AppArmor/dmesg diagnostics elsewhere in this codebase), not a new
+    one introduced here.
+
+    ``fcntl.flock`` locks are process-scoped by *file descriptor*, not
+    by path -- so two concurrent callers *within the same process*
+    (e.g. two threads via Twisted's ``deferToThread``, the real,
+    reproduced scenario this fixes) still serialize correctly against
+    each other here, because each holds its own independent ``open()``
+    call and thus its own fd on the same underlying lock file; the
+    kernel enforces exclusivity across fds/processes, not just across
+    processes.
+    """
+    lock_path = f"{jar_path}.lock"
+    Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def load_accumulated_state(jar_path: str) -> dict[str, Any] | None:
@@ -323,15 +425,28 @@ def record_new_session(
     clock time for every real caller -- only this module's own tests
     inject fixed ones.
 
+    The entire load-modify-save sequence below runs under a real,
+    held-for-the-whole-duration exclusive lock (:func:`_locked_jar_file`)
+    -- without it, two concurrent callers (a real, reproduced scenario:
+    every ``solve()`` call runs on its own OS thread via Twisted's
+    ``deferToThread``, so ``CONCURRENT_REQUESTS_PER_DOMAIN`` >= 2 means
+    genuine concurrency here, not just async interleaving) could each
+    load the same old sessions, each independently append their own new
+    one, and whichever saves last would silently overwrite the other's
+    -- a classic lost-update race, previously unguarded, that an
+    independent reviewer session reproduced directly (20 concurrent
+    recorders, only 1 session survived in the final jar).
+
     Raises:
         OSError: propagated from :func:`save_jar` -- see its own
             docstring for why this isn't swallowed here either.
     """
     rng = rng if rng is not None else random.Random()
     now = now if now is not None else time.time()
-    sessions = load_jar(jar_path)
-    sessions = apply_rrd_retention(
-        [*sessions, JarSession(now, new_storage_state)], rng, now, buckets
-    )
-    sessions = enforce_max_total_size(sessions, max_total_bytes, now, buckets)
-    save_jar(jar_path, sessions)
+    with _locked_jar_file(jar_path):
+        sessions = load_jar(jar_path)
+        sessions = apply_rrd_retention(
+            [*sessions, JarSession(now, new_storage_state)], rng, now, buckets
+        )
+        sessions = enforce_max_total_size(sessions, max_total_bytes, now, buckets)
+        save_jar(jar_path, sessions)

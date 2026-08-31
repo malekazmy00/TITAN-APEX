@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import random
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -333,3 +335,68 @@ def test_retention_bucket_is_a_real_frozen_dataclass() -> None:
     bucket = RetentionBucket(max_age_seconds=1.0, sample_interval_seconds=2.0)
     with pytest.raises(AttributeError):
         bucket.max_age_seconds = 5.0  # type: ignore[misc]
+
+
+# --- record_new_session under real concurrent writers -----------------------
+#
+# docs/REQUIREMENTS.md section 9 entry 21 Step 2: an independent reviewer
+# session found and reproduced a real lost-update race in
+# record_new_session()'s own load-modify-save sequence -- concurrent
+# writers each loading the same old state, then whichever saves last
+# silently discarding every other writer's new session (the reviewer's own
+# reproduction: 20 concurrent recorders, 1 session survived). This is a
+# regression test for that *specific* bug, not a generic "it doesn't
+# crash" smoke test: every real OS thread here is a genuine writer (via
+# ThreadPoolExecutor, exactly how Twisted's own deferToThread already runs
+# every real solve() call), synchronized to start together with a
+# threading.Barrier to maximize contention on the shared lock, each
+# recording its own distinctly-named cookie into the *same* jar path. The
+# only correct outcome is that every single one of them survives.
+
+
+def test_record_new_session_survives_many_concurrent_writers(tmp_path: Path) -> None:
+    path = tmp_path / "jar.json"
+    writer_count = 20
+    barrier = threading.Barrier(writer_count)
+
+    def _write(index: int) -> None:
+        barrier.wait()  # every writer starts its own record_new_session together
+        record_new_session(
+            str(path),
+            {"cookies": [_cookie(f"writer-{index}", str(index))], "origins": []},
+            rng=random.Random(index),
+            # All within the same full-resolution (sample_interval == 0)
+            # bucket -- see DEFAULT_RETENTION_BUCKETS -- so RRD retention
+            # itself must keep every one of them; only the race (if
+            # unfixed) could still lose any.
+            now=1_000_000.0 + index * 0.001,
+        )
+
+    with ThreadPoolExecutor(max_workers=writer_count) as pool:
+        list(pool.map(_write, range(writer_count)))
+
+    sessions = load_jar(str(path))
+    assert len(sessions) == writer_count, (
+        f"expected all {writer_count} concurrent writers' sessions to survive, "
+        f"got {len(sessions)} -- a lost-update race would silently drop most of them"
+    )
+    state = load_accumulated_state(str(path))
+    assert state is not None
+    assert {c["name"] for c in state["cookies"]} == {f"writer-{i}" for i in range(writer_count)}
+
+
+def test_record_new_session_lock_file_does_not_pollute_the_jar_itself(tmp_path: Path) -> None:
+    """The lock file (``<jar_path>.lock``) must stay a separate, empty
+    control file -- never mixed into the jar's own real JSON content."""
+    path = tmp_path / "jar.json"
+
+    record_new_session(
+        str(path), {"cookies": [_cookie("a", "1")], "origins": []},
+        rng=random.Random(0), now=1_000_000.0,
+    )
+
+    lock_path = Path(f"{path}.lock")
+    assert lock_path.is_file(), "expected record_new_session to create its own lock file"
+    # The jar file itself must still be exactly the real, valid session
+    # list -- untouched by the lock file's own existence.
+    assert len(load_jar(str(path))) == 1
