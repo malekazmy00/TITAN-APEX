@@ -5042,10 +5042,18 @@ PASSED — ولوج الـrun الثاني نفسه (مش محلي بس) أكّ�
 **التحقق المحلي بعد الإصلاح:** `ruff check` نظيف، `mypy --strict` صفر
 مشاكل على الثلاث ملفات المعدّلة، 400 unit test (بما فيهم الـ27 بتاعة
 `cookie_jar_manager.py` نفسها، منهم الاختبار الجديد) + 192
-test-environment، كلهم PASSED، تغطية 100%. الجزء اللي محتاج CI حقيقي
-(docker compose stack + `tests/integration`، بما فيهم
-`test_mock_target_accumulated_profile_live.py`) لسه محتاج تأكيد CI —
-موثّق تحت بمجرد ما يحصل.
+test-environment، كلهم PASSED، تغطية 100%.
+
+**تحديث (بعد الـpush) — اتأكّد فعليًا على CI حقيقي:** GitHub Actions run
+[33387691302](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33387691302)
+(فرع `claude/entry21-step2-persistent-context`، commit `911b6bf`)،
+`completed`/`success`. اللوج الفعلي اتفتح وقُرِئ مباشرة (مش بس
+الـconclusion): **400 unit + 35 contract + 192 test-environment + 39
+integration = صفر فشل**، بما فيهم
+`test_accumulated_profile_carries_a_cookie_into_a_completely_separate_later_run`
+نفسها PASSED — دليل مباشر إن قفل الـfcntl.flock الجديد ماكسرش أي سلوك
+حقيقي كان شغّال قبل كده (لا التراكم عبر استدعاءات منفصلة، ولا عزلة بند
+17). صفر رجعة.
 
 **ملحوظة عملية للمستقبل (طلب صريح من المستخدم):** أي تعديل عالي الخطورة
 جاي لازم يتقسّم لدفعات مراجعة أصغر من الأول (أقل من 400 سطر لكل دفعة)،
