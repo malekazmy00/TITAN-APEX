@@ -261,12 +261,28 @@ def test_save_jar_cleans_up_its_temp_file_when_the_write_itself_fails(
     save_jar) previously had zero test coverage -- a future edit could
     silently regress it (e.g. narrowing the except clause, or dropping
     the ``unlink`` call) and leave orphaned ``.tmp`` files behind on
-    every write failure, with nothing here to catch it."""
+    every write failure, with nothing here to catch it.
+
+    Independent review pass 4/5 (both, independently): the original
+    version of this test replaced ``Path.write_text`` outright, so the
+    temp file was never actually created on disk before the simulated
+    error -- the "no .tmp file left behind" assertion below passed
+    vacuously (true with or without the ``unlink()`` cleanup line) and
+    gave zero real protection against the exact regression its own
+    docstring warns about. Fixed by calling through to the *real*
+    ``Path.write_text`` first (so a genuine temp file exists on disk),
+    then raising -- confirmed by hand: with this fix, deleting the
+    ``unlink()`` cleanup line now makes this test fail, same as its
+    ``..._rename_itself_fails`` sibling already did."""
     path = tmp_path / "jar.json"
     save_jar(str(path), [JarSession(1.0, {"cookies": [_cookie("a", "1")], "origins": []})])
     original_content = path.read_text(encoding="utf-8")
+    real_write_text = Path.write_text
 
     def _boom(self: Path, *args: object, **kwargs: object) -> int:
+        # Write the real content first -- a genuine temp file must exist
+        # on disk for the cleanup assertion below to mean anything.
+        real_write_text(self, *args, **kwargs)
         raise OSError("simulated disk-full during write_text")
 
     monkeypatch.setattr(Path, "write_text", _boom)
