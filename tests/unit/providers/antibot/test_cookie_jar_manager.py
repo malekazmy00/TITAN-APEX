@@ -249,6 +249,65 @@ def test_save_jar_then_load_jar_round_trips(tmp_path: Path) -> None:
     assert loaded == sessions
 
 
+def _list_tmp_files(directory: Path) -> list[Path]:
+    return [p for p in directory.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_save_jar_cleans_up_its_temp_file_when_the_write_itself_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 21 Step 2, independent review
+    pass 3: this failure/cleanup branch (the ``except BaseException`` in
+    save_jar) previously had zero test coverage -- a future edit could
+    silently regress it (e.g. narrowing the except clause, or dropping
+    the ``unlink`` call) and leave orphaned ``.tmp`` files behind on
+    every write failure, with nothing here to catch it."""
+    path = tmp_path / "jar.json"
+    save_jar(str(path), [JarSession(1.0, {"cookies": [_cookie("a", "1")], "origins": []})])
+    original_content = path.read_text(encoding="utf-8")
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> int:
+        raise OSError("simulated disk-full during write_text")
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+
+    with pytest.raises(OSError, match="simulated disk-full"):
+        save_jar(str(path), [JarSession(2.0, {"cookies": [_cookie("b", "2")], "origins": []})])
+
+    assert _list_tmp_files(tmp_path) == [], (
+        "expected the failed write's own temp file to be removed"
+    )
+    assert path.read_text(encoding="utf-8") == original_content, (
+        "a failed save must never touch the real jar's existing, still-valid content"
+    )
+
+
+def test_save_jar_cleans_up_its_temp_file_when_the_rename_itself_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same guarantee as above, but for a failure in the second half of
+    the atomic write (the rename itself), after the temp file's own
+    content was already written successfully."""
+    path = tmp_path / "jar.json"
+    save_jar(str(path), [JarSession(1.0, {"cookies": [_cookie("a", "1")], "origins": []})])
+    original_content = path.read_text(encoding="utf-8")
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> Path:
+        raise OSError("simulated rename failure (e.g. a cross-device move)")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+
+    with pytest.raises(OSError, match="simulated rename failure"):
+        save_jar(str(path), [JarSession(2.0, {"cookies": [_cookie("b", "2")], "origins": []})])
+
+    assert _list_tmp_files(tmp_path) == [], (
+        "expected the successfully-written-but-never-renamed temp file to be removed"
+    )
+    assert path.read_text(encoding="utf-8") == original_content, (
+        "a failed rename must never leave the real jar path in a half-updated state"
+    )
+
+
 # --- load_accumulated_state --------------------------------------------------
 
 
