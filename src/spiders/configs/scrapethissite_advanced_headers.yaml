@@ -1,0 +1,43 @@
+# docs/ADVANCED_TEST_TARGETS_L3.md's Level 3 round: scrapethissite.com's
+# "Advanced Topics" section (/pages/advanced/), a real, distinct part of
+# the site never covered by the earlier simple/forms/ajax-javascript/
+# frames configs. Investigated directly (curl, not assumed) before
+# writing this: the section has three "gotchas" --
+#
+#   ?gotcha=headers -- confirmed testable, no login needed, but a real
+#     two-part check (confirmed by hand, curl, not assumed): (1) Accept
+#     must be text/html-first -- Scrapy's own DEFAULT_REQUEST_HEADERS
+#     already satisfies this by default; (2) **User-Agent must look like
+#     a real browser's** ("doesn't look like a standard mozilla/chrome/
+#     safari value" otherwise) -- Scrapy's own default UA
+#     ("Scrapy/VERSION (+https://scrapy.org)") fails this outright, and
+#     this project has no per-target USER_AGENT override field at all
+#     (grep confirms). render_js: true is therefore not a style choice
+#     here but the only currently-possible way to pass this check --
+#     PlaywrightMiddleware's real Chromium sends a real Chrome UA
+#     automatically, config-only, zero new code. A genuine architectural
+#     fact worth recording: today, a plain (render_js: false) target can
+#     structurally never pass a User-Agent-content check like this one.
+#
+#   ?gotcha=login / ?gotcha=csrf -- both return a real HTTP 400
+#     ("Needs login") for *any* unauthenticated request, confirmed
+#     directly (curl, with and without a Referer header). The real
+#     /login/ form (found via the site's own nav, not the gotcha URLs
+#     themselves) has no demo/anonymous credentials -- its own "Need an
+#     account?" link goes to /lessons/sign-up/, which is a **paid**
+#     course purchase page (PayPal/credit card, confirmed by reading its
+#     own rendered text), not a free signup. A real, legitimate
+#     access constraint, not a code gap -- this project will not
+#     purchase an account for automated testing, so these two gotchas
+#     stay untested (documented, not silently skipped).
+name: scrapethissite_advanced_headers
+start_urls:
+  - "https://www.scrapethissite.com/pages/advanced/?gotcha=headers"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+render_js: true
+selectors:
+  item: "div.col-md-4.col-md-offset-4"
+  fields:
+    message: "::text"

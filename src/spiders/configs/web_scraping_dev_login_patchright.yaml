@@ -1,0 +1,40 @@
+# docs/ADVANCED_TEST_TARGETS_L3.md's Level 3 round: web-scraping.dev's
+# real login/session flow -- the first test of docs/REQUIREMENTS.md
+# section 9 entry 21's LoginFlow/warm-session/cookie-jar machinery
+# against a genuine target outside this project's own mock-target.
+#
+# Investigated directly (curl, not assumed) before writing this:
+# /login POSTs to /api/login (fields: username, password -- no hidden
+# CSRF field at all, confirmed by reading the raw form HTML). Real,
+# documented demo credentials live at /credentials -- itself gated
+# behind a Referer check (a plain GET 307-redirects to /blocked; adding
+# `Referer: https://web-scraping.dev/login` gets a real 200) -- exactly
+# the kind of real Referer-consistency check entry 21's own Step 1
+# (Referer path consistency) was built to demonstrate handling, though
+# GenericSpider itself doesn't need to fetch /credentials at all (the
+# real credentials, confirmed by hand, are simply username: user123,
+# password: password). A real POST to /api/login with these confirmed
+# (curl) to return a real Set-Cookie: auth=... and login_ip=..., and a
+# follow-up GET to /login with that cookie shows real protected content
+# ("Logged in as User123 ... The secret message is: 🤫").
+name: web_scraping_dev_login_patchright
+start_urls:
+  - "https://web-scraping.dev/login"
+allowed_domains:
+  - "web-scraping.dev"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: patchright
+max_concurrency: 1
+login:
+  login_url: "https://web-scraping.dev/login"
+  username: "user123"
+  password: "password"
+  username_field: "input[name='username']"
+  password_field: "input[name='password']"
+  submit_selector: "button[type='submit']"
+selectors:
+  item: "div.container.text-center"
+  fields:
+    logged_in_as: "div.form-text:nth-child(1)::text"
+    secret_message: "#secret-message::text"

@@ -111,6 +111,21 @@ config شكلي ناقص — مسجّل كـ Known Spider Limitation بدل ما
 
 ---
 
+## المستوى 3 — مواقع تدريبية متقدمة (2026-09-01، `docs/ADVANCED_TEST_TARGETS_L3.md`)
+
+تفاصيل الاستكشاف الكامل + النتائج الحقيقية في `docs/REQUIREMENTS.md`
+section 9 entry 24 — ملخص هنا:
+
+| الموقع/الصفحة | الحالة | ملحوظة |
+|---|---|---|
+| `scrapethissite.com/pages/advanced/?gotcha=headers` | ✅ config جديد | `render_js: true` إجباري — الموقع بيرفض أي User-Agent مش شبه متصفح، والمشروع مفهوش override لـUSER_AGENT |
+| `scrapethissite.com/pages/advanced/?gotcha=login`/`csrf` | ❌ متقفول | يحتاج حساب مدفوع (`/lessons/sign-up/`) — قيد وصول حقيقي، مش هنشتري حساب |
+| `web-scraping.dev/products` | ✅ config جديد، اتأكّد محليًا (25 item حقيقي) | فجوة pagination حقيقية اتلقت: next-link بس بيوصل لـ25 من 28 (الموقع نفسه بيوقف يعرض روابط أكتر من صفحة 5) |
+| `web-scraping.dev/login` | ✅ configs جديدة (camoufox + patchright) | أول اختبار حقيقي لبند 21 برّة mock-target — الـselectors/credentials اتأكّدوا يدويًا 100%، التشغيل الفعلي عبر الكود لسه محتاج تأكيد CI (3 قيود sandbox محلي منفصلة منعت التشغيل هنا) |
+| `scrapeground.com`/`scrapfly.io/scrapeground` | صفر config | فهرس تعليمي بس، مفيش صفحات فريدة — بيوجّه لـ`web-scraping.dev` نفسه |
+
+---
+
 ## استراتيجية الاستخدام المقترحة
 
 1. **اختبار انحداري (regression) دوري:** المستويات 1-3 تتشغّل تلقائيًا في كل CI run (زي ما بيحصل بالفعل) - دول بيضمنوا إن أي تعديل جديد ملخبطش الأساسيات.

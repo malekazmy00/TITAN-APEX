@@ -5532,6 +5532,144 @@ failed` في 616.48s، وسطر PASSED صريح جوّه اللوج لـ
 **Known Limitation #5 (section 7 entry 5) اتحدثت لـ"✅ resolved" فعليًا
 بناءً على الدليل ده** — بعد التأكيد مباشرة، مش قبله.
 
+### 24. جولة اختبارات حية Level 3 — أول اختبار لبنود 21/22/23 برّة بيئتنا الذاتية (docs/ADVANCED_TEST_TARGETS_L3.md، طلب المستخدم صراحة)
+
+**السياق:** المستخدم رفع `docs/ADVANCED_TEST_TARGETS_L3.md` وطلب صراحة:
+(1) مراجعة `scrapethissite.com` للصفحات اللي لسه معملهاش config، (2)
+config جديد لـ`web-scraping.dev` (الأهم، "production-realistic")
+باستكشاف حقيقي قبل الكتابة + اختبار بالـ3 providers + اختبار
+login/session ضد كود بند 21، (3) `ScrapeGround` لو مختلف. كل الاستكشاف
+تم فعليًا عبر `curl`/`WebFetch` مباشرة (مش افتراض) — تفاصيل كل نتيجة
+تحت.
+
+#### 1. `scrapethissite.com` — فحص فعلي، نتيجتين مختلفتين
+
+اتفحص `/pages/advanced/` (قسم "Advanced Topics" — مش مغطى قبل كده،
+مختلف عن `simple`/`forms`/`ajax-javascript`/`frames` المغطيين بالفعل):
+
+- **`?gotcha=headers` — ✅ اتضاف config جديد
+  (`scrapethissite_advanced_headers.yaml`).** فحص فعلي بـ`curl`: طلب
+  بـheader `Accept: */*` عادي بيرجّع 400 حقيقي ("Accept value is
+  missing 'text/html'"). **اكتشاف حقيقي إضافي، مش متوقع:** حتى مع
+  `Accept: text/html,...` صح (نفس default بتاع Scrapy فعليًا،
+  `DEFAULT_REQUEST_HEADERS`)، لسه بيرجّع 400 تاني — "User-Agent value
+  doesn't look like a standard mozilla/chrome/safari value" — لأن
+  `USER_AGENT` الافتراضي بتاع Scrapy نفسه (`Scrapy/VERSION
+  (+https://scrapy.org)`) مش شبه متصفح، والمشروع مفهوش أي حقل
+  per-target لتغيير الـUser-Agent خالص (`grep` أكّد صفر نتيجة).
+  **الحل:** `render_js: true` — مش اختيار أسلوب، ده الطريقة الوحيدة
+  الممكنة دلوقتي: Chromium حقيقي عبر PlaywrightMiddleware بيبعت
+  User-Agent متصفح حقيقي تلقائيًا، config-only صفر كود جديد. حقيقة
+  معمارية حقيقية اتسجلت: أي target `render_js: false` مستحيل بنيويًا
+  يعدي فحص محتوى الـUser-Agent زي ده دلوقتي.
+- **`?gotcha=login`/`?gotcha=csrf` — ❌ اتفحصوا، اتقفلوا بقيد وصول
+  حقيقي، مش باج.** الاتنين بيرجّعوا 400 حقيقي ("Needs login") لأي طلب
+  مش مصادق عليه — اتأكّد بـ`curl` (بـheaders متعددة، مع وبدون
+  `Referer`). النموذج الحقيقي `/login/` (لُقي عبر nav الموقع، مش
+  الـgotcha URLs نفسها) مفهوش أي demo/anonymous credentials — رابطه
+  "Need an account?" بيودّي لـ`/lessons/sign-up/`، اللي طلع فعليًا
+  **صفحة شراء كورس مدفوع** (PayPal/credit card، اتأكّد من النص
+  المُرندر فعليًا). **قرار واضح: المشروع مش هيشتري حساب لغرض اختبار
+  آلي** — قيد وصول حقيقي وشرعي، موثّق صراحة، مش متجاهَل بصمت.
+
+#### 2. `web-scraping.dev` — الهدف الأهم، نتايج غنية
+
+اتفحصت بنية الموقع فعليًا الأول (`curl`/sitemap.xml)، صفحاته الحقيقية:
+`/products` (28 منتج، 6 صفحات)، `/login`، `/credentials`، `/blocked`،
+`/cart`، `/reviews`، `/testimonials`، `/file-download`.
+
+**`/products` — ✅ config جديد (`web_scraping_dev_products.yaml`)، اتأكد محليًا فعليًا:**
+HTML عادي semantic (`div.row.product`، `h3 a`، `div.price` — صفر
+CSS-in-JS hashing هنا، عكس `/spa-catalog` بتاعنا)، صفر anti-bot أمام
+الموقع (200 مباشر). **تشغيل محلي حقيقي (مش CI)**:
+`python -m scrapy runspider ...` رجّع **25 item حقيقي، 5 requests، كل
+الاستجابات 200**.
+
+**اكتشاف حقيقي جديد، مش متوقع — فجوة pagination حقيقية في next_page:**
+صفحة 5 (من 6) بتعرض "page 5 of total 28 results in 6 pages" — بس
+الـwidget بتاعها بيعرض بس روابط الصفحات 1-5، والسهم "next" (`>`)
+**مالوش أي `href` خالص** عند الصفحة دي، رغم إن صفحة 6 (3 منتجات
+إضافية) موجودة فعليًا لو اتوصل لها بـURL مباشر (`?page=6`). يعني
+"اتبع رابط next" (اللي `GenericSpider`'s `next_page` بيعمله بالظبط،
+نفس سلوك bot بسيط بيتبع لينكات) بيوصل بس لـ25 من 28 عنصر — سلوك حقيقي
+للموقع نفسه، مش باج في كودنا. **اتسجّل كـfجوة حقيقية معروفة (next-link-only
+pagination window)، مش اتحلت في نفس الجولة دي** — محتاجة استراتيجية
+جديدة فعليًا (بناء URL رقمي `?page=N` بدل اتباع لينك) لو اتقرر حلها
+لاحقًا، بالظبط زي مبدأ "وثّق الفجوة الفرعية منفصل" اللي المستخدم طلبه.
+
+**`/login` — ✅ أول اختبار حقيقي لبند 21 برّة mock-target — configs
+جديدة (`web_scraping_dev_login_camoufox.yaml` +
+`_patchright.yaml`).** فحص فعلي كامل بـ`curl`: النموذج الحقيقي
+`POST /api/login` (`username`/`password`، صفر hidden CSRF field).
+الـcredentials الحقيقية (موثّقة رسميًا على `/credentials`، نفسها
+Referer-gated — `GET` عادي بيتـredirect لـ`/blocked`، إضافة
+`Referer: https://web-scraping.dev/login` بترجّعه 200 — بالظبط نفس
+فكرة "Referer path consistency" اللي بند 21 اتبنى عشانها): `user123`
+/ `password`. اتأكّد فعليًا: POST حقيقي لـ`/api/login` بيرجّع
+`Set-Cookie: auth=...` + `login_ip=...`، وقراءة `/login` تانية
+بنفس الكوكي بتوريّ محتوى محمي حقيقي ("Logged in as User123 ... The
+secret message is: 🤫").
+
+**التحقق المحلي لتدفق الـlogin — اتحقق جزئيًا، 3 قيود بيئة sandbox
+حقيقية ومختلفة اتكشفت (مش باجات كود):**
+1. **Camoufox:** `python -m camoufox fetch` بيرجّع `403 Client Error`
+   من `api.github.com` عبر الـproxy بتاع هذا الـsandbox تحديدًا — صفر
+   Firefox binary حقيقي متاح محليًا.
+2. **Playwright Chromium (`render_js`):** بعد إصلاح mismatch حقيقي في
+   نسخة الـbrowser المخبأة (كانت 1194، الحزمة المثبتة بتطلب 1223 —
+   اتصلح بـ`python -m playwright install chromium`)، ظهر قيد تاني:
+   `net::ERR_CERT_AUTHORITY_INVALID` — الـCA بتاع الـproxy الصادر من
+   الـsandbox مش موثوق من browser profile جديد (بعكس `curl`/Scrapy's
+   own HTTP client، اللي شغالين تمام مع نفس الـproxy).
+3. **Patchright:** بعد تثبيت الـbinary بتاعه (نسخة منفصلة، 1234)، ظهر
+   قيد تالت مختلف: `net::ERR_CONNECTION_RESET` — اتكرر مرتين متتاليتين،
+   مش عطل عابر.
+   **الخلاصة الصريحة:** أي حركة HTTPS من متصفح حقيقي (مهما كان الـengine)
+   عبر الـproxy بتاع هذا الـsandbox غير موثوقة/محجوبة — بعكس أي HTTP
+   client عادي (curl، Scrapy's Twisted client — اتأكّدوا شغالين 100%،
+   `/products` نجح بالكامل). **قيد بيئة sandbox محلي موثّق بدليل مباشر
+   لكل حالة على حدة، مش تخمين واحد عام** — التأكيد الحقيقي لتدفق الـlogin
+   نفسه (هل بند 21 فعلاً بينجح ضد target خارجي حقيقي) **لسه معلّق على
+   CI حقيقي**، نفس الانضباط المتبع طول المشروع.
+
+#### 3. `ScrapeGround` — اتفحص، مش target منفصل
+
+`scrapegound.com`/`scrapeground.com` مش domains موجودة أصلًا (DNS
+فشل). العنوان الحقيقي `scrapfly.io/scrapeground` — اتفحص فعليًا
+(WebFetch): **فهرس تعليمي بس، بيوجّه للمواقع الحقيقية (`web-scraping.dev`
+أساسًا، `httpbin.dev`) — مفهوش صفحات فريدة يستاهل بناء config ليها
+منفصل عن `web-scraping.dev`** (نفس النتيجة اللي section 7 entry 5
+لقاها قبل كده بالظبط، اتأكّدت تاني). صفر config جديد — مش محتاج، مش
+تقصير.
+
+#### الالتزام بحد الـrate limit
+
+كل الـconfigs الجديدة `rate_limit: 1.0` (1 req/s)، نفس القاعدة
+المعتادة. الاستكشاف اليدوي (curl/WebFetch) كان بضع عشرات طلب مبعثرة
+على أكتر من نص ساعة عبر الموقعين مع بعض — بعيد كل البعد عن أي ضغط
+حقيقي، ومناسب لموقع مبني رسميًا للتدريب.
+
+#### هل بنود 21/22/23 أثبتت نفسها برّة mock-target؟
+
+**جزئيًا مؤكَّد، جزئيًا لسه معلّق — بصراحة كاملة:**
+- **بند 21 (LoginFlow):** التصميم/الـselectors اتأكّدوا يدويًا 100%
+  صح ضد target حقيقي خارجي (نفس الـcredentials/cookie behavior
+  المتوقع) — لكن **التشغيل الفعلي عبر كود المشروع نفسه (camoufox/patchright
+  providers) لسه محتاج تأكيد CI حقيقي**، بسبب قيود الـsandbox الثلاثة
+  فوق. مش نتيجة نهائية لسه.
+- **بند 22 (RateLimiterMiddleware):** مفعّل تلقائيًا على كل الـconfigs
+  الجديدة دي (middleware عام على كل الـspiders) — الـ25 طلب الناجحين
+  ضد `/products` محليًا يثبتوا فعليًا إنه مش بيعطّل حركة عادية داخل
+  حدوده الافتراضية (30 طلب/60 ثانية) — أول دليل تشغيلي حقيقي برّة
+  `test_rate_limiter.py`'s الاختبارات المعزولة.
+- **بند 23 (positional extraction):** مش مرتبط مباشرة بأي target من
+  الجولة دي (`web-scraping.dev`/`scrapethissite.com` مفهومش CSS-in-JS
+  hashed classes) — صفر اختبار إضافي مطلوب أو ممكن هنا.
+
+**الخطوة الجاية:** push + فتح لوج CI حقيقي (خصوصًا الاختبارين الجديدين
+لـlogin عبر camoufox/patchright) — تحديث هذا البند بالنتيجة الفعلية
+بعد كده مباشرة.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

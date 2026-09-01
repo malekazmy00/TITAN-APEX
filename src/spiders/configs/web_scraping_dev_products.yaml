@@ -1,0 +1,24 @@
+# docs/ADVANCED_TEST_TARGETS_L3.md's Level 3 round: web-scraping.dev's
+# main catalog (/products) -- explored directly first (curl, not
+# assumed): a plain, non-hashed, semantic HTML product grid
+# (div.row.product, h3 a for title/url, div.price for price), real
+# ?page=N pagination (the last link inside div.paging is the "next"
+# arrow; it has no href attribute at all on the final page, which
+# GenericSpider's own `if next_href:` check already handles correctly).
+# No CSS-in-JS hashing here (unlike this project's own /spa-catalog,
+# entry 23) and no anti-bot challenge in front of it -- confirmed by a
+# real curl GET returning 200 with full content.
+name: web_scraping_dev_products
+start_urls:
+  - "https://web-scraping.dev/products"
+allowed_domains:
+  - "web-scraping.dev"
+rate_limit: 1.0
+max_concurrency: 1
+selectors:
+  item: "div.row.product"
+  fields:
+    title: "h3 a::text"
+    product_url: "h3 a::attr(href)"
+    price: "div.price::text"
+next_page: "div.paging a:last-child::attr(href)"
