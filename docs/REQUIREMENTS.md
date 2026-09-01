@@ -87,8 +87,8 @@ titan-apex/
       entry 22
 - [x] SPA متقدم — CSS-in-JS + hydration delay + استخراج positional (بند
       6، طلب المستخدم صراحة، الحل العام لـKnown Limitation #5) — تحقق
-      محلي كامل؛ **تأكيد CI حقيقي لسه معلّق** (section 9 entry 23)، Known
-      Limitation #5 هتتحدث لـ✅ resolved بعد كده مباشرة
+      محلي كامل **و**تأكيد CI حقيقي (run 33541539540، section 9 entry
+      23)؛ Known Limitation #5 اتحدثت لـ✅ resolved فعليًا
 
 ### المرحلة 3 — الحماية المتوسطة (منفذة)
 - [x] `byparr_provider.py` implementation من `antibot_provider` (عدّى `tests/contract/`)
@@ -495,7 +495,18 @@ flaky زي البند اللي فوق)، فمش هنعيد المحاولة أو
 — `test_webscraper_io_load_more_yields_more_than_the_first_batch PASSED`
 (أكتر من 6 عناصر، تأكيد إن الزرار اتضغط فعليًا). الفجوة دي اتقفلت رسميًا.
 
-### 5. SPA حقيقي (`react-shopping-cart`) — CSS-in-JS بـ hashed class names
+### 5. SPA حقيقي (`react-shopping-cart`) — CSS-in-JS بـ hashed class names — ✅ resolved (2026-09-01، section 9 entry 23)
+
+**تحديث:** الفجوة دي اتحلت فعليًا وبشكل عام — مش بس ضد `react-shopping-cart`
+تحديدًا — عبر `selectors.item_group_size`'s الاستخراج الـpositional
+الجديد (section 9 entry 23 كامل). **مؤكَّد بدليل CI حقيقي**: run
+[33541539540](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33541539540)
+(commit `0ac9e5f`) — `40 passed, 0 failed`، بما فيهم
+`test_mock_target_spa_catalog_live.py::test_spa_catalog_extracts_every_product_by_position_not_class`
+الجديد ضد target حقيقي (mock-target's `/spa-catalog`) بنفس القيد
+بالظبط (classes عشوائية opaque، صفر wrapper، صفر attribute ثابت). التفاصيل
+الكاملة (التصميم، الأسباب، كل الاختبارات) في section 9 entry 23 —
+النص الأصلي تحت ده لسه موثّق كامل، مش متمسوح، كمرجع للفحص الأصلي.
 
 **الفجوة:** بعد بحث فعلي (2026-08-21) عن SPA demo مفتوح المصدر مناسب
 (المستخدم اقترح `react-shopping-cart` بالاسم)، اتفحص فعليًا:
@@ -5511,12 +5522,15 @@ contract — تأكيد مباشر على "صفر تعديل Camoufox/Patchright
 في `test_content_generator.py`، 4 في `test_spa_catalog.py` الجديد، 2
 في `test_config.py`، 5 في `test_app.py`)، **100% coverage**.
 
-**تأكيد CI حقيقي — لسه معلّق** (مش فشل، نفس الانضباط المتبع من بند 21):
-لسه محتاج push + فتح لوج run حقيقي (خصوصًا
-`tests/integration/test_mock_target_spa_catalog_live.py` الجديد ضد
-الـstack الحقيقي) قبل ما نعتبر الفجوة اتحلت رسميًا. **Known Limitation
-#5 (section 7 entry 5) هتتحدث لـ"✅ resolved" بعد التأكيد ده مباشرة، مش
-قبله** — بالظبط زي ما المستخدم طلب صراحة.
+**✅ تأكيد CI حقيقي** — run
+[33541539540](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33541539540)
+(commit `0ac9e5f`) — اللوج الحقيقي اتفتح ومش الاكتفاء بعلامة ✅ الخضرا:
+كل الخطوات عدّت (`success`)، integration step نفسه `40 passed, 0
+failed` في 616.48s، وسطر PASSED صريح جوّه اللوج لـ
+`tests/integration/test_mock_target_spa_catalog_live.py::test_spa_catalog_extracts_every_product_by_position_not_class`
+تحديدًا (39 اختبار موجود قبل كده + 1 جديد = 40، رقم متسق تمامًا).
+**Known Limitation #5 (section 7 entry 5) اتحدثت لـ"✅ resolved" فعليًا
+بناءً على الدليل ده** — بعد التأكيد مباشرة، مش قبله.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
