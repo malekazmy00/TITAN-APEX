@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import pytest
-from content_generator import generate_comment, generate_feed_page, generate_post
+from content_generator import (
+    generate_catalog,
+    generate_comment,
+    generate_feed_page,
+    generate_post,
+    generate_product,
+)
 
 
 def test_generate_post_is_deterministic_for_the_same_seed_and_index() -> None:
@@ -66,3 +72,45 @@ def test_generate_feed_page_pages_do_not_overlap() -> None:
     ids_page0 = {p.post_id for p in page0}
     ids_page1 = {p.post_id for p in page1}
     assert ids_page0.isdisjoint(ids_page1)
+
+
+# --- generate_product / generate_catalog (docs/REQUIREMENTS.md section 9
+# entry 23, /spa-catalog) ----------------------------------------------
+
+
+def test_generate_product_is_deterministic_for_the_same_seed_and_index() -> None:
+    """Happy path: same (seed, index) always yields the same fake product."""
+    first = generate_product("session-a", 3)
+    second = generate_product("session-a", 3)
+
+    assert first == second
+    assert first.product_id == "session-a-product-3"
+    assert first.title
+    assert first.price > 0
+    assert first.image_url
+
+
+def test_generate_product_different_seeds_yield_different_content() -> None:
+    a = generate_product("session-a", 0)
+    b = generate_product("session-b", 0)
+
+    assert a.title != b.title or a.price != b.price
+
+
+def test_generate_product_rejects_negative_index() -> None:
+    """Failure case 1: a negative index is meaningless."""
+    with pytest.raises(ValueError, match="index must be >= 0"):
+        generate_product("session-a", -1)
+
+
+def test_generate_catalog_returns_requested_count() -> None:
+    products = generate_catalog("session-a", 8)
+
+    assert len(products) == 8
+    assert len({p.product_id for p in products}) == 8  # all unique
+
+
+def test_generate_catalog_rejects_non_positive_count() -> None:
+    """Failure case 2: a zero/negative count can't produce a catalog."""
+    with pytest.raises(ValueError, match="count must be > 0"):
+        generate_catalog("session-a", 0)

@@ -86,3 +86,26 @@ def test_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.feed_rate_limit_threshold == 50
     assert cfg.placeholder_delay_ms == 1200
     assert cfg.dom_virtualization_window_size == 3
+
+
+def test_spa_catalog_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: docs/REQUIREMENTS.md section 9 entry 23's own
+    hydration-delay/catalog-size settings default to sane values."""
+    monkeypatch.delenv("SPA_HYDRATION_DELAY_MS", raising=False)
+    monkeypatch.delenv("SPA_CATALOG_PRODUCT_COUNT", raising=False)
+
+    cfg = get_config()
+
+    assert cfg.spa_hydration_delay_ms == 800
+    assert cfg.spa_catalog_product_count == 8
+
+
+def test_spa_catalog_numeric_overrides_are_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Failure-adjacent case: overrides must actually be applied."""
+    monkeypatch.setenv("SPA_HYDRATION_DELAY_MS", "1500")
+    monkeypatch.setenv("SPA_CATALOG_PRODUCT_COUNT", "12")
+
+    cfg = get_config()
+
+    assert cfg.spa_hydration_delay_ms == 1500
+    assert cfg.spa_catalog_product_count == 12

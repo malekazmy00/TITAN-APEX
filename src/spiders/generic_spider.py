@@ -21,7 +21,10 @@ from scrapy.http import Response
 from src.core.exceptions import ConfigError
 from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
 from src.logging_config import get_logger
-from src.providers.antibot.parsed_html import extract_parsed_html_items
+from src.providers.antibot.parsed_html import (
+    extract_parsed_html_items,
+    extract_positional_html_items,
+)
 from src.spiders.spider_config import load_spider_config
 
 
@@ -340,6 +343,23 @@ class GenericSpider(scrapy.Spider):
                     extra={"url": response.url, "item_selector": selectors.item},
                 )
             for raw_item in live_dom_items:
+                yield {"source_url": response.url, **raw_item}
+        # docs/REQUIREMENTS.md section 9 entry 23: Known Limitation #5's
+        # real fix -- a target with no stable class/attribute anywhere
+        # (CSS-in-JS's hashed, build-time-generated class names) reaches
+        # here instead of the plain response.css(selectors.item) path
+        # below, which structurally cannot express "select this item's
+        # container" when no such stable selector exists at all.
+        elif selectors.item_group_size is not None:
+            positional_items = extract_positional_html_items(
+                response.text, selectors.item, selectors.item_group_size, selectors.fields
+            )
+            if not positional_items:
+                self.json_logger.warning(
+                    "generic_spider.no_items_found",
+                    extra={"url": response.url, "item_selector": selectors.item},
+                )
+            for raw_item in positional_items:
                 yield {"source_url": response.url, **raw_item}
         else:
             rows = response.css(selectors.item)

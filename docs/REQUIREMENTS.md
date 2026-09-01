@@ -85,6 +85,10 @@ titan-apex/
       `RateLimiterMiddleware` مستقل بالكامل (target/account/IP/ASN-subnet
       + كشف نمط الطلبات + backoff تصاعدي) — تفاصيل كاملة في section 9
       entry 22
+- [x] SPA متقدم — CSS-in-JS + hydration delay + استخراج positional (بند
+      6، طلب المستخدم صراحة، الحل العام لـKnown Limitation #5) — تحقق
+      محلي كامل؛ **تأكيد CI حقيقي لسه معلّق** (section 9 entry 23)، Known
+      Limitation #5 هتتحدث لـ✅ resolved بعد كده مباشرة
 
 ### المرحلة 3 — الحماية المتوسطة (منفذة)
 - [x] `byparr_provider.py` implementation من `antibot_provider` (عدّى `tests/contract/`)
@@ -5403,6 +5407,116 @@ test-environment unit tests) لازم تكون عدّت هي كمان — الج
 warm-up + persistent context + cookie jar) بالظبط زي ما بيغطوا بند 22
 (rate limiter) الجديد. بند 21 كان مقفول محليًا بس لحد دلوقتي — دلوقتي
 مقفول محليًا **و**CI-confirmed مع بعض.
+
+### 23. SPA متقدم — CSS-in-JS + hydration delay + استخراج positional — الحل العام لـKnown Limitation #5 (Phase 2 بند 6، طلب المستخدم صراحة)
+
+**السياق:** المستخدم طلب صراحة حل عام لفجوة `react-shopping-cart`
+الموثّقة من قبل (section 7 entry 5 — "SPA حقيقي... CSS-in-JS بـ hashed
+class names"): `styled-components` بيولّد class name عشوائي (hashed)
+لكل component وقت الـbuild، وكل حقول المنتج (صورة/عنوان/سعر/زرار)
+عبارة عن عناصر **شقيقة** (siblings) تحت container نفسه معندهوش class
+ثابت هو الآخر — يعني صفر selector CSS-descendant يقدر يتكتب في config
+اليوم ويفضل شغّال بعد أي build جديد. شرط صريح إضافي: **صفر تعديل** على
+أي كود بلمس Camoufox/Patchright/session/navigation — النطاق مستقل
+بالكامل.
+
+**القرار المعماري (اتفحص الكود الفعلي قبل أي بناء، مش افتراض):** الحل
+مبني بالكامل على المسار الـpure-Python الموجود بالفعل
+(`src/providers/antibot/parsed_html.py` + `generic_spider.py`'s
+`_parse_html`، نفس الـparsel/cssselect engine اللي `response.css()`
+بيستخدمه) — **مش** جوه `camoufox_provider.py`/`patchright_provider.py`
+خالص، وده مش قرار عشوائي: `PlaywrightMiddleware`
+(`src/middlewares/playwright_middleware.py`، Phase 2) مستقل تمامًا عن
+providers الـantibot — متصفح Chromium منفصل بالكامل، صفر كود مشترك،
+صفر مفهوم session/cookie-jar. الهدف (SPA بدون تحدي anti-bot، بس بتحدي
+hydration/DOM structure) مايحتاجش antibot أصلًا، فـ`render_js: true`
+(الموجود بالفعل من Phase 2) + الامتداد الجديد لمسار `parsed_html`
+الافتراضي كافيين تمامًا — صفر لمسة لأي ملف Camoufox/Patchright.
+
+**القدرة الجديدة الحقيقية:**
+`src.providers.antibot.parsed_html.extract_positional_html_items`
+(دالة نقية جديدة، جنب `extract_parsed_html_items` الموجودة، صفر تغيير
+عليها) — `selectors.item_group_size` (حقل جديد اختياري في
+`SelectorsConfig`، `None` افتراضيًا = صفر تغيير لأي config موجود) بيقلب
+معنى `item`: بدل "selector لعنصر واحد لكل item"، بيبقى selector **مسطّح**
+بيطابق كل عناصر الحقول لكل الـitems مع بعض بترتيب المستند — كل
+`item_group_size` نتيجة متتالية بتبقى item واحد، و`fields` بتتحول من
+CSS-descendant-selector لـ`"{offset}::text"`/`"{offset}::attr(name)"`
+(موقع 0-indexed **جوه** المجموعة، مش selector) — الحاجة الوحيدة اللي
+فعليًا بتفضل ثابتة عبر أي rebuild: **ترتيب العرض نفسه**، مش أي اسم.
+`generic_spider.py`'s `_parse_html` بقى فيه فرع تالت (`selectors.item_group_size
+is not None`) جنب الاتنين الموجودين (`html_snapshots`/`live_dom_items`)،
+بيستدعي الدالة الجديدة بدل `response.css(selectors.item)` العادي —
+الفرعين التانيين وأي config موجود مش متأثرين خالص.
+
+**حماية explicit للنطاق (بطلب المستخدم "وثّقها منفصلة"):** validator
+جديد في `SpiderConfig` بيرفض صراحة `item_group_size` مع
+`extraction_mode: live_dom` أو `progressive_extraction: true` برسالة
+خطأ واضحة وقت تحميل الـconfig — القدرة الجديدة دلوقتي متنفذة بس للمسار
+الافتراضي (single-read `parsed_html`)، مش الـlive_dom/progressive
+machinery المعقدة بتاعة entries 12-17. توسعتها لهما فجوة فرعية منفصلة،
+مسجّلة هنا صراحة، مش اتحلت ضمن هذا الحل.
+
+**test-environment/mock-target — `/spa-catalog` (target حقيقي جديد، صفر
+antibot):**
+- `structural/spa_catalog.py` (جديد، نقي): `HYDRATION_SKELETON_TEXT` +
+  `products_to_payload` (تحويل `Product` dataclass لـdict قابل لـ`tojson`).
+- `content_generator.py`: `Product` dataclass + `generate_product`/
+  `generate_catalog` (نفس نمط `generate_post`/`generate_feed_page`
+  deterministic-per-seed الموجود).
+- `templates/spa_catalog.html` (جديد): السيرفر بيرندر **skeleton فاضي
+  بالكامل** (صفر منتجات في الـHTML الأولي) — الشبكة الحقيقية (4 عناصر
+  شقيقة فلات لكل منتج: صورة، عنوان، سعر، زرار — **بدون أي wrapper
+  container** — نفس شكل `S.Image`/`S.Title`/`S.Price`/`S.BuyButton`
+  الحقيقي بالظبط، أصعب حتى من وجود container قابل للاستهداف بالـclass)
+  بتتبني بالكامل عبر JS جوّه بعد `setTimeout` حقيقي (config-driven،
+  `SPA_HYDRATION_DELAY_MS`، افتراضي 800ms) — مفيش fetch إضافي، البيانات
+  مُضمّنة في الصفحة نفسها (`window`-scope closure، مش `window.*`
+  expando — نفس درس entry 17's الموثّق عن Camoufox/Firefox عدم قدرته
+  يشوف `window.*` properties). state إدارة بسيطة (cart object، `addToCart`/
+  `renderCart`، صفر Redux) بتثبت إن المحتوى فعليًا مرتبط بحالة JS داخلية
+  مش HTML ثابت.
+- الـclass names: مُعاد استخدام `structural.markup_randomizer.MarkupRandomizer`
+  **الموجود بالفعل** (مش instance جديد) — 4 أسماء منطقية جديدة
+  (`spa-image`/`spa-title`/`spa-price`/`spa-button`) اتضافوا لـ
+  `RANDOMIZED_LOGICAL_NAMES` — توكن عشوائي opaque لكل نوع حقل، بيتشارك
+  بين كل نسخ نفس الحقل في نفس الـsession (زي `styled-components` الحقيقي
+  فعليًا — الهاش بتاع الـcomponent، مش بتاع كل instance على حدة) وبيدور
+  دوريًا زي أي عنصر تاني في `markup_randomizer.py`'s الموجود.
+- `botPolicy.yaml`: rule جديد `spa-catalog-route` (`path_regex: ^/spa-catalog$`,
+  `ALLOW`) — بنفس ترتيب/منطق `warmup-referer-check-routes` الموجود
+  (section 9 entry 21's own Anubis rule-ordering finding: أول match
+  حاسم بيكسب، فلازم يكون قبل كل deny/challenge rule) — التحدي هنا عن
+  hydration timing/DOM structure مش anti-bot، فمفيش داعي يتحجب خلف
+  Anubis أصلًا.
+
+**config جديد:** `src/spiders/configs/mock_target_spa_catalog.yaml` —
+`render_js: true`, `render_wait_ms: 2000` (هامش أمان فوق الـ800ms
+الافتراضي، نفس منطق `scrapethissite_ajax_javascript.yaml`'s الموثّق)،
+`antibot_needed: false` (الافتراضي — صفر antibot)، `selectors.item:
+"#spa-catalog-grid > *"` + `item_group_size: 4` + `fields` بالـoffset
+syntax الجديد.
+
+**التحقق المحلي (اتنفّذ فعليًا، مش ادّعاء):** `ruff`/`mypy --strict`
+نظاف (40 ملف)، اختبارات جديدة حقيقية: 16 في `test_parsed_html.py`
+(11 جديدة لـ`extract_positional_html_items` — happy path + 8 حالة
+فشل/حافة مختلفة، 100% coverage لملف `parsed_html.py` كامل)، 5 جديدة في
+`test_spider_config.py` (`item_group_size` قراءة/validation/الاستثناءين)،
+2 جديدة في `test_generic_spider.py` (المسار كامل عبر `parse()`) —
+الـsuite الكامل: **461 unit passed** (فشلتين معزولتين قديمتين، غير
+متعلقتين — نفس فجوة `oxymouse` من بند 20 اللي اتوثّقت في بند 22، مش
+رجعة من هذا العمل)، **35/35 contract** (صفر تأثير على أي provider
+contract — تأكيد مباشر على "صفر تعديل Camoufox/Patchright")، والتوتال
+96.10% — هامش حقيقي فوق الـ85%. `test-environment`: 208/208 (5 جديدة
+في `test_content_generator.py`، 4 في `test_spa_catalog.py` الجديد، 2
+في `test_config.py`، 5 في `test_app.py`)، **100% coverage**.
+
+**تأكيد CI حقيقي — لسه معلّق** (مش فشل، نفس الانضباط المتبع من بند 21):
+لسه محتاج push + فتح لوج run حقيقي (خصوصًا
+`tests/integration/test_mock_target_spa_catalog_live.py` الجديد ضد
+الـstack الحقيقي) قبل ما نعتبر الفجوة اتحلت رسميًا. **Known Limitation
+#5 (section 7 entry 5) هتتحدث لـ"✅ resolved" بعد التأكيد ده مباشرة، مش
+قبله** — بالظبط زي ما المستخدم طلب صراحة.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

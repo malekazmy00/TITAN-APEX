@@ -21,6 +21,21 @@ class SelectorsConfig(BaseModel):
 
     item: str
     fields: dict[str, str] = Field(min_length=1)
+    # docs/REQUIREMENTS.md section 9 entry 23 (Known Limitation #5's real
+    # fix): a target whose items have no stable class/attribute at all
+    # (a CSS-in-JS SPA -- styled-components/emotion -- generates a fresh,
+    # opaque class name every rebuild) can't use `item`/`fields` in their
+    # normal (per-item-container + CSS-descendant-field) sense at all --
+    # there is no class name a config written today can still rely on
+    # tomorrow. When set, `item` is reinterpreted as a *flat* selector
+    # matching every field-element of every item concatenated together in
+    # document order, and `fields` values become
+    # `"{offset}::text"`/`"{offset}::attr(name)"` (0-indexed position
+    # *within* one group of `item_group_size` consecutive matches) --
+    # see src.providers.antibot.parsed_html.extract_positional_html_items's
+    # own docstring for the full mechanism. None (the default) keeps
+    # every existing config's exact prior (descendant-selector) behavior.
+    item_group_size: int | None = Field(default=None, gt=0)
 
 
 class JsonSelectorsConfig(BaseModel):
@@ -234,6 +249,34 @@ class SpiderConfig(BaseModel):
             raise ValueError(
                 "login requires antibot_provider 'camoufox' or 'patchright' "
                 f"(a real, live browser page) -- got {self.antibot_provider!r}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _item_group_size_not_yet_supported_with_live_dom_or_progressive(self) -> SpiderConfig:
+        # docs/REQUIREMENTS.md section 9 entry 23: item_group_size's
+        # positional extraction is only implemented for the default,
+        # single-read "parsed_html" path so far (generic_spider.py's own
+        # _parse_html) -- deliberately narrower scope than entry 14's
+        # live_dom/progressive_extraction machinery, per this entry's own
+        # explicit instruction to document a sub-gap separately rather
+        # than solving everything in one pass. A config combining them
+        # must fail loudly here, at load time, rather than silently
+        # falling back to the wrong (descendant-selector) interpretation
+        # of `item`/`fields` at parse time.
+        if self.selectors is None or self.selectors.item_group_size is None:
+            return self
+        if self.extraction_mode == "live_dom":
+            raise ValueError(
+                "selectors.item_group_size is not yet supported with extraction_mode "
+                "'live_dom' -- only the default 'parsed_html' extraction path "
+                "implements positional/group extraction so far"
+            )
+        if self.progressive_extraction:
+            raise ValueError(
+                "selectors.item_group_size is not yet supported with "
+                "progressive_extraction: true -- only a single, non-progressive "
+                "read implements positional/group extraction so far"
             )
         return self
 

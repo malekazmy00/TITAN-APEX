@@ -31,6 +31,17 @@ class Post:
     comments: list[Comment] = field(default_factory=list)
 
 
+@dataclass
+class Product:
+    """One /spa-catalog item (docs/REQUIREMENTS.md section 9 entry 23,
+    Known Limitation #5's real fix -- a CSS-in-JS-shaped SPA catalog)."""
+
+    product_id: str
+    title: str
+    price: float
+    image_url: str
+
+
 def faker_for_seed(seed: str) -> Faker:
     fake = Faker()
     Faker.seed(seed)
@@ -109,3 +120,35 @@ def generate_feed_page(
         ]
         posts.append(post)
     return posts
+
+
+def generate_product(seed: str, index: int) -> Product:
+    """Build one deterministic fake catalog product for (seed, index).
+
+    Raises:
+        ValueError: if ``index`` is negative -- there is no such product.
+    """
+    if index < 0:
+        raise ValueError(f"product index must be >= 0, got {index}")
+
+    fake = faker_for_seed(f"{seed}:product:{index}")
+    return Product(
+        product_id=f"{seed}-product-{index}",
+        title=fake.catch_phrase(),
+        price=round(fake.pyfloat(min_value=1, max_value=500, right_digits=2), 2),
+        image_url=f"/spa-catalog/img/{fake.md5()[:12]}.png",
+    )
+
+
+def generate_catalog(seed: str, count: int) -> list[Product]:
+    """Build ``count`` deterministic fake catalog products for ``seed``
+    -- same session (or explicit seed) -> same catalog, a different one
+    -> different products, the same shape ``generate_feed_page`` already
+    has for posts.
+
+    Raises:
+        ValueError: if ``count`` is not positive.
+    """
+    if count <= 0:
+        raise ValueError(f"count must be > 0, got {count}")
+    return [generate_product(seed, i) for i in range(count)]

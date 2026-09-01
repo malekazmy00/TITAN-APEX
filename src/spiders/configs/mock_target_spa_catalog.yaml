@@ -1,0 +1,46 @@
+# docs/REQUIREMENTS.md section 9 entry 23 (Phase 2 بند 6, Known
+# Limitation #5's real fix): test-environment/mock-target's own real
+# CSS-in-JS-shaped, hydration-delayed SPA catalog
+# (test-environment/mock-target/templates/spa_catalog.html) -- the
+# general fix for the react-shopping-cart gap (docs/REQUIREMENTS.md
+# section 7 entry 5): styled-components-style opaque, build/session
+# -rotating class names on every element, and every product's fields
+# (image/title/price/button) are flat SIBLINGS with no per-item wrapper
+# at all, so no CSS-descendant-based item_selector can ever be written.
+#
+# Deliberately NOT behind Anubis -- botPolicy.yaml has an explicit ALLOW
+# rule for this exact path -- this challenge is about hydration timing
+# and DOM structure, not bot detection, so antibot_needed stays false
+# (default) and this never touches Camoufox/Patchright at all: `render_js`
+# alone (PlaywrightMiddleware, Phase 2 -- a completely separate,
+# antibot-unrelated headless-Chromium render) is enough. `render_wait_ms`
+# is set comfortably above the server's own SPA_HYDRATION_DELAY_MS
+# default (800ms) so the fixed post-scroll wait reliably covers the real
+# client-side render, the same shape scrapethissite_ajax_javascript.yaml
+# already established for an analogous "site adds its own delay after
+# the scroll loop" case.
+#
+# selectors.item_group_size: 4 -- the real, new capability this entry
+# adds (src.providers.antibot.parsed_html.extract_positional_html_items):
+# `item` is a *flat* selector matching every field-element of every
+# product concatenated together (image, title, price, button -- always
+# this exact order, per product) instead of one match per item; `fields`
+# addresses each by its 0-indexed position *within* one group of 4, not
+# by any class/attribute -- there genuinely isn't a stable one anywhere
+# in this page's rendered markup.
+name: mock_target_spa_catalog
+start_urls:
+  - "http://localhost:8080/spa-catalog"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+render_js: true
+render_wait_ms: 2000
+max_concurrency: 1
+selectors:
+  item: "#spa-catalog-grid > *"
+  item_group_size: 4
+  fields:
+    image_url: "0::attr(src)"
+    title: "1::text"
+    price: "2::text"

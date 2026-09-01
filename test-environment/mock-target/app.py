@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from config import MockTargetConfig, get_config
-from content_generator import generate_feed_page
+from content_generator import generate_catalog, generate_feed_page
 from flask import Flask, Response, jsonify, redirect, render_template, request
 from security.auth import (
     AUTH_SESSION_COOKIE_NAME,
@@ -44,6 +44,7 @@ from structural.interstitial import build_interstitial_feed_page, render_interst
 from structural.markup_randomizer import MarkupRandomizer
 from structural.placeholder_content import PLACEHOLDER_TEXT, render_swap_script
 from structural.shadow_dom import SHADOW_ATTACH_SCRIPT, encode_shadow_payload, is_shadow_wrapped
+from structural.spa_catalog import HYDRATION_SKELETON_TEXT, products_to_payload
 
 INDEX_PAGE_SIZE = 10
 SESSION_COOKIE_NAME = "mocktarget_session"
@@ -58,6 +59,13 @@ RANDOMIZED_LOGICAL_NAMES = [
     "comment-item",
     "comment-author",
     "comment-text",
+    # docs/REQUIREMENTS.md section 9 entry 23 (Phase 2 بند 6): /spa-catalog's
+    # own CSS-in-JS-shaped fields -- rotated the same way every other
+    # element here is, no separate MarkupRandomizer instance needed.
+    "spa-image",
+    "spa-title",
+    "spa-price",
+    "spa-button",
 ]
 
 
@@ -236,6 +244,29 @@ def create_app(
                 },
             }
         )
+
+    @app.get("/spa-catalog")
+    def spa_catalog() -> Response:
+        # docs/REQUIREMENTS.md section 9 entry 23 (Phase 2 بند 6, Known
+        # Limitation #5's real fix): no antibot challenge here at all --
+        # this is purely a hydration-delay + CSS-in-JS-shaped extraction
+        # target, unrelated to Anubis/Camoufox/Patchright/session
+        # machinery. Session-seeded the same way /feed is (same
+        # seed -> same catalog), purely so a repeat visit within one
+        # session sees stable content -- not a security boundary.
+        seed = _session_seed()
+        products = generate_catalog(seed, cfg.spa_catalog_product_count)
+        response = Response(
+            render_template(
+                "spa_catalog.html",
+                products_json=products_to_payload(products),
+                classes=_classes(),
+                hydration_delay_ms=cfg.spa_hydration_delay_ms,
+                skeleton_text=HYDRATION_SKELETON_TEXT,
+            )
+        )
+        response.set_cookie(SESSION_COOKIE_NAME, seed)
+        return response
 
     @app.get("/login")
     def login_page() -> Response:

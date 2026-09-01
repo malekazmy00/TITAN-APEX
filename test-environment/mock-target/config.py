@@ -127,6 +127,13 @@ class MockTargetConfig:
             "REFERER_SESSION_LOG_PATH",
             "test-environment/mock-target/security/referer_session_reports.log",
         )
+        # docs/REQUIREMENTS.md section 9 entry 23 (Phase 2 بند 6): /spa-catalog's
+        # own real hydration delay (server ships an empty skeleton; the
+        # actual product grid is built by client-side JS this long
+        # afterward) and catalog size -- see structural/spa_catalog.py's
+        # own module docstring.
+        self.spa_hydration_delay_ms: int = _env_int("SPA_HYDRATION_DELAY_MS", 800)
+        self.spa_catalog_product_count: int = _env_int("SPA_CATALOG_PRODUCT_COUNT", 8)
 
 
 def get_config() -> MockTargetConfig:

@@ -8,6 +8,7 @@ real network.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -994,3 +995,75 @@ def test_ja4_header_absent_logs_nothing(client: FlaskClient, config: MockTargetC
 
     assert response.status_code == 200
     assert not Path(config.ja4_log_path).read_text(encoding="utf-8").strip()
+
+
+# --- /spa-catalog (docs/REQUIREMENTS.md section 9 entry 23, Phase 2
+# بند 6, Known Limitation #5's real fix) ---------------------------------
+
+
+def test_spa_catalog_renders_the_hydration_skeleton_only(client: FlaskClient) -> None:
+    """The initial server-rendered HTML ships no real product markup at
+    all -- everything comes from the client-side hydration script, same
+    shape /feed's own "no posts pre-rendered server-side" test above."""
+    response = client.get("/spa-catalog")
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert 'id="spa-catalog-grid"' in body
+    assert "Loading products" in body
+    assert "<img" not in body  # no product images pre-rendered server-side
+
+
+def test_spa_catalog_sets_a_session_cookie(client: FlaskClient) -> None:
+    response = client.get("/spa-catalog")
+
+    assert "mocktarget_session" in response.headers.get("Set-Cookie", "")
+
+
+def test_spa_catalog_ships_the_hydration_delay_and_product_payload(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    """The real delay and the full catalog data must be present in the
+    page for the client-side script to use -- a Flask test client can't
+    execute the script itself, so this checks the static markers a real
+    browser's JS would read (same limitation the /feed virtualization
+    tests above already document)."""
+    config.spa_catalog_product_count = 5
+    body = client.get("/spa-catalog").get_data(as_text=True)
+
+    assert f"setTimeout(renderCatalog, {config.spa_hydration_delay_ms});" in body
+    assert body.count('"product_id"') == 5
+
+
+def test_spa_catalog_ships_opaque_non_semantic_class_names(client: FlaskClient) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 23: the whole point of this
+    challenge -- every scraped field's class name is an opaque token
+    (MarkupRandomizer's own ``x{8 hex digits}`` shape), never a
+    semantic word a config could plausibly hardcode as a stable
+    selector."""
+    body = client.get("/spa-catalog").get_data(as_text=True)
+
+    match = re.search(r'image:\s*"([^"]+)"', body)
+    assert match is not None
+    image_class = match.group(1)
+    assert re.fullmatch(r"x[0-9a-f]{8}", image_class)
+    assert image_class not in ("image", "spa-image", "product-image")
+
+
+def test_spa_catalog_product_count_is_configurable(tmp_path: Path) -> None:
+    """Failure-adjacent case: the catalog size actually reflects config,
+    not a hardcoded constant."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.enable_cookie_wall = False
+    cfg.spa_catalog_product_count = 3
+    app = create_app(cfg)
+    app.testing = True
+
+    body = app.test_client().get("/spa-catalog").get_data(as_text=True)
+
+    assert body.count('"product_id"') == 3

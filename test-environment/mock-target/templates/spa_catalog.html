@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Mock Target - Catalog</title>
+</head>
+<body>
+  <main id="spa-catalog-grid">
+    <div class="skeleton">{{ skeleton_text }}</div>
+  </main>
+  <div id="cart-summary">Cart: 0 items ($0.00)</div>
+
+  <script>
+    // docs/REQUIREMENTS.md section 9 entry 23 (Phase 2 بند 6, Known
+    // Limitation #5's real fix): a genuine hydration-delayed, CSS-in-JS
+    // -shaped SPA -- the server ships zero real product markup (the
+    // skeleton div above only), and this script builds the actual grid
+    // after a real delay, from data embedded in the page itself (no
+    // extra fetch), the same "server renders a shell, client JS owns
+    // the real content" shape a real React app's hydration has.
+    (function () {
+      const products = {{ products_json | tojson }};
+      // Opaque, build/session-rotating class names -- structural.markup_randomizer's
+      // own MarkupRandomizer (app.py's shared instance), the same
+      // mechanism styled-components/emotion's own build-time class
+      // hashing already inspired (see markup_randomizer.py's own
+      // docstring, written for this exact investigation). Deliberately
+      // NOT a stable class or data-testid on any of these elements --
+      // the real react-shopping-cart gap this challenge reproduces had
+      // neither.
+      const classes = {
+        image: {{ classes["spa-image"] | tojson }},
+        title: {{ classes["spa-title"] | tojson }},
+        price: {{ classes["spa-price"] | tojson }},
+        button: {{ classes["spa-button"] | tojson }}
+      };
+      const grid = document.getElementById("spa-catalog-grid");
+      const cartSummary = document.getElementById("cart-summary");
+      // Minimal in-page state -- not Redux, just enough to prove the
+      // page's own displayed content genuinely depends on client-side
+      // state, not static server HTML (this entry's own requirement 3).
+      const cartState = { items: {}, total: 0 };
+
+      function renderCart() {
+        const count = Object.values(cartState.items).reduce((a, b) => a + b, 0);
+        cartSummary.textContent =
+          "Cart: " + count + " items ($" + cartState.total.toFixed(2) + ")";
+      }
+
+      function addToCart(productId, price) {
+        cartState.items[productId] = (cartState.items[productId] || 0) + 1;
+        cartState.total += price;
+        renderCart();
+      }
+
+      function renderCatalog() {
+        grid.innerHTML = "";
+        // Every product renders as four flat, un-wrapped sibling
+        // elements (image, title, price, Add-to-Cart button -- always
+        // this exact order), no per-item container at all -- the same
+        // "siblings, not descendants of anything selectable" shape the
+        // real react-shopping-cart investigation found (docs/REQUIREMENTS.md
+        // section 7 entry 5's own S.Image/S.Title/S.Price/S.BuyButton,
+        // all direct children of one equally-hash-classed S.Container).
+        // A config can only ever recover the scraped fields (image/
+        // title/price) by fixed position within this repeating
+        // 4-element group (selectors.item_group_size), never by class
+        // or attribute -- there genuinely isn't a stable one anywhere
+        // in this markup.
+        products.forEach(function (product) {
+          const img = document.createElement("img");
+          img.className = classes.image;
+          img.src = product.image_url;
+          img.alt = product.title;
+          grid.appendChild(img);
+
+          const title = document.createElement("h3");
+          title.className = classes.title;
+          title.textContent = product.title;
+          grid.appendChild(title);
+
+          const price = document.createElement("span");
+          price.className = classes.price;
+          price.textContent = "$" + product.price.toFixed(2);
+          grid.appendChild(price);
+
+          const button = document.createElement("button");
+          button.className = classes.button;
+          button.textContent = "Add to Cart";
+          button.dataset.productId = product.product_id;
+          button.addEventListener("click", function () {
+            addToCart(product.product_id, product.price);
+          });
+          grid.appendChild(button);
+        });
+      }
+
+      setTimeout(renderCatalog, {{ hydration_delay_ms }});
+    })();
+  </script>
+</body>
+</html>

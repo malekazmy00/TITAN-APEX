@@ -33,6 +33,18 @@ bots:
     path_regex: ^/warmup-(home|category|target)$
     action: ALLOW
 
+  # docs/REQUIREMENTS.md section 9 entry 23 (Phase 2 بند 6, Known
+  # Limitation #5's real fix, SPA/CSS-in-JS extraction): same reasoning
+  # and same first-match-wins placement as warmup-referer-check-routes
+  # above -- this challenge is about hydration timing/DOM structure, not
+  # bot detection at all, so /spa-catalog is deliberately never gated
+  # behind Anubis's own challenge in the first place (unlike /feed,
+  # /login, etc.), the same way real-world "no antibot on this page"
+  # targets already need testing.
+  - name: spa-catalog-route
+    path_regex: ^/spa-catalog$
+    action: ALLOW
+
   # You can import the entire default config with this macro:
   # - import: (data)/meta/default-config.yaml
 

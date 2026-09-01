@@ -584,3 +584,79 @@ def test_use_accumulated_profile_requires_a_real_browser_provider(tmp_path: Path
 
     with pytest.raises(ConfigError, match="requires antibot_provider"):
         load_spider_config(str(config_file))
+
+
+# --- selectors.item_group_size (docs/REQUIREMENTS.md section 9 entry 23,
+# Known Limitation #5's real fix) --------------------------------------
+
+
+def test_item_group_size_is_read_from_yaml(tmp_path: Path) -> None:
+    """Happy path: a config opting into positional extraction."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        'name: x\nstart_urls: ["http://x/"]\nrate_limit: 1.0\n'
+        "selectors:\n  item: '#grid > *'\n  item_group_size: 3\n"
+        "  fields:\n    title: '1::text'\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.selectors.item_group_size == 3
+
+
+def test_item_group_size_defaults_to_none(tmp_path: Path) -> None:
+    """Happy path: every existing config's exact prior behavior, unset."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.selectors.item_group_size is None
+
+
+def test_item_group_size_rejects_a_non_positive_value(tmp_path: Path) -> None:
+    """Failure case: a zero/negative group size is meaningless."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        'name: x\nstart_urls: ["http://x/"]\nrate_limit: 1.0\n'
+        "selectors:\n  item: '#grid > *'\n  item_group_size: 0\n"
+        "  fields:\n    title: '0::text'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="failed schema validation"):
+        load_spider_config(str(config_file))
+
+
+def test_item_group_size_rejects_live_dom_extraction_mode(tmp_path: Path) -> None:
+    """Failure case: positional extraction is only implemented for the
+    default 'parsed_html' path so far -- combining it with live_dom must
+    fail loudly at config-load time, not silently misread `item`/`fields`
+    the wrong way at request time."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        'name: x\nstart_urls: ["http://x/"]\nrate_limit: 1.0\n'
+        "antibot_needed: true\nantibot_provider: camoufox\nextraction_mode: live_dom\n"
+        "selectors:\n  item: '#grid > *'\n  item_group_size: 3\n"
+        "  fields:\n    title: '1::text'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="not yet supported with extraction_mode"):
+        load_spider_config(str(config_file))
+
+
+def test_item_group_size_rejects_progressive_extraction(tmp_path: Path) -> None:
+    """Failure case: same reasoning, for progressive_extraction: true."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        'name: x\nstart_urls: ["http://x/"]\nrate_limit: 1.0\n'
+        "antibot_needed: true\nantibot_provider: camoufox\nprogressive_extraction: true\n"
+        "selectors:\n  item: '#grid > *'\n  item_group_size: 3\n"
+        "  fields:\n    title: '1::text'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="not yet supported with progressive_extraction"):
+        load_spider_config(str(config_file))

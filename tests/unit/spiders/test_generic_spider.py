@@ -319,6 +319,98 @@ def test_parse_on_page_with_no_matching_items_logs_and_yields_nothing(
     assert results == []
 
 
+# --- selectors.item_group_size / positional extraction (docs/REQUIREMENTS.md
+# section 9 entry 23, Known Limitation #5's real fix) -----------------------
+
+POSITIONAL_CONFIG_YAML = """
+name: spa_catalog
+start_urls:
+  - "http://localhost:8080/spa-catalog"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+selectors:
+  item: "#catalog > *"
+  item_group_size: 3
+  fields:
+    image_url: "0::attr(src)"
+    title: "1::text"
+    price: "2::text"
+"""
+
+# Deliberately no per-item wrapper and no stable class/attribute anywhere
+# (a real CSS-in-JS/styled-components shape) -- the exact page
+# extract_positional_html_items exists for; hashed-looking class names on
+# purpose (opaque, not semantic) to prove extraction never depends on them.
+POSITIONAL_HTML = b"""
+<html><body>
+  <main id="catalog">
+    <img class="x1a1a1a1" src="/img/1.png" alt="Widget">
+    <h3 class="x2b2b2b2">Widget</h3>
+    <span class="x3c3c3c3">$9.99</span>
+    <img class="x1a1a1a1" src="/img/2.png" alt="Gadget">
+    <h3 class="x2b2b2b2">Gadget</h3>
+    <span class="x3c3c3c3">$19.99</span>
+  </main>
+</body></html>
+"""
+
+
+@pytest.fixture
+def positional_config_path(tmp_path: Path) -> str:
+    path = tmp_path / "spa_catalog.yaml"
+    path.write_text(POSITIONAL_CONFIG_YAML, encoding="utf-8")
+    return str(path)
+
+
+def test_parse_extracts_items_positionally_when_item_group_size_is_set(
+    positional_config_path: str,
+) -> None:
+    """Happy path: a page with zero stable classes/attributes still
+    yields correct, well-formed items -- position, not name, drives
+    extraction."""
+    spider = GenericSpider(config_path=positional_config_path)
+    request = Request("http://localhost:8080/spa-catalog")
+    response = HtmlResponse(
+        url="http://localhost:8080/spa-catalog", body=POSITIONAL_HTML, request=request
+    )
+
+    results = list(spider.parse(response))
+    items = [r for r in results if isinstance(r, dict)]
+
+    assert items == [
+        {
+            "source_url": "http://localhost:8080/spa-catalog",
+            "image_url": "/img/1.png",
+            "title": "Widget",
+            "price": "$9.99",
+        },
+        {
+            "source_url": "http://localhost:8080/spa-catalog",
+            "image_url": "/img/2.png",
+            "title": "Gadget",
+            "price": "$19.99",
+        },
+    ]
+
+
+def test_parse_positional_extraction_on_empty_page_logs_and_yields_nothing(
+    positional_config_path: str,
+) -> None:
+    """Failure case: no matching slots at all -- no crash, no items."""
+    spider = GenericSpider(config_path=positional_config_path)
+    request = Request("http://localhost:8080/spa-catalog")
+    response = HtmlResponse(
+        url="http://localhost:8080/spa-catalog",
+        body=b"<html><body><main id='catalog'></main></body></html>",
+        request=request,
+    )
+
+    results = list(spider.parse(response))
+
+    assert results == []
+
+
 # --- JSON/API parsing (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's
 # JSON/API round) -------------------------------------------------------
 
