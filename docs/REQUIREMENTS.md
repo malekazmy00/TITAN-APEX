@@ -5685,6 +5685,63 @@ secret message is: 🤫").
 لـlogin عبر camoufox/patchright) — تحديث هذا البند بالنتيجة الفعلية
 بعد كده مباشرة.
 
+#### تأكيد CI حقيقي (push، commit `5857dde`، run `33550885357`) — دليل مباشر من اللوج، مش الـcheckmark بس
+
+**نتيجة الـrun: `conclusion: failure`** — لكن الفشل **مش من أي حاجة في
+الجولة دي**. اللوج الحقيقي (`get_job_logs`) فُتح وقُرئ سطر بسطر، مش
+افتراض من مجرد اللون الأحمر. السطر النهائي لخطوة الاختبارات:
+
+```
+1 failed, 43 passed, 2 warnings in 676.28s (0:11:16)
+```
+
+الفشل الوحيد:
+
+```
+FAILED tests/integration/test_playwright_live_render.py::test_infinite_scrolling_target_yields_more_than_the_static_batch
+- AssertionError: expected more than 12 items (the static page alone already
+  has 12); got 12 -- JS-triggered infinite scroll did not add more
+```
+
+ده اختبار **موجود من قبل الجولة دي خالص** (بند تاني تمامًا،
+`scrapingcourse.com`'s infinite-scroll، عبر `PlaywrightMiddleware`) —
+صفر علاقة بأي target أو كود لمسته الجولة دي. صفر تعديل على
+`test_playwright_live_render.py` أو أي target بتاعه في هذا الـpush.
+مسجّل هنا كفشل حقيقي، منفصل، محتاج تحقيق مستقل بعدين — **مش متجاهَل
+بصمت، ومش متبنّى غلط كأنه بتاع الجولة دي**.
+
+**الـ4 اختبارات الجديدة نفسها — اتأكّدت الأربعة عدّت (PASSED):**
+- 3 منهم اتأكّدوا مباشر من موضع الـPASSED marker بعد الـstderr tail
+  بتاعهم بالظبط في اللوج: `test_web_scraping_dev_login_via_camoufox`،
+  `test_web_scraping_dev_login_via_patchright`،
+  `test_web_scraping_dev_products_reaches_the_next_link_window`.
+- الرابع (`scrapethissite_advanced_headers`) خرج برّه الجزء المتاح من
+  اللوج (log كبير، الجزء المتاح كان tail فقط) — **اتأكّد بالحساب بدل
+  التخمين**: العدد الأساسي قبل الجولة دي كان 40 (39 قديم + 1 من بند
+  23)، +4 اختبارات جديدة = 44 إجمالي. النتيجة الفعلية `1 failed + 43
+  passed = 44` — تطابق حسابي كامل، والفاشل الوحيد معروف ومؤكَّد إنه
+  `test_playwright_live_render.py` مش أي واحد من الأربعة الجدد. يبقى
+  الأربعة كلهم عدّوا فعليًا، بالاستبعاد الحسابي المباشر مش افتراض.
+
+**الخلاصة النهائية لسؤال "هل بنود 21/22/23 أثبتت نفسها برّة
+mock-target؟" — دلوقتي مؤكَّدة، مش معلّقة:**
+- **بند 21 (LoginFlow):** ✅ **اتأكّد فعليًا في CI حقيقي** ضد
+  `web-scraping.dev` الخارجي — الاتنين `camoufox`/`patchright` عدّوا،
+  يعني الـlogin POST + الكوكي + قراءة المحتوى المحمي ("Logged in as
+  User123... secret message") اشتغلوا صح فعليًا عبر كود المشروع نفسه،
+  مش يدوي بس زي قبل كده. أول تأكيد حقيقي كامل لبند 21 برّة بيئتنا
+  الذاتية.
+- **بند 22 (RateLimiterMiddleware):** ✅ اتأكّد إضافيًا — نفس الـrun شغّل
+  كل الـconfigs الجديدة (بما فيهم `/products`'s 5 requests) تحت
+  الـmiddleware ده فعليًا في CI، بدون أي تعطيل لحركة طبيعية.
+- **بند 23 (positional extraction):** غير مرتبط بأي target من الجولة
+  دي، زي ما اتسجّل فوق — لسه مؤكَّد من CI الخاص بيه (run 33541539540).
+
+**تأكيد CI لـ`7244d91`** (الرد على سؤال المستخدم عن sandbox-vs-site،
+docs-only): Lint نجح (`33553346049`)، CI (`33553346010`) كان لسه شغال
+وقت كتابة هذا التحديث — هيتأكّد بعدين، تغيير docs بس فمفروض ما فيهوش
+مفاجآت.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
