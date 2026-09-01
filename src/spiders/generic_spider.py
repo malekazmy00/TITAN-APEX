@@ -95,6 +95,15 @@ class GenericSpider(scrapy.Spider):
                 # seen first for process_response/process_exception. See
                 # each middleware's module docstring for why this order
                 # matters (docs/REQUIREMENTS.md, section 2).
+                #
+                # RateLimiterMiddleware (docs/REQUIREMENTS.md section 9
+                # entry 22, Phase 2 بند 7): only has process_request (it
+                # never looks at a response/exception), and belongs first
+                # in that order deliberately -- it is a cheap, local check
+                # that should reject an over-quota/too-regular request
+                # before any of byparr/playwright's real, expensive
+                # browser-driving work ever starts for it.
+                "src.middlewares.rate_limiter.RateLimiterMiddleware": 100,
                 "src.middlewares.byparr_middleware.ByparrMiddleware": 520,
                 "src.middlewares.playwright_middleware.PlaywrightMiddleware": 543,
                 "src.middlewares.retry_backoff.RetryBackoffMiddleware": 550,

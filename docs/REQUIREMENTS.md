@@ -81,6 +81,10 @@ titan-apex/
 - [x] Playwright كـ downloader middleware (`render_js: true` في config الـ target)
 - [x] Circuit Breaker (قابل للتهيئة، افتراضي 5 فشل متتالي / 60 ثانية cooldown)
 - [x] Rate limiting ذاتي عبر config كل target (`rate_limit`, `max_concurrency`)
+- [x] Rate limiting متعدد المستويات وذكي (بند 7، طلب المستخدم صراحة) —
+      `RateLimiterMiddleware` مستقل بالكامل (target/account/IP/ASN-subnet
+      + كشف نمط الطلبات + backoff تصاعدي) — تفاصيل كاملة في section 9
+      entry 22
 
 ### المرحلة 3 — الحماية المتوسطة (منفذة)
 - [x] `byparr_provider.py` implementation من `antibot_provider` (عدّى `tests/contract/`)
@@ -5264,6 +5268,129 @@ GitHub Actions حقيقي (نفس نمط كل الجولات السابقة: ف�
 Actions المخصّصة للمشروع، مش لأي فشل فعلي أو رجعة**. لازم يتفتح ويتقرأ
 لوج الـrun الحقيقي بمجرد توفّر الدقائق (نفس الانضباط المتبع من بند 17
 لحد هنا)، مش الاكتفاء بادّعاء النجاح المحلي وحده.
+
+### 22. Rate Limiting متعدد المستويات وذكي — `RateLimiterMiddleware` مستقل بالكامل (Phase 2 بند 7، طلب المستخدم صراحة)
+
+**السياق:** المستخدم طلب صراحة "وسّع middleware الحالي (زي
+`circuit_breaker.py`) ليدعم rate limiting على مستويات متعددة" — مش
+تعديل `circuit_breaker.py` نفسه، بل middleware جديد مستقل بنفس النمط
+المعماري، بـ3 قدرات محددة صراحة: (1) مستويات متعددة قابلة للتهيئة —
+target/account/IP/ASN-subnet، (2) "ذكاء" حقيقي — تحليل نمط الطلبات مش
+بس عدّاد، (3) backoff تصاعدي عند تكرار التجاوز. شرط صريح إضافي: **صفر
+تعديل** على أي كود متعلق بـCamoufox/Patchright/session/navigation —
+النطاق middleware مستقل بالكامل.
+
+**القرار المعماري (اتأكّد من الكود الفعلي قبل أي بناء، مش افتراض):**
+الـper-target rate limit الموجود بالفعل (`spider_config.py`'s
+`rate_limit`/`max_concurrency` → Scrapy's `DOWNLOAD_DELAY`/
+`CONCURRENT_REQUESTS_PER_DOMAIN`، `generic_spider.py` سطر 81-84) هو
+delay ثابت واحد لكل target، مش middleware ولا قابل لتعدد المستويات —
+اتسيب زي ما هو تمامًا (صفر تعديل عليه، المستخدم مانطقش يمسحه). الميدلوير
+الجديد (`src/middlewares/rate_limiter.py`) طبقة إضافية منفصلة تمامًا،
+بنفس بنية `CircuitBreakerMiddleware`/`RetryBackoffMiddleware` (نفس
+`from_crawler`، نفس حقن `clock`/`logger`/`alert_dispatcher`
+القابل للاختبار). فحصت الكود فعليًا قبل البناء: مفيش أي مفهوم "account"
+في المشروع خالص (`grep -rn "account" src/` رجّع صفر نتيجة)، وPhase 6
+(proxies، تنوّع IP/ASN) لسه مؤجَّل (section 2's own roadmap) — يعني
+مستويات account/IP/ASN مالهاش أي بيانات فعلية تتقرأ منها اليوم. القرار:
+كل مستوى بيتحدد بـ`key_fn: Callable[[Request], str | None]` — لو رجّع
+`None`، المستوى ده بيتخطّى تمامًا لهذا الطلب (مش violation، مش قيمة
+افتراضية) — target بيقرا `urlparse(url).netloc` (نفس
+`CircuitBreakerMiddleware._domain` بالظبط) فبيشتغل دايمًا، وaccount/IP/
+ASN-subnet بتقرا `request.meta["account_id"/"egress_ip"/"egress_asn"]`
+— مفيش أي spider/config حالي بيحطهم، فالمستويات التلاتة دي اليوم
+no-op آمن تمامًا، ومتوافقة مستقبلًا مع أي طبقة proxy/login من غير أي
+تعديل على هذا الملف.
+
+**"الذكاء" (القدرة 2):** `is_pattern_too_regular` بيحسب coefficient of
+variation (population stddev / mean) على آخر الفواصل الزمنية الحقيقية
+بين طلبات نفس الـscope — نمط طبيعي (jitter حقيقي، أو حتى Scrapy's
+`RANDOMIZE_DOWNLOAD_DELAY`) بيدّي CV واضح أعلى من الصفر؛ cadence ثابت
+ميكانيكيًا (بالظبط الإشارة اللي أنظمة كشف البوتات بتدوّر عليها — نفس
+موضوع fpscanner/JA4/mouse-movement بس على توقيت طلباتنا الصادرة إحنا،
+مش fingerprint المتصفح) بيدّي CV قريب من صفر. تحت `regularity_cv_threshold`
+(بعد `regularity_min_intervals` عينة على الأقل — عدد عينات قليل بيخلي
+الـCV مش دال) بيتحسب violation ثانية مستقلة (`"pattern_detected"`)،
+بنفس وزن تجاوز العدّاد (`"count_exceeded"`).
+
+**احتراز حقيقي، اتفحص قبل التنفيذ:** الـconfigs الحالية كلها بتحط
+`rate_limit: 1.0` ثابت (Scrapy's `DOWNLOAD_DELAY`) — لو `RANDOMIZE_DOWNLOAD_DELAY`
+مش مفعّل، ده بيدّي cadence شبه ثابت فعليًا. عشان كده الـpattern check
+مش بيحجب الطلب فورًا لمجرد رصد نمط منتظم مرة واحدة — لازم يوصل
+`violation_threshold` (نفس شكل `CircuitBreakerMiddleware`'s
+`failure_threshold`) الأول، وده بينطبق على count_exceeded وpattern_detected
+مع بعض (كلاهما "violation" بنفس الوزن).
+
+**Backoff تصاعدي (القدرة 3):** violation واحدة بس بتسجّل WARNING
+وبتسيب الطلب يعدي — `violation_threshold` (افتراضي 3) violations
+متتالية قبل ما الـscope يتحجب فعليًا. لما يتحجب، مدة الـcooldown نفسها
+بتتضاعف مع كل حجب تالي (`compute_escalated_backoff_seconds`، نفس شكل
+`retry_backoff.compute_delay` الضاعف تمامًا — اتكرر الكود عمدًا مش
+اتستورد، نفس مبدأ `_scroll.py`'s الموثّق قبل كده: مفهومين مختلفين،
+delay إعادة محاولة لطلب واحد مقابل تصعيد cooldown لـscope كامل)، لحد
+سقف `backoff_max_seconds`. سلسلة نظيفة كافية (`violation_reset_seconds`)
+بترجّع عدّاد الـviolations للصفر — نفس منطق
+`CircuitBreakerMiddleware._record_success`.
+
+**تفصيل صحة حقيقي اتلقط أثناء كتابة الاختبارات، مش بعدها:** أول تصميم
+كان بيعمل reset لعدّاد الـviolations بس للـscopes اللي فضلت نضيفة في
+نفس الجولة — يعني scope كان ساكت لفترة كافية (>`violation_reset_seconds`)
+وبعدين فجأة عمل violation جديد كان بيكمّل على العدّاد القديم بدل ما
+يبدأ من واحد. اتلقط بالتنفيذ الفعلي لاختبار
+`test_violation_count_resets_after_a_clean_streak` (كان بيفشل)، مش
+افتراض نظري — الإصلاح: الـreset بيتحقق لكل الـscopes المطبَّقة **قبل**
+تسجيل violations الجولة الحالية (Phase 2.5 في `process_request`)، مش
+بعدها.
+
+**تفصيل صحة تاني، مؤكَّد باختبار مخصّص:** طلب اتحجب في مستوى واحد (مثلاً
+account) **ميجيش** يسجّل timestamp في مستوى تاني (target) كان نضيف —
+الطلب الأصلي أصلًا معملش، فأي مستوى يسجّله كأنه حصل بيبقى تلوّث حقيقي
+للنافذة بتاعته. `process_request` بالتالي 3 مراحل صريحة: (1) كوليداون
+موجود (read-only، ممكن يرفع فورًا)، (2) كشف violations لكل مستوى
+(read-only بحت)، (3) commit — القرار الكامل (يعدي/يترفض) بيتاخد الأول،
+وبعدين بس الـtimestamps بتتسجّل، ولو الطلب مترفض هيتترفض بالكامل من
+غير أي تسجيل في أي مستوى خالص. اتأكّد بـ
+`test_a_dropped_request_never_pollutes_another_levels_window`.
+
+**التوصيل:** `RateLimiterMiddleware` اتضاف لـ`generic_spider.py`'s
+`DOWNLOADER_MIDDLEWARES` بـpriority **100** — أول واحد في ترتيب
+`process_request` (أقل رقم = أقرب للـEngine = بيتشاف الأول)، عمدًا قبل
+حتى `byparr_middleware`(520) — فحص محلي رخيص لازم يرفض الطلب المتجاوز
+للحد قبل أي شغل browser حقيقي مكلف، مش بعده. الميدلوير الجديد مالوش
+`process_response`/`process_exception` خالص — بيراقب توقيت الطلبات
+الصادرة بس، مش نتيجة الاستجابة، فمفيش أي تفاعل مع منطق circuit
+breaker/retry الموجود.
+
+**الإعدادات:** `TITAN_RATE_LIMIT_*` (14 متغيّر، `.env.example`) — نفس
+نمط `TITAN_CIRCUIT_*`/`TITAN_RETRY_*` كل مستوى + regularity + escalation
+قابل للتهيئة منفصل. الأرقام الافتراضية (target/account: 30 طلب/60 ثانية،
+IP: 60/60، ASN-subnet: 120/60، cv_threshold: 0.15، violation_threshold: 3،
+backoff_base: 30s، backoff_max: 1800s) **موثَّقة صراحة كنقطة بداية
+معقولة، مش أرقام محسوبة من بيانات حركة حقيقية** — المشروع معندوش
+تاريخ حركة فعلي يتحسب منه بعد، وكل واحد فيهم قابل للتغيير عبر config
+من غير أي كود جديد.
+
+**التحقق المحلي (اتنفّذ فعليًا، مش ادّعاء):** `ruff check` نظيف،
+`mypy --strict` نظيف (40 ملف)، 43 unit test جديد لـ`rate_limiter.py`
+(pure functions: `coefficient_of_variation`/`is_pattern_too_regular`/
+`compute_escalated_backoff_seconds`/الـ4 key functions — كل واحدة happy
+path + على الأقل حالتين فشل؛ الميدلوير نفسه: نظيف، soft violation،
+hard block، escalating cooldown، cooldown enforcement، الـreset
+الصحيح، عزل الـscopes، عزل الـmulti-level، pattern detection، alert
+dispatch، `from_crawler`) — كلهم PASSED، `rate_limiter.py` نفسه 99%
+coverage. الـsuite الكامل: 443 unit passed (فشلتين معزولتين مش
+متعلقتين — `oxymouse` package مش متثبّت في هذا الـsandbox تحديدًا،
+فجوة بيئة قديمة من بند 20، اتأكّد إنها مش رجعة مني: `git status`
+بيأكّد صفر تعديل على `_mouse_movement.py`/اختباره)، 35/35 contract،
+192/192 test-environment (100% coverage) — التوتال 95.90%، هامش حقيقي
+فوق بوابة الـ85%. `generic_spider.py`'s `DOWNLOADER_MIDDLEWARES`
+dict test (`test_generic_spider.py`) اتحدّث ليعكس الميدلوير الجديد.
+
+**تأكيد CI حقيقي معلّق** (نفس السبب المسجَّل في بند 21 فوق، مش جديد):
+دقائق GitHub Actions لسه مش متاحة وقت الكتابة — الكود اتحقق محليًا
+بالكامل بالانضباط المعتاد، وأي push لهذا الكوميت هيبدأ CI run تلقائي
+(`on: [push, pull_request]`) بمجرد ما الدقائق ترجع، ولازم يتفتح ويتقرأ
+لوجه الفعلي بعدها (نفس القاعدة، مش الاكتفاء بالنجاح المحلي).
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

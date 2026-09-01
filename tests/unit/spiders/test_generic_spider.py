@@ -129,6 +129,7 @@ def test_from_crawler_wires_download_delay_and_storage_pipeline(config_path: str
         "src.spiders.pipelines.StorageBackendPipeline": 300
     }
     assert crawler.settings.getdict("DOWNLOADER_MIDDLEWARES") == {
+        "src.middlewares.rate_limiter.RateLimiterMiddleware": 100,
         "src.middlewares.byparr_middleware.ByparrMiddleware": 520,
         "src.middlewares.playwright_middleware.PlaywrightMiddleware": 543,
         "src.middlewares.retry_backoff.RetryBackoffMiddleware": 550,
