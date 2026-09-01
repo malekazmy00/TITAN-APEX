@@ -548,6 +548,41 @@ hosting بيرجّع 404 (S3 `NoSuchBucket`)، وحتى الـ frontend الشغ
 (`conduit.productionready.io` → Cloudflare 530، DNS error على الـ
 origin). مفيش بيانات حقيقية تتسحب حتى لو حلّينا مشكلة الـ selectors.
 
+### 6. `PlaywrightMiddleware`'s scroll trigger (`window.scrollTo`) مش موثوق فيه ضد صفحات مبنية على `IntersectionObserver` — كشف اتبنى (section 9 entry 25)، الحل لسه مؤجَّل
+
+**الفجوة:** `scrapingcourse.com/infinite-scrolling` (target حقيقي،
+`scrapingcourse_infinite_scrolling.yaml`) بيرجّع الدفعة الأولى الثابتة
+بس (12 item) — الـscroll مبيجيبش أي دفعة إضافية، رغم إن الموقع فعليًا
+عنده المزيد (اتأكّد بدليل CI حقيقي، run 33550885357).
+
+**ليه المعمارية الحالية مش قادرة:** الموقع بيحمّل الدفعة الجاية عبر
+`IntersectionObserver` بيراقب عنصر `#sentinel` (مش `scroll` event
+listener — اتأكّد بقراءة سكريبت الصفحة فعليًا عبر `curl`). كود المشروع
+(`_scroll_to_load_lazy_content` في `src/middlewares/playwright_middleware.py`)
+بيعمل `window.scrollTo(0, document.body.scrollHeight)` بس — وده موثّق
+من 3 مصادر خارجية مستقلة (section 9 entry 25) كغير موثوق فيه لتشغيل
+`IntersectionObserver` في Chromium headless، عكس `page.mouse.wheel()`
+أو `scrollIntoViewIfNeeded()`. **المشروع نفسه لقى وحلّ نفس فئة المشكلة
+دي قبل كده** (section 9 entry 17، `page.mouse.wheel()` بدل `scrollTo()`)
+— بس الحل ده اتطبّق بس على `src/providers/antibot/_scroll.py`
+(Camoufox/Patchright antibot providers)، وماتنقلش أبدًا لـ
+`playwright_middleware.py`'s المسار المستقل بتاع `render_js: true`
+العادي.
+
+**اللي اتعمل فعليًا في الجولة دي (section 9 entry 25):** كشف، مش حل —
+`ScrollDiagnostics` (attempts_used/initial_height/final_height/
+requests_during_scroll) بيتبني وبيتسجّل structured logging لكل render،
+عشان أي فشل مستقبلي مشابه يبان سببه فورًا من اللوج (`requests_during_scroll:
+0` = الـtrigger أصلاً ما اشتغلش) بدل تحقيق خارجي كامل زي ده كل مرة.
+
+**لو قررنا نحلها بعدين:** استبدال `window.scrollTo()` جوه
+`_scroll_to_load_lazy_content` بـ`page.mouse.wheel()` (نفس فكرة
+`_scroll.py`'s "Fourth revision") أو `page.locator(sentinel_selector)
+.scroll_into_view_if_needed()` — تعديل محصور في
+`playwright_middleware.py` بس، صفر لمسة لـ Camoufox/Patchright. الاختبار
+الحقيقي (`test_playwright_live_render.py`) هيفضل المعيار الموضوعي إن
+الحل نجح فعليًا.
+
 ---
 
 ## 8. Escalation Cycle
@@ -5741,6 +5776,112 @@ mock-target؟" — دلوقتي مؤكَّدة، مش معلّقة:**
 docs-only): Lint نجح (`33553346049`)، CI (`33553346010`) كان لسه شغال
 وقت كتابة هذا التحديث — هيتأكّد بعدين، تغيير docs بس فمفروض ما فيهوش
 مفاجآت.
+
+### 25. تحقيق مستقل: الفشل الغير مرتبط اللي ظهر في run `33550885357` — سبب حقيقي معروف، اتبنى له كشف (طلب المستخدم صراحة)
+
+**السياق:** بعد تقرير entry 24، المستخدم طلب صراحة تحقيق في الفشل
+الوحيد الغير مرتبط اللي ظهر في نفس الـrun
+(`test_playwright_live_render.py::test_infinite_scrolling_target_yields_more_than_the_static_batch`)
+— البحث في الإنترنت هل ده نمط معروف ليه حل، وبناء طريقة لـ**كشف** المشكلة
+دي (مش بالضرورة حلها في نفس الجولة).
+
+#### السبب الجذري — اتفحص فعليًا، مش تخمين
+
+الاختبار بيستهدف `https://www.scrapingcourse.com/infinite-scrolling`.
+`curl` مباشر على الصفحة (مش افتراض) كشف السكريبت الحقيقي بتاعها:
+
+```js
+var observer = new IntersectionObserver(function(entries) {
+    if (entries[0].intersectionRatio <= 0) return;
+    loadMoreItems();
+});
+observer.observe(document.getElementById('end-of-page'));
+observer.observe(document.getElementById('sentinel'));
+```
+
+يعني الموقع بيحمّل الدفعة الجاية عبر **`IntersectionObserver`** بيراقب
+عنصر `#sentinel`، **مش `scroll` event listener**. وكود المشروع
+(`playwright_middleware.py`'s `_scroll_to_load_lazy_content`، اللي
+`render_with_playwright` بيستخدمه لأي target `render_js: true` عادي —
+بما فيه ده) بيعمل `window.scrollTo(0, document.body.scrollHeight)` بس،
+ونفس الدالة دي **من أول ما اتكتبت من قبل الجولة دي بكتير، صفر تغيير**.
+
+**بحث فعلي في الإنترنت (مش تخمين) أكّد إن ده نمط معروف بالفعل، وليه حل
+معروف** — 3 مصادر مستقلة:
+- <https://scrolltest.com/playwright-infinite-scroll-lazy-loading/>:
+  "`scrollIntoViewIfNeeded()` مفضّل على `window.scrollTo` لأنه بيحرّك
+  العنصر الحقيقي جوه الـviewport، وده بالظبط اللي بيشغّل
+  `IntersectionObserver`" — `window.scrollTo` "مش بيضمن تشغيل منطق
+  الـintersection".
+- <https://github.com/microsoft/playwright/issues/28581>: نفس النمط
+  بالظبط اتبلّغ عنه من مستخدم تاني (Scrapy+Playwright، scroll ظاهر
+  بس المحتوى مش بيتحمّل).
+- <https://github.com/microsoft/playwright/issues/35405>: توثيق رسمي
+  إضافي لسلوك الـscroll الغير مستقر في Playwright headless.
+
+**اكتشاف إضافي مهم: المشروع نفسه لقى وحلّ نفس الفئة من المشكلة قبل كده
+— بس في مكان تاني بس.** `docs/REQUIREMENTS.md` section 9 entry 17 (بند
+الـDOM Virtualization) اكتشف بالظبط نفس العيب (`window.scrollTo()` مش
+موثوق فيه لتشغيل حدث scroll حقيقي) لموقع مختلف (مبني على `scroll` event
+listener، مش `IntersectionObserver`) — والحل بتاعه (`page.mouse.wheel()`
+حقيقي، `_scroll.py`'s "Fourth revision") **اتطبّق بس على
+`src/providers/antibot/_scroll.py`** (المستخدم من Camoufox/Patchright
+antibot providers)، **وماتنقلش أبدًا لـ`playwright_middleware.py`'s
+`_scroll_to_load_lazy_content`** — الاتنين كانوا موجودين بمعزل عن بعض،
+صفر أي حد لاحظ الفجوة دي قبل كده. **الحل الحقيقي معروف بالفعل جوه
+المشروع نفسه** (نفس الفكرة: `page.mouse.wheel()`/`scrollIntoViewIfNeeded()`
+بدل `scrollTo()`) — **مؤجَّل عمدًا لجولة منفصلة**، مطابق لانضباط المشروع
+("وثّق الفجوة الفرعية منفصل، متحاولش تحل كل حاجة في نفس الحل").
+
+#### الكشف المبني (الطلب الأساسي في الجولة دي)
+
+بدل الاعتماد على عدد الـitems النهائي بس (اللي محتاج تحقيق خارجي كامل
+زي ده كل مرة يفشل)، `render_with_playwright`/`PlaywrightMiddleware`
+دلوقتي بيبنوا وبيسجّلوا دليل حقيقي مباشر عن كل scroll:
+
+- `ScrollDiagnostics` (dataclass جديد، `src/middlewares/playwright_middleware.py`):
+  `attempts_used`، `initial_height`، `final_height`، `requests_during_scroll`
+  (`None` لو محدش كان بيتابع طلبات الشبكة، مش صفر بمعنى "اتأكّد إنه
+  صفر" — فرق مهم).
+- `_scroll_to_load_lazy_content` بترجّع `ScrollDiagnostics` بدل `None`
+  دلوقتي (`attempts_used`/`initial_height`/`final_height`).
+- `render_with_playwright` بيسجّل `page.on("request", ...)` قبل الـscroll
+  loop مباشرة وبيشيله بعدها (`try`/`finally`)، وبيضيف
+  `requests_during_scroll` الحقيقي للـdiagnostics، ويحطها في
+  `RenderedPage` (حقل جديد، default `None` — صفر كسر backward
+  compatibility لأي caller/test قديم).
+- `PlaywrightMiddleware._render` بيسجّل سطر structured
+  (`playwright_middleware.scroll_diagnostics`) بكل القيم دي، لكل render
+  فيه scroll diagnostics.
+
+**النتيجة العملية:** المرة الجاية اللي اختبار infinite-scroll (ده أو أي
+target تاني `render_js: true` مشابه) يفشل، لوج CI هيوريّ فورًا
+`requests_during_scroll: 0` (دليل مباشر إن الـtrigger أصلاً ما اشتغلش —
+بالظبط الحالة الحالية) **مختلف بوضوح** عن `requests_during_scroll: N`
+مع مفيش نمو في الـheight (سبب مختلف تمامًا — طلبات بترجع فاضية) أو صفحة
+حقيقي محدودة (بتوقف على جدولها الطبيعي). صفر تخمين المرة الجاية.
+
+**صفر تغيير في سلوك الـscroll نفسه** — التسجيل ده observational بحت،
+مفيهوش أي تعديل على أي منطق موجود (زي ما بند 22's النطاق كان صريح إنه
+middleware مستقل، هنا برضه صفر تعديل على أي كود بيلمس Camoufox/Patchright
+— الملف ده بتاع `PlaywrightMiddleware` بس).
+
+**التحقق المحلي:** 13 اختبار (10 قدام + 3 جديدة) في
+`tests/unit/middlewares/test_playwright_middleware.py` عدّوا كلهم،
+`ruff check`/`mypy --strict` نضاف على الملفين المعدَّلين، وباقي
+الـsuite (463 اختبار) عدّى بدون تأثر — الفشلين الوحيدين
+(`test_mouse_movement.py`'s `oxymouse` tests) قيد بيئة محلي معروف من
+قبل (حزمة `oxymouse` مش متثبتة في هذا الـsandbox)، صفر علاقة بالتغيير
+ده.
+
+**الحالة النهائية لهذه الجولة:** الاختبار الحقيقي
+(`test_infinite_scrolling_target_yields_more_than_the_static_batch`)
+**لسه فاشل عمدًا** — الكشف اتبنى، لكن الحل الفعلي (`scrollTo` → `wheel`/
+`scrollIntoViewIfNeeded`) لسه مؤجَّل لجولة منفصلة، زي ما اتوضّح فوق. مش
+skip ولا disable — الاختبار باقٍ زي ما هو، بيوثّق فجوة حقيقية معروفة
+السبب دلوقتي. الخطوة الجاية: push + تأكيد CI حقيقي إن الـdiagnostics
+نفسها بتتسجّل صح (`requests_during_scroll: 0` متوقّع يظهر فعليًا في
+اللوج)، قبل أي قرار عن جولة الحل.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 

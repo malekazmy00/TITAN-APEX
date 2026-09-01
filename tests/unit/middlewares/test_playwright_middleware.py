@@ -13,6 +13,7 @@ from src.core.exceptions import RenderError
 from src.middlewares.playwright_middleware import (
     PlaywrightMiddleware,
     RenderedPage,
+    ScrollDiagnostics,
     _scroll_to_load_lazy_content,
     render_with_playwright,
 )
@@ -217,10 +218,13 @@ def test_scroll_stops_once_page_height_stops_growing() -> None:
     not the full max_attempts."""
     page = _FakePage(heights=[1000, 1500, 2000, 2000])
 
-    _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=100)
+    diagnostics = _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=100)
 
     assert page.scroll_calls == 3
     assert page.wait_calls == [100, 100, 100]
+    assert diagnostics == ScrollDiagnostics(
+        attempts_used=3, initial_height=1000, final_height=2000
+    )
 
 
 def test_scroll_stops_immediately_on_a_page_with_no_lazy_content() -> None:
@@ -228,9 +232,10 @@ def test_scroll_stops_immediately_on_a_page_with_no_lazy_content() -> None:
     scroll) must not waste extra scroll attempts."""
     page = _FakePage(heights=[500, 500])
 
-    _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=50)
+    diagnostics = _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=50)
 
     assert page.scroll_calls == 1
+    assert diagnostics == ScrollDiagnostics(attempts_used=1, initial_height=500, final_height=500)
 
 
 def test_scroll_stops_at_max_attempts_if_the_page_never_stabilizes() -> None:
@@ -239,6 +244,91 @@ def test_scroll_stops_at_max_attempts_if_the_page_never_stabilizes() -> None:
     ever_growing_heights = [100 * i for i in range(1, 12)]  # far more than max_attempts
     page = _FakePage(heights=ever_growing_heights)
 
-    _scroll_to_load_lazy_content(page, max_attempts=5, pause_ms=10)
+    diagnostics = _scroll_to_load_lazy_content(page, max_attempts=5, pause_ms=10)
 
     assert page.scroll_calls == 5
+    assert diagnostics == ScrollDiagnostics(attempts_used=5, initial_height=100, final_height=600)
+
+
+def test_render_logs_scroll_diagnostics_when_present() -> None:
+    """Happy path (docs/REQUIREMENTS.md section 9 entry 25): a renderer that
+    returns real scroll diagnostics gets them logged as a structured line --
+    the whole point of building this detection mechanism is that a future
+    investigation can read this straight out of the CI log instead of
+    re-deriving it from scratch."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+        def info(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        return RenderedPage(
+            html="<html></html>",
+            status=200,
+            scroll_diagnostics=ScrollDiagnostics(
+                attempts_used=8, initial_height=1200, final_height=1200, requests_during_scroll=0
+            ),
+        )
+
+    middleware = PlaywrightMiddleware(
+        renderer=fake_renderer,
+        thread_runner=_sync_thread_runner,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert len(logged) == 1
+    msg, extra = logged[0]
+    assert msg == "playwright_middleware.scroll_diagnostics"
+    assert extra == {
+        "url": "https://example.com/",
+        "attempts_used": 8,
+        "initial_height": 1200,
+        "final_height": 1200,
+        "requests_during_scroll": 0,
+    }
+
+
+def test_render_does_not_log_scroll_diagnostics_when_absent() -> None:
+    """Failure-adjacent case (backward compatibility): a renderer that never
+    sets scroll_diagnostics (RenderedPage's own default) must not log a
+    misleading diagnostics line -- "we never checked" must stay
+    distinguishable from "we checked and got a real snapshot"."""
+    logged: list[str] = []
+
+    class _FakeLogger:
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+        def info(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append(msg)
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        return RenderedPage(html="<html></html>", status=200)
+
+    middleware = PlaywrightMiddleware(
+        renderer=fake_renderer,
+        thread_runner=_sync_thread_runner,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert logged == []

@@ -6,12 +6,50 @@ rendered this way (set by ``GenericSpider`` when a target's config sets
 untouched. The renderer itself, and the function that runs it off the
 Twisted reactor thread, are both injectable so unit tests never launch a
 real browser or touch the network.
+
+**Scroll diagnostics (docs/REQUIREMENTS.md section 9 entry 25 — a real,
+CI-confirmed failure investigated on request, not guessed):** a real CI
+run (33550885357) found that ``scrapingcourse.com``'s own infinite-scroll
+page (the target ``_scroll_to_load_lazy_content`` below exists for)
+yielded only its static first batch — the item count never grew past
+what the page already has without any JS at all. Investigated for real
+(the page's own served HTML, ``curl``'d directly, plus external sources on
+this exact Playwright pattern — see that entry for citations): the site
+triggers its next batch via an ``IntersectionObserver`` watching a
+``#sentinel`` element, not a ``scroll`` event listener — and
+``window.scrollTo()`` (what ``_scroll_to_load_lazy_content`` below does,
+and has always done, since before this project's own separate,
+independently-discovered ``page.mouse.wheel()`` fix in
+``src/providers/antibot/_scroll.py`` for a *different* target/reason) is
+documented, from multiple independent sources, as unreliable at
+triggering an ``IntersectionObserver`` callback in headless Chromium —
+unlike ``scrollIntoViewIfNeeded()`` or a real wheel/mouse input. That fix
+is a real, separate follow-up (deliberately not applied in this same
+change, matching this project's own "document the sub-gap, don't solve
+everything in one pass" discipline — see entry 25 for the full trail).
+
+What *is* added here, right now, is detection: every call to
+``render_with_playwright`` now returns a :class:`ScrollDiagnostics`
+snapshot (``attempts_used``, the page height before/after scrolling, and
+how many real HTTP requests fired *during* the scroll loop), logged as a
+structured line by :class:`PlaywrightMiddleware`. Without this, "did the
+scroll trigger even fire" was a question only answerable by external
+research after the fact, the same way this very investigation had to be
+done from scratch; with it, a future CI run showing
+``requests_during_scroll: 0`` is direct, in-the-log evidence the trigger
+never fired at all (this failure mode), immediately distinguishable from
+``requests_during_scroll: N, height unchanged`` (a different root cause —
+requests fired but returned nothing new) or a genuinely finite page
+(height simply stops growing on schedule, same as always). Purely
+observational: it changes zero scrolling *behavior* for any existing
+target, only what gets logged about it.
 """
 
 from __future__ import annotations
 
 import functools
 from collections.abc import Callable
+from dataclasses import dataclass
 from logging import Logger
 from typing import Any, NamedTuple
 
@@ -27,11 +65,29 @@ DEFAULT_MAX_SCROLL_ATTEMPTS = 8
 DEFAULT_SCROLL_PAUSE_MS = 700
 
 
+@dataclass(frozen=True, slots=True)
+class ScrollDiagnostics:
+    """Real, observed evidence from one ``_scroll_to_load_lazy_content`` run.
+
+    ``requests_during_scroll`` is ``None`` when nothing was tracking real
+    network requests during the scroll loop (a fake ``page`` in a unit
+    test, or -- in principle -- a future caller that skips the listener
+    for some reason) -- callers must not conflate "we didn't check" with
+    "we checked and it was genuinely zero".
+    """
+
+    attempts_used: int
+    initial_height: int
+    final_height: int
+    requests_during_scroll: int | None = None
+
+
 class RenderedPage(NamedTuple):
     """Result of rendering one URL with a headless browser."""
 
     html: str
     status: int
+    scroll_diagnostics: ScrollDiagnostics | None = None
 
 
 # A precise Protocol would need to describe render_with_playwright's full
@@ -96,12 +152,32 @@ def render_with_playwright(
                 response = page.goto(url, wait_until="networkidle", timeout=timeout_ms)
                 if click_selector:
                     page.click(click_selector, timeout=timeout_ms)
-                _scroll_to_load_lazy_content(page, max_scroll_attempts, scroll_pause_ms)
+
+                request_count = 0
+
+                def _count_request(_request: Any) -> None:
+                    nonlocal request_count
+                    request_count += 1
+
+                page.on("request", _count_request)
+                try:
+                    scroll_result = _scroll_to_load_lazy_content(
+                        page, max_scroll_attempts, scroll_pause_ms
+                    )
+                finally:
+                    page.remove_listener("request", _count_request)
+                diagnostics = ScrollDiagnostics(
+                    attempts_used=scroll_result.attempts_used,
+                    initial_height=scroll_result.initial_height,
+                    final_height=scroll_result.final_height,
+                    requests_during_scroll=request_count,
+                )
+
                 if render_wait_ms:
                     page.wait_for_timeout(render_wait_ms)
                 html = page.content()
                 status = response.status if response is not None else 200
-                return RenderedPage(html=html, status=status)
+                return RenderedPage(html=html, status=status, scroll_diagnostics=diagnostics)
             except PlaywrightError as exc:
                 raise RenderError(f"playwright failed to render {url}") from exc
             finally:
@@ -110,20 +186,37 @@ def render_with_playwright(
             browser.close()
 
 
-def _scroll_to_load_lazy_content(page: Any, max_attempts: int, pause_ms: int) -> None:
+def _scroll_to_load_lazy_content(
+    page: Any, max_attempts: int, pause_ms: int
+) -> ScrollDiagnostics:
     """Scroll to the bottom of ``page`` until its height stops growing.
 
     ``page`` is a ``playwright.sync_api.Page``, typed as ``Any`` here
     since Playwright ships without inline type stubs.
+
+    Returns a :class:`ScrollDiagnostics` snapshot (``requests_during_scroll``
+    left ``None`` here — this function has no network visibility of its
+    own; ``render_with_playwright`` fills that field in from its own
+    request listener, wrapped around this call, since only the caller
+    that owns the real ``page.on("request", ...)`` registration can count
+    them honestly). See this module's own docstring for why this exists.
     """
-    previous_height = page.evaluate("document.body.scrollHeight")
+    initial_height = page.evaluate("document.body.scrollHeight")
+    previous_height = initial_height
+    final_height = initial_height
+    attempts_used = 0
     for _ in range(max_attempts):
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(pause_ms)
         current_height = page.evaluate("document.body.scrollHeight")
+        attempts_used += 1
+        final_height = current_height
         if current_height <= previous_height:
             break
         previous_height = current_height
+    return ScrollDiagnostics(
+        attempts_used=attempts_used, initial_height=initial_height, final_height=final_height
+    )
 
 
 def _default_thread_runner(
@@ -170,6 +263,24 @@ class PlaywrightMiddleware:
         except RenderError:
             self.logger.error("playwright_middleware.render_failed", extra={"url": request.url})
             raise
+        if page.scroll_diagnostics is not None:
+            diagnostics = page.scroll_diagnostics
+            # Real, always-on evidence for the exact failure mode
+            # docs/REQUIREMENTS.md section 9 entry 25 investigated by hand
+            # (requests_during_scroll: 0 despite attempts_used == the
+            # configured max is direct, in-the-log proof the scroll
+            # trigger never fired at all -- no more guessing from a bare
+            # item count after the fact). See this module's own docstring.
+            self.logger.info(
+                "playwright_middleware.scroll_diagnostics",
+                extra={
+                    "url": request.url,
+                    "attempts_used": diagnostics.attempts_used,
+                    "initial_height": diagnostics.initial_height,
+                    "final_height": diagnostics.final_height,
+                    "requests_during_scroll": diagnostics.requests_during_scroll,
+                },
+            )
         return HtmlResponse(
             url=request.url, body=page.html.encode("utf-8"), status=page.status, request=request
         )
