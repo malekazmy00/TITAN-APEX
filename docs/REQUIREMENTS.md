@@ -5386,11 +5386,23 @@ coverage. الـsuite الكامل: 443 unit passed (فشلتين معزولتي
 فوق بوابة الـ85%. `generic_spider.py`'s `DOWNLOADER_MIDDLEWARES`
 dict test (`test_generic_spider.py`) اتحدّث ليعكس الميدلوير الجديد.
 
-**تأكيد CI حقيقي معلّق** (نفس السبب المسجَّل في بند 21 فوق، مش جديد):
-دقائق GitHub Actions لسه مش متاحة وقت الكتابة — الكود اتحقق محليًا
-بالكامل بالانضباط المعتاد، وأي push لهذا الكوميت هيبدأ CI run تلقائي
-(`on: [push, pull_request]`) بمجرد ما الدقائق ترجع، ولازم يتفتح ويتقرأ
-لوجه الفعلي بعدها (نفس القاعدة، مش الاكتفاء بالنجاح المحلي).
+**✅ تأكيد CI حقيقي** — دقائق GitHub Actions رجعت بعد وقت قصير من كتابة
+الفقرة فوق: [run 33537131719](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33537131719)
+(commit `4aadfee`) — `runner_id` حقيقي اتخصص فعليًا (مش صفر زي محاولات
+بند 21 الأربع اللي فشلت فورًا)، الجوب اشتغل الخطوات كلها لآخره،
+**النتيجة الفعلية من اللوج المفتوح مباشرة (مش الاكتفاء بعلامة ✅
+الخضرا): `39 passed, 0 failed` في `tests/integration` (587.51s)**.
+كل الخطوات السابقة (unit tests coverage gate، contract tests،
+test-environment unit tests) لازم تكون عدّت هي كمان — الجوب بالكامل
+مُعلَّم `success`، وأي خطوة فاشلة كانت هتوقف الجوب بـ`failure` قبل
+الوصول للـintegration step خالص.
+
+**ده كمان أول تأكيد CI حقيقي لبند 21** (مش بس بند 22): commit `4aadfee`
+مبني مباشرة فوق `e56a5c9` (إقفال بند 21) من غير أي revert أو تعديل على
+شغل بند 21 — يعني الـ39/39 اللي عدّوا دلوقتي بيغطوا كود بند 21 (Referer/
+warm-up + persistent context + cookie jar) بالظبط زي ما بيغطوا بند 22
+(rate limiter) الجديد. بند 21 كان مقفول محليًا بس لحد دلوقتي — دلوقتي
+مقفول محليًا **و**CI-confirmed مع بعض.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
