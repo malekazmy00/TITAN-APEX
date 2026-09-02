@@ -10,6 +10,7 @@ import pytest
 
 from src.core.exceptions import AntibotError, BrowserCrashedError
 from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.providers.antibot.patchright_provider import (
     PatchrightProvider,
     _classify_solve_exception,
@@ -596,3 +597,108 @@ def test_user_agent_override_defaults_to_none_when_not_given() -> None:
     solution = provider.solve("https://example.com/")
 
     assert solution.status_code == 200
+
+
+# --- unified failure taxonomy (docs/REQUIREMENTS.md section 9 entry 28) ---
+
+
+def test_exhausted_browser_crash_records_a_network_infra_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.patchright_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def always_crashes(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+        user_agent_override: str | None = None,
+    ) -> _RawSolve:
+        raise BrowserCrashedError(f"patchright's browser engine crashed mid-solve for {url}")
+
+    provider = PatchrightProvider(solve_fn=always_crashes, max_browser_crash_attempts=2)
+
+    with pytest.raises(BrowserCrashedError):
+        provider.solve("https://example.com/")
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "https://example.com/"
+    assert record.provider == "patchright"
+    assert record.failure_category is FailureCategory.NETWORK_INFRA_TRANSIENT
+    assert record.source == "patchright_provider.solve_failed"
+    assert record.raw_signal["browser_crash_attempts_exhausted"] == 2
+
+
+def test_non_crash_antibot_error_records_an_antibot_fingerprint_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.patchright_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def failing_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+        user_agent_override: str | None = None,
+    ) -> _RawSolve:
+        raise AntibotError(f"patchright failed to solve {url}: challenge not solved")
+
+    provider = PatchrightProvider(solve_fn=failing_solve)
+
+    with pytest.raises(AntibotError):
+        provider.solve("https://example.com/")
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.provider == "patchright"
+    assert record.failure_category is FailureCategory.ANTIBOT_FINGERPRINT_REJECTION
+    assert record.source == "patchright_provider.solve_failed"
+
+
+def test_successful_solve_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.patchright_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+        user_agent_override: str | None = None,
+    ) -> _RawSolve:
+        return _RawSolve(url=url, html="<html>solved</html>", status=200, cookies={})
+
+    provider = PatchrightProvider(solve_fn=fake_solve)
+    provider.solve("https://example.com/")
+
+    assert recorded == []

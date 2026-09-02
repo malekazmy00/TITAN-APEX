@@ -13,6 +13,7 @@ from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request
 
 from src.alerting import AlertEvent
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.middlewares.rate_limiter import (
     RateLimiterMiddleware,
     RateLimitLevel,
@@ -488,3 +489,83 @@ def test_from_crawler_reads_settings() -> None:
     assert target.window_seconds == 12.0
     assert built.violation_threshold == 2
     assert built.backoff_base_seconds == 5.0
+
+
+# --- unified failure taxonomy (docs/REQUIREMENTS.md section 9 entry 28) ---
+
+
+def test_escalated_block_records_a_failure_registry_entry(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path: the moment a scope actually hard-blocks (crosses
+    violation_threshold), a rate-limited FailureRecord is recorded --
+    always this category, since this is this project's own self-imposed
+    limiter, never a target-side response."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.rate_limiter.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = _single_level_middleware(
+        clock, max_requests=1, violation_threshold=2, backoff_base_seconds=10.0
+    )
+    middleware.process_request(_request(), spider=object())  # clean, populates the window
+    middleware.process_request(_request(), spider=object())  # violation 1/2, soft
+    with pytest.raises(IgnoreRequest, match="blocked for"):
+        middleware.process_request(_request(), spider=object())  # violation 2/2, hard
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "https://example.com/"
+    assert record.failure_category is FailureCategory.RATE_LIMITED
+    assert record.source == "rate_limiter.escalated"
+    assert record.raw_signal["level"] == "target"
+    assert record.raw_signal["violation_count"] == 2
+
+
+def test_soft_violation_records_nothing(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failure-adjacent case: a violation still under violation_threshold
+    (a warning, not a block) must not be recorded -- only an actual
+    dropped/blocked request counts as a real failure here."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.rate_limiter.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = _single_level_middleware(
+        clock, max_requests=1, violation_threshold=3, backoff_base_seconds=10.0
+    )
+    middleware.process_request(_request(), spider=object())
+    middleware.process_request(_request(), spider=object())  # violation 1/3, soft
+
+    assert recorded == []
+
+
+def test_blocked_request_in_cooldown_records_a_failure_registry_entry(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Happy path 2: a request rejected because a scope is already in
+    its own cooldown (not the escalation moment itself) is a separate,
+    real rate-limited event too."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.rate_limiter.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = _single_level_middleware(
+        clock, max_requests=1, violation_threshold=2, backoff_base_seconds=10.0
+    )
+    middleware.process_request(_request(), spider=object())
+    middleware.process_request(_request(), spider=object())
+    with pytest.raises(IgnoreRequest, match="blocked for"):
+        middleware.process_request(_request(), spider=object())
+    recorded.clear()  # only interested in the *next* one, the "still in cooldown" case
+
+    with pytest.raises(IgnoreRequest, match="still in cooldown"):
+        middleware.process_request(_request(), spider=object())
+
+    assert len(recorded) == 1
+    assert recorded[0].source == "rate_limiter.blocked"
+    assert recorded[0].failure_category is FailureCategory.RATE_LIMITED

@@ -103,6 +103,8 @@ from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request
 
 from src.alerting import AlertDispatcher, AlertEvent, dispatcher_from_settings
+from src.diagnostics.failure_registry import record_failure
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.logging_config import get_logger
 
 DEFAULT_TARGET_MAX_REQUESTS = 30
@@ -424,6 +426,23 @@ class RateLimiterMiddleware:
                         "remaining_seconds": remaining,
                     },
                 )
+                # Unified failure taxonomy (docs/REQUIREMENTS.md section
+                # 9 entry 28): always rate-limited by definition -- this
+                # branch exists only because a scope is already in its
+                # own cooldown, never a target-side response at all.
+                record_failure(
+                    FailureRecord(
+                        timestamp=datetime.now(tz=UTC),
+                        target=request.url,
+                        failure_category=FailureCategory.RATE_LIMITED,
+                        raw_signal={
+                            "level": level.name,
+                            "key": key,
+                            "remaining_seconds": remaining,
+                        },
+                        source="rate_limiter.blocked",
+                    )
+                )
                 raise IgnoreRequest(
                     f"rate_limiter: {level.name}={key} still in cooldown "
                     f"({remaining:.1f}s remaining)"
@@ -509,6 +528,21 @@ class RateLimiterMiddleware:
                     consecutive_failures=scope.violation_count,
                     cooldown_seconds=delay,
                     occurred_at=datetime.now(tz=UTC),
+                )
+            )
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=request.url,
+                    failure_category=FailureCategory.RATE_LIMITED,
+                    raw_signal={
+                        "level": level.name,
+                        "key": key,
+                        "reason": reason,
+                        "violation_count": scope.violation_count,
+                        "cooldown_seconds": delay,
+                    },
+                    source="rate_limiter.escalated",
                 )
             )
             if hard_block is None:

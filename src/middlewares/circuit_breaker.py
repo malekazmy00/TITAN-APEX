@@ -23,6 +23,8 @@ from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
 
 from src.alerting import AlertDispatcher, AlertEvent, dispatcher_from_settings
+from src.diagnostics.failure_registry import record_failure
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.logging_config import get_logger
 
 FAILURE_STATUSES = frozenset({500, 502, 503, 504})
@@ -153,6 +155,30 @@ class CircuitBreakerMiddleware:
                     consecutive_failures=circuit.consecutive_failures,
                     cooldown_seconds=self.cooldown_seconds,
                     occurred_at=datetime.now(tz=UTC),
+                )
+            )
+            # Unified failure taxonomy (docs/REQUIREMENTS.md section 9
+            # entry 28) -- the "open" event specifically, not every
+            # individual contributing failure below threshold: this is
+            # the moment the user's own named diagnostic ("Circuit
+            # Breaker open/close events") actually fires, and
+            # raw_signal already carries consecutive_failures for
+            # anyone who needs the run-up. A circuit only ever opens on
+            # a real HTTP 5xx or a request-level exception (never a
+            # target's own anti-bot fingerprint check, which this
+            # middleware has no visibility into at all) -- always
+            # network-infra-transient, never a guess per call.
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=domain,
+                    failure_category=FailureCategory.NETWORK_INFRA_TRANSIENT,
+                    raw_signal={
+                        "reason": reason,
+                        "consecutive_failures": circuit.consecutive_failures,
+                        "cooldown_seconds": self.cooldown_seconds,
+                    },
+                    source="circuit_breaker.opened",
                 )
             )
 

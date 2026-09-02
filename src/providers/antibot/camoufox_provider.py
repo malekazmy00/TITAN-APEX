@@ -72,6 +72,8 @@ from src.core.interfaces.antibot_provider import (
     LoginFlow,
     Solution,
 )
+from src.diagnostics.failure_registry import record_failure
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord, ResolutionStatus
 from src.logging_config import get_logger
 from src.providers.antibot._live_dom import (
     collect_live_dom_items_progressively,
@@ -1557,6 +1559,35 @@ def _default_camoufox_solve(  # pragma: no cover
                 "browser_crashed": browser_crashed,
             },
         )
+        if apparmor_denials_during_solve:
+            # Unified failure taxonomy (docs/REQUIREMENTS.md section 9
+            # entry 28) -- the user's own named diagnostic ("AppArmor
+            # denial counts"), recorded specifically (not just via the
+            # generic solve_failed/BrowserCrashedError record
+            # CamoufoxProvider.solve() itself already produces once this
+            # exception propagates) whenever a real, nonzero denial
+            # delta correlates with this crash -- the extra evidence a
+            # plain "it crashed" record can't carry on its own.
+            # KNOWN_LIMITATION, not unresolved: this project's own
+            # long-standing, documented posture on this exact sandbox
+            # constraint (register it, leave it for a real deploy
+            # environment/VPS to confirm -- never "fixed" inside a
+            # sandbox that structurally can't grant the denied
+            # capability at all).
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=url,
+                    provider="camoufox",
+                    failure_category=FailureCategory.NETWORK_INFRA_TRANSIENT,
+                    raw_signal={
+                        "apparmor_denials_during_solve": apparmor_denials_during_solve,
+                        "browser_crashed": browser_crashed,
+                    },
+                    resolution_status=ResolutionStatus.KNOWN_LIMITATION,
+                    source="camoufox_provider.solve_crashed",
+                )
+            )
         # docs/REQUIREMENTS.md section 9 entry 17: BrowserCrashedError
         # only when page.on("crash")/browser.on("disconnected") actually
         # fired -- a real, classified engine crash, not merely "some
@@ -1647,14 +1678,47 @@ class CamoufoxProvider(AntibotProvider):
                             "browser_crash_attempts_exhausted": attempt,
                         },
                     )
+                    # Unified failure taxonomy (docs/REQUIREMENTS.md
+                    # section 9 entry 28): a real Firefox engine crash
+                    # (entry 17's own BrowserCrashedError), not a
+                    # target's own defense -- network-infra-transient,
+                    # only once retries are actually exhausted (a
+                    # crash that recovered on retry never reaches
+                    # here).
+                    record_failure(
+                        FailureRecord(
+                            timestamp=datetime.now(tz=UTC),
+                            target=url,
+                            provider="camoufox",
+                            failure_category=FailureCategory.NETWORK_INFRA_TRANSIENT,
+                            raw_signal={
+                                "browser_crash_attempts_exhausted": attempt,
+                                "reason": str(exc),
+                            },
+                            source="camoufox_provider.solve_failed",
+                        )
+                    )
                     raise
                 self.logger.warning(
                     "camoufox_provider.browser_crash_retry",
                     extra={"url": url, "attempt": attempt, "reason": str(exc)},
                 )
                 continue
-            except AntibotError:
+            except AntibotError as exc:
                 self.logger.error("camoufox_provider.solve_failed", extra={"url": url})
+                # A genuine challenge-not-solved failure (not a crash,
+                # already handled separately above) -- the target's own
+                # defense held.
+                record_failure(
+                    FailureRecord(
+                        timestamp=datetime.now(tz=UTC),
+                        target=url,
+                        provider="camoufox",
+                        failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
+                        raw_signal={"reason": str(exc)},
+                        source="camoufox_provider.solve_failed",
+                    )
+                )
                 raise
             break
 

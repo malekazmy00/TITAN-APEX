@@ -10,6 +10,7 @@ import pytest
 from scrapy.http import HtmlResponse, Request
 
 from src.core.exceptions import RenderError
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord, ResolutionStatus
 from src.middlewares.playwright_middleware import (
     PlaywrightMiddleware,
     RenderedPage,
@@ -365,3 +366,127 @@ def test_render_does_not_log_scroll_diagnostics_when_absent() -> None:
     middleware.process_request(request, spider=object())
 
     assert logged == []
+
+
+# --- unified failure taxonomy (docs/REQUIREMENTS.md section 9 entry 28) ---
+
+
+def test_render_failed_records_a_network_infra_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.playwright_middleware.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def failing_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        raise RenderError("playwright failed to launch chromium")
+
+    middleware = PlaywrightMiddleware(renderer=failing_renderer, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    with pytest.raises(RenderError):
+        middleware.process_request(request, spider=object())
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "https://example.com/"
+    assert record.provider == "playwright"
+    assert record.failure_category is FailureCategory.NETWORK_INFRA_TRANSIENT
+    assert record.source == "playwright_middleware.render_failed"
+
+
+def test_zero_requests_during_scroll_records_a_timing_race_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/REQUIREMENTS.md section 9 entries 25/27: the exact signal
+    that investigation was built around -- requests_during_scroll == 0
+    despite real scroll attempts. resolution_status is RESOLVED since a
+    real, CI-confirmed fix exists for this class (entry 27), not because
+    this specific occurrence is assumed fine."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.playwright_middleware.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        return RenderedPage(
+            html="<html></html>",
+            status=200,
+            scroll_diagnostics=ScrollDiagnostics(
+                attempts_used=8, initial_height=1200, final_height=1200, requests_during_scroll=0
+            ),
+        )
+
+    middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "https://example.com/"
+    assert record.provider == "playwright"
+    assert record.failure_category is FailureCategory.TIMING_RACE
+    assert record.resolution_status is ResolutionStatus.RESOLVED
+    assert record.source == "playwright_middleware.scroll_diagnostics"
+    assert record.raw_signal["requests_during_scroll"] == 0
+
+
+def test_nonzero_requests_during_scroll_records_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path: a scroll that genuinely triggered real requests is not
+    a failure at all -- must never be recorded."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.playwright_middleware.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        return RenderedPage(
+            html="<html></html>",
+            status=200,
+            scroll_diagnostics=ScrollDiagnostics(
+                attempts_used=3, initial_height=1000, final_height=3000, requests_during_scroll=5
+            ),
+        )
+
+    middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert recorded == []
+
+
+def test_no_scroll_diagnostics_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Backward-compatible default: a RenderedPage with no
+    scroll_diagnostics at all (every existing fake renderer before this
+    entry) must never trigger the taxonomy check."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.playwright_middleware.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        return RenderedPage(html="<html></html>", status=200)
+
+    middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert recorded == []

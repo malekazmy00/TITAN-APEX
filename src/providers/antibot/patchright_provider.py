@@ -51,6 +51,8 @@ from src.core.interfaces.antibot_provider import (
     LoginFlow,
     Solution,
 )
+from src.diagnostics.failure_registry import record_failure
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.logging_config import get_logger
 from src.providers.antibot._live_dom import (
     collect_live_dom_items_progressively,
@@ -867,14 +869,42 @@ class PatchrightProvider(AntibotProvider):
                             "browser_crash_attempts_exhausted": attempt,
                         },
                     )
+                    # Unified failure taxonomy (docs/REQUIREMENTS.md
+                    # section 9 entry 28) -- same reasoning as
+                    # camoufox_provider.py's identical wiring: a real
+                    # browser engine crash, only once retries are
+                    # exhausted, is network-infra-transient.
+                    record_failure(
+                        FailureRecord(
+                            timestamp=datetime.now(tz=UTC),
+                            target=url,
+                            provider="patchright",
+                            failure_category=FailureCategory.NETWORK_INFRA_TRANSIENT,
+                            raw_signal={
+                                "browser_crash_attempts_exhausted": attempt,
+                                "reason": str(exc),
+                            },
+                            source="patchright_provider.solve_failed",
+                        )
+                    )
                     raise
                 self.logger.warning(
                     "patchright_provider.browser_crash_retry",
                     extra={"url": url, "attempt": attempt, "reason": str(exc)},
                 )
                 continue
-            except AntibotError:
+            except AntibotError as exc:
                 self.logger.error("patchright_provider.solve_failed", extra={"url": url})
+                record_failure(
+                    FailureRecord(
+                        timestamp=datetime.now(tz=UTC),
+                        target=url,
+                        provider="patchright",
+                        failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
+                        raw_signal={"reason": str(exc)},
+                        source="patchright_provider.solve_failed",
+                    )
+                )
                 raise
             break
 

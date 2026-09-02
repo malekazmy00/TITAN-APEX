@@ -28,6 +28,8 @@ from src.core.interfaces.antibot_provider import (
     LoginFlow,
     Solution,
 )
+from src.diagnostics.failure_registry import record_failure
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.logging_config import get_logger
 
 DEFAULT_TIMEOUT_MS = 60_000
@@ -197,12 +199,39 @@ class ByparrProvider(AntibotProvider):
             self.logger.error(
                 "byparr_provider.request_failed", extra={"url": url, "reason": str(exc)}
             )
+            # Unified failure taxonomy (docs/REQUIREMENTS.md section 9
+            # entry 28): a transport-level connection error, not
+            # anything byparr's own solving logic ever got to see --
+            # always network-infra-transient.
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=url,
+                    provider="byparr",
+                    failure_category=FailureCategory.NETWORK_INFRA_TRANSIENT,
+                    raw_signal={"reason": str(exc)},
+                    source="byparr_provider.request_failed",
+                )
+            )
             raise AntibotError(f"byparr request failed for {url}: {exc}") from exc
 
         try:
             data = json.loads(raw_response)
         except json.JSONDecodeError as exc:
             self.logger.error("byparr_provider.invalid_json", extra={"url": url})
+            # A malformed response body from byparr itself -- a real
+            # protocol-level oddity, not the target's own defense and
+            # not this project's own environment either.
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=url,
+                    provider="byparr",
+                    failure_category=FailureCategory.UNKNOWN,
+                    raw_signal={"reason": "invalid_json"},
+                    source="byparr_provider.invalid_json",
+                )
+            )
             raise AntibotError(f"byparr returned invalid JSON for {url}") from exc
 
         if not isinstance(data, dict) or data.get("status") != "ok":
@@ -211,6 +240,19 @@ class ByparrProvider(AntibotProvider):
             # raises KeyError at log time, so this uses "byparr_message" instead.
             self.logger.error(
                 "byparr_provider.solve_failed", extra={"url": url, "byparr_message": str(reason)}
+            )
+            # Byparr genuinely attempted to solve and reported failure
+            # (e.g. "challenge not solvable") -- the target's own
+            # defense correctly held, not a bug on either side.
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=url,
+                    provider="byparr",
+                    failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
+                    raw_signal={"byparr_message": str(reason)},
+                    source="byparr_provider.solve_failed",
+                )
             )
             raise AntibotError(f"byparr failed to solve {url}: {reason}")
 
@@ -228,4 +270,17 @@ class ByparrProvider(AntibotProvider):
             )
         except (KeyError, TypeError) as exc:
             self.logger.error("byparr_provider.malformed_solution", extra={"url": url})
+            # byparr reported success but its own response is missing
+            # fields this provider depends on -- a protocol-shape
+            # surprise, not a target defense or environment issue.
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=url,
+                    provider="byparr",
+                    failure_category=FailureCategory.UNKNOWN,
+                    raw_signal={"reason": "malformed_solution"},
+                    source="byparr_provider.malformed_solution",
+                )
+            )
             raise AntibotError(f"byparr response for {url} is missing expected fields") from exc

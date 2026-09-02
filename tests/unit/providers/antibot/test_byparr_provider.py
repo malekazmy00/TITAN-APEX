@@ -14,6 +14,7 @@ import pytest
 
 from src.core.exceptions import AntibotError
 from src.core.interfaces.antibot_provider import LiveDomSelectors, LoginFlow
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.providers.antibot.byparr_provider import ByparrProvider
 
 VALID_RESPONSE = json.dumps(
@@ -378,3 +379,115 @@ def test_base_url_trailing_slash_is_normalized() -> None:
     provider.solve("https://example.com/")
 
     assert seen_urls == ["http://localhost:8191/v1"]
+
+
+# --- unified failure taxonomy (docs/REQUIREMENTS.md section 9 entry 28) ---
+
+
+def test_request_failed_records_a_network_infra_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.byparr_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def failing_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        raise urllib.error.URLError("connection refused")
+
+    provider = ByparrProvider(base_url="http://localhost:8191", http_post=failing_http_post)
+
+    with pytest.raises(AntibotError):
+        provider.solve("https://example.com/")
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "https://example.com/"
+    assert record.provider == "byparr"
+    assert record.failure_category is FailureCategory.NETWORK_INFRA_TRANSIENT
+    assert record.source == "byparr_provider.request_failed"
+
+
+def test_invalid_json_records_an_unknown_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.byparr_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def bad_json_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return "{not valid json"
+
+    provider = ByparrProvider(base_url="http://localhost:8191", http_post=bad_json_http_post)
+
+    with pytest.raises(AntibotError):
+        provider.solve("https://example.com/")
+
+    assert len(recorded) == 1
+    assert recorded[0].failure_category is FailureCategory.UNKNOWN
+    assert recorded[0].source == "byparr_provider.invalid_json"
+
+
+def test_solve_failed_records_an_antibot_fingerprint_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one category with real semantic weight: byparr itself reported
+    it could not solve the challenge -- a real, working target defense,
+    not a bug on either side."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.byparr_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def error_status_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return json.dumps({"status": "error", "message": "challenge not solvable"})
+
+    provider = ByparrProvider(base_url="http://localhost:8191", http_post=error_status_http_post)
+
+    with pytest.raises(AntibotError):
+        provider.solve("https://example.com/")
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.failure_category is FailureCategory.ANTIBOT_FINGERPRINT_REJECTION
+    assert record.source == "byparr_provider.solve_failed"
+    assert record.raw_signal["byparr_message"] == "challenge not solvable"
+
+
+def test_malformed_solution_records_an_unknown_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.byparr_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def malformed_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return json.dumps({"status": "ok", "solution": {"status": 200}})  # no "response" key
+
+    provider = ByparrProvider(base_url="http://localhost:8191", http_post=malformed_http_post)
+
+    with pytest.raises(AntibotError):
+        provider.solve("https://example.com/")
+
+    assert len(recorded) == 1
+    assert recorded[0].failure_category is FailureCategory.UNKNOWN
+    assert recorded[0].source == "byparr_provider.malformed_solution"
+
+
+def test_successful_solve_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: a clean solve must never write a failure record."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.providers.antibot.byparr_provider.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(base_url="http://localhost:8191", http_post=fake_http_post)
+    provider.solve("https://example.com/")
+
+    assert recorded == []

@@ -73,6 +73,7 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from logging import Logger
 from typing import Any, NamedTuple
 
@@ -81,6 +82,8 @@ from twisted.internet.defer import Deferred
 from twisted.internet.threads import deferToThread
 
 from src.core.exceptions import RenderError
+from src.diagnostics.failure_registry import record_failure
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord, ResolutionStatus
 from src.logging_config import get_logger
 
 DEFAULT_TIMEOUT_MS = 30_000
@@ -304,8 +307,23 @@ class PlaywrightMiddleware:
                 render_wait_ms=request.meta.get("render_wait_ms"),
                 click_selector=request.meta.get("click_selector"),
             )
-        except RenderError:
+        except RenderError as exc:
             self.logger.error("playwright_middleware.render_failed", extra={"url": request.url})
+            # Unified failure taxonomy (docs/REQUIREMENTS.md section 9
+            # entry 28): render_with_playwright wraps Playwright's own
+            # launch/navigation errors here -- an environment/browser
+            # failure, never a target's own defense (PlaywrightMiddleware
+            # has no anti-bot-solving logic at all).
+            record_failure(
+                FailureRecord(
+                    timestamp=datetime.now(tz=UTC),
+                    target=request.url,
+                    provider="playwright",
+                    failure_category=FailureCategory.NETWORK_INFRA_TRANSIENT,
+                    raw_signal={"reason": str(exc)},
+                    source="playwright_middleware.render_failed",
+                )
+            )
             raise
         if page.scroll_diagnostics is not None:
             diagnostics = page.scroll_diagnostics
@@ -325,6 +343,36 @@ class PlaywrightMiddleware:
                     "requests_during_scroll": diagnostics.requests_during_scroll,
                 },
             )
+            if diagnostics.requests_during_scroll == 0:
+                # Unified failure taxonomy (docs/REQUIREMENTS.md section
+                # 9 entry 28): the exact signal entry 25 investigated
+                # and entry 27's mouse.wheel() fix targeted -- the
+                # scroll trigger genuinely never fired a single request.
+                # A page with no lazy-load content at all also reads
+                # this way (harmless false positive on this signal
+                # alone, same as the diagnostic itself already
+                # documents) -- resolution_status is RESOLVED (not
+                # unresolved) because a real, CI-confirmed fix exists
+                # for the class of failure this represents (entry 27,
+                # confirmed 4/4 independent CI runs); an individual
+                # occurrence still gets recorded since the underlying
+                # mechanism remains a real, if rare, race.
+                record_failure(
+                    FailureRecord(
+                        timestamp=datetime.now(tz=UTC),
+                        target=request.url,
+                        provider="playwright",
+                        failure_category=FailureCategory.TIMING_RACE,
+                        raw_signal={
+                            "attempts_used": diagnostics.attempts_used,
+                            "initial_height": diagnostics.initial_height,
+                            "final_height": diagnostics.final_height,
+                            "requests_during_scroll": diagnostics.requests_during_scroll,
+                        },
+                        resolution_status=ResolutionStatus.RESOLVED,
+                        source="playwright_middleware.scroll_diagnostics",
+                    )
+                )
         return HtmlResponse(
             url=request.url, body=page.html.encode("utf-8"), status=page.status, request=request
         )

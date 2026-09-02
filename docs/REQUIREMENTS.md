@@ -6180,6 +6180,162 @@ runs بالتوازي"، مش سلسلة إعادة محاولات لنفس run_
 حاجة الاختبار الحي ضد الموقع الحقيقي نفسه اللي اكتشف الفجوة أصلًا (entry
 24). البند ده مقفول رسميًا، صفر جزء معلّق.
 
+### 28. نظام تشخيص وقرار موحّد — الطبقة 1: Unified Failure Taxonomy (طلب المستخدم صراحة، أول 3 طبقات مخطَّطة)
+
+**السياق:** المستخدم طلب بناء نظام تشخيص وقرار موحّد على 3 طبقات —
+الطبقة 1 (Taxonomy موحّد، البند ده)، الطبقة 2 (Protection Classifier،
+مخطَّط بالفعل كـPhase 3 بند 3)، الطبقة 3 (Strategy Engine). المطلوب من
+الطبقة 1 تحديدًا: مراجعة كل نقاط التشخيص المتناثرة، تصميم schema موحّد،
+بناء `failure_registry.py` (كتابة JSONL دائم، إضافة مش استبدال)، وتصنيف
+كل الفشلات الموثّقة تاريخيًا (entries 1-27) حسب الـtaxonomy الجديدة.
+
+#### 1. مراجعة نقاط التشخيص المتناثرة الموجودة فعليًا
+
+فحص مباشر للكود (مش افتراض) لكل نقطة ذكرها المستخدم:
+
+- **`scroll_diagnostics`** (`playwright_middleware.py`) — لسه نشط،
+  `attempts_used`/`initial_height`/`final_height`/`requests_during_scroll`
+  (section 9 entry 25/27).
+- **`network_idle_timeouts`** — **اكتشاف حقيقي: الاسم ده تاريخي، مش
+  موجود في الكود الحالي خالص.** كان diagnostic حقيقي وقت جزء مبكر من
+  تحقيق entry 17، لكن اتستبدل لاحقًا بآليات أدق (`apparmor_denials_during_solve`،
+  load-event timeline، `poll_until_idle`/`RequestCounter` في
+  `_scroll.py` — لسه موجودين كـutilities مستقلة، مش متوصّلين بـ
+  `scroll_and_collect` نفسها دلوقتي حسب entry 17's own "Fifth revision"). اتوثّق هنا صراحة بدل ما نتظاهر إنه لسه موجود.
+- **AppArmor denial counts** (`_tracing.py`'s `count_apparmor_camoufox_denials`/
+  `apparmor_denial_delta`) — لسه نشط، بيتحسب في `camoufox_provider.py`
+  (Camoufox-specific، مش Patchright).
+- **Rejection reasons** (Byparr/Patchright/Anubis) — موزّعة على
+  `byparr_provider.py` (4 نقاط: `request_failed`/`invalid_json`/
+  `solve_failed`/`malformed_solution`)، `camoufox_provider.py`/
+  `patchright_provider.py` (`solve_failed`، سواء crash أو challenge
+  مش محلول).
+- **Circuit Breaker open/close events** (`circuit_breaker.py`) — لسه
+  نشط، `circuit_breaker.opened`/`circuit_breaker.closed`.
+
+**إضافي، اتلقى أثناء المراجعة (مش في القايمة الأصلية):** `rate_limiter.py`'s
+`rate_limiter.blocked`/`rate_limiter.escalated` (entry 22) — نفس فئة
+"فشل حقيقي" بالظبط (طلب اتمنع فعليًا)، اتوصّل بنفس الطريقة.
+
+#### 2. الـSchema الموحّد — `src/diagnostics/failure_taxonomy.py`
+
+`FailureCategory` (الـ8 فئات بالحرف زي ما المستخدم حددها) +
+`ResolutionStatus` (`unresolved`/`known-limitation`/`resolved`) +
+`FailureRecord` (`timestamp`, `target`, `provider`, `failure_category`,
+`raw_signal`, `resolution_status`, **+ `source`**).
+
+**إضافة واحدة صريحة على الـschema المطلوب، مبرَّرة مش scope creep:**
+حقل `source` (مين المكوّن/الحدث اللي سجّل الفشل، أو رقم entry في حالة
+الـbackfill التاريخي) — الـschema الأصلي مفهوش حقل provenance، لكن
+بدونه مفيش طريقة تتأكد/تتحقق من أي record لاحقًا (بالظبط نفس مبدأ
+"مصدر كل رقم" اللي المشروع ده ماشي عليه من أول يوم).
+
+#### 3. `src/diagnostics/failure_registry.py` — الكاتب/القارئ
+
+`record_failure(record, path=None)` — بيكتب سطر JSONL واحد. **قرار
+تصميم مهم، موثّق بالتفصيل في الملف نفسه:** الكتابة الحقيقية بتتفعّل بس
+لو `path` صريح أو `TITAN_FAILURE_LOG_PATH` env var متظبط — مفيش default
+حقيقي دايمًا شغّال زي `cookie_jar_manager.py`'s `var/cookie_jar.json`،
+لأن أماكن الاتصال هنا (circuit breaker، rate limiter، الـ3 providers)
+**متختبَرة مباشرة** بـfakes بتفعّل مسارات الفشل عمدًا — default دايمًا
+شغّال كان هيخلي كل اختبار unit قديم بيكتب سطور وهمية في ملف المفروض
+يبقى تاريخ حقيقي. `TITAN_FAILURE_LOG_PATH` بقى مظبوط في
+`.github/workflows/ci.yml`'s "Integration tests" step بس (نفس مبدأ
+`TITAN_TRACE_DIR`/`TITAN_LOAD_EVENT_LOG_DIR` الموجودين بالفعل) —
+بيتصدّر كـartifact زي التريسز، مش بيتكتب في الـrepo تلقائيًا (نفس
+انضباط المشروع: CI بتثبت، سيشن بيقرا الدليل الحقيقي بعدين ويعمل commit
+بقرار واعي).
+
+`iter_failures(path)` — قراءة، لأي استهلاك مستقبلي (تقرير، الطبقة 2/3).
+
+**التحقق:** 15 اختبار unit جديد (`test_failure_taxonomy.py` +
+`test_failure_registry.py`) — 100% coverage على الملفين.
+
+#### 4. التوصيل — إضافة، مش استبدال (بالظبط زي ما المستخدم طلب)
+
+كل نقطة تشخيص فشل حقيقية اتوصّلت بـ`record_failure(...)` **بجانب**
+الـlogging الموجود، مش بدل منه:
+
+| المصدر | الفئة | ملاحظة |
+|---|---|---|
+| `circuit_breaker.opened` | network-infra-transient | لحظة الفتح بس، مش كل فشل مساهم تحت الحد |
+| `rate_limiter.blocked`/`escalated` | rate-limited | إضافي، طلب المستخدم مانصّش عليه صراحة لكن نفس الفئة بالظبط |
+| `byparr_provider`: `request_failed` | network-infra-transient | خطأ اتصال حقيقي |
+| `byparr_provider`: `invalid_json`/`malformed_solution` | unknown | مفاجأة بروتوكول، مش دفاع الموقع ولا بيئة |
+| `byparr_provider`: `solve_failed` | antibot-fingerprint-rejection | الموقع رفض فعليًا |
+| `camoufox_provider`/`patchright_provider`: crash استنفد كل المحاولات | network-infra-transient | كراش محرك حقيقي، مش دفاع الهدف |
+| `camoufox_provider`/`patchright_provider`: `AntibotError` عادي | antibot-fingerprint-rejection | تحدي مش محلول |
+| `camoufox_provider`: AppArmor denial > 0 أثناء كراش | network-infra-transient (known-limitation) | دليل إضافي مكمّل، مش تكرار |
+| `playwright_middleware.render_failed` | network-infra-transient | فشل launch/navigation |
+| `playwright_middleware.scroll_diagnostics`: `requests_during_scroll == 0` | timing-race (resolved) | نفس الدليل اللي entry 25/27 بنى عليه الحل |
+
+**21 اختبار unit جديد** للتوصيل ده (6 ملفات: `test_circuit_breaker.py`
++2، `test_rate_limiter.py` +3، `test_byparr_provider.py` +5،
+`test_camoufox_provider.py` +4، `test_patchright_provider.py` +3،
+`test_playwright_middleware.py` +4) — كل نقطة اتفحصت بحالة نجاح (مفيش
+تسجيل) وحالة فشل (تسجيل صح بالفئة الصح)، بـ`monkeypatch` على
+`record_failure` نفسها (مفيش أي real file I/O في أي unit test).
+
+**قرار متعمَّد: `byparr_middleware.py`'s `solve_failed_fallback` نفسه
+مش متوصَّل.** ده مجرد catch-all عام بيلف الاستثناء بعد ما كل provider
+سجّل بالفعل التصنيف الأدق بتاعه — توصيله كمان كان هيبقى تسجيل مزدوج
+لنفس الحدث الحقيقي، مش إضافة معلومة.
+
+#### 5. التصنيف التاريخي — 25 record حقيقي، مصادر موثّقة
+
+`test-environment/failure_log.jsonl` (ملف جديد، متتبَّع في git، مش
+gitignored زي `var/cookie_jar.json` — القصد إنه سجل تاريخي دائم
+موثَّق، مش حالة browser عابرة). **25 حالة فشل حقيقية موثّقة بالفعل في
+entries 1-27** (مش كل جملة في الملف — عيّنة تمثيلية من أهم الحالات
+الموثّقة بدليل حقيقي (run ID أو تاريخ)، مش كل سطر نص — التوضيح ده صريح
+عشان "verify don't assume" ينطبق هنا كمان: مفيش ادّعاء بتغطية 100%
+exhaustive):
+
+| الفئة | العدد |
+|---|---|
+| network-infra-transient | 8 |
+| structural-selector-mismatch | 7 |
+| timing-race | 6 |
+| antibot-fingerprint-rejection | 2 |
+| session-expired | 1 |
+| unknown | 1 |
+| rate-limited | **0** |
+| external-site-flake | **0** |
+
+**اكتشاف حقيقي مهم من المراجعة نفسها — فئة تاسعة محتملة مش موجودة في
+القايمة الأصلية:** حالة `scrapethissite.com`'s `?gotcha=login`/`csrf`
+(entry 24) — 400 "Needs login" لأي طلب مش مصادق عليه، بس السبب مش
+كشف bot fingerprint خالص، هو **بوابة access control/authentication
+حقيقية** (حساب مدفوع مطلوب) — أي إنسان حقيقي غير مسجّل دخول هيرفضله
+نفس الرد. مفيش فئة من الـ8 بتغطي ده بدقة (`antibot-fingerprint-rejection`
+عن كشف automation تحديدًا، مش عن غياب مصادقة). اتصنّفت `unknown` مؤقتًا
+مع ملاحظة صريحة في `raw_signal`، ومقترحة هنا كفئة تاسعة محتملة
+(`auth-required`/`access-control-gate`) لو الـtaxonomy اتراجعت لاحقًا —
+قرار الإضافة الفعلية متروك للطبقة 2/3، مش متخذ من غير طلب.
+
+**اكتشافين سلبيين صادقين، مش مخفيين:**
+- **صفر حالة `rate-limited` تاريخية حقيقية** — منطقي: `RateLimiterMiddleware`
+  (entry 22) لسه حديث، ومصمَّم أصلًا إنه ميعطّلش حركة طبيعية (25 طلب
+  ضد `/products` نجحوا تحته زي ما entry 24 وثّق) — صفر حالة مش فجوة في
+  المراجعة، دليل إن التصميم شغّال.
+- **صفر حالة `external-site-flake` تاريخية حقيقية.** كل "فشل" ظاهره
+  عشوائي اتحقّق فيه المشروع طول تاريخه (زي entry 25's own scroll
+  flakiness) طلع له سبب جذري حقيقي قابل للتصنيف (هنا: `timing-race`) —
+  مطابق تمامًا لمبدأ المشروع الراسخ "flake مش سبب جذري، كمّل تحقيق" —
+  مفيش حالة واحدة اتقفلت فعليًا كـ"عشوائية بلا سبب معروف".
+
+**التحقق:** الـ25 record اتبنوا عبر `record_failure()` نفسها (مش JSON
+يدوي)، اتأكّد round-trip كامل عبر `iter_failures()` — صفر خطأ تحقّق.
+
+#### الحالة والخطوة الجاية
+
+الطبقة 1 جاهزة، متحقق منها محليًا بالكامل (ruff/mypy --strict/pytest —
+546 نجح، 96%+ coverage، نفس الفشلين الغير مرتبطين المعروفين من قبل
+`oxymouse`). لسه محتاجة push + تأكيد CI حقيقي (خصوصًا `TITAN_FAILURE_LOG_PATH`
+الجديد في workflow، وإن التوصيلات الجديدة مبتكسرش أي integration test
+موجود). الطبقة 2 (Protection Classifier) والطبقة 3 (Strategy Engine)
+بانتظار تأكيد الطبقة دي الأول، زي ما المستخدم طلب صراحة.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

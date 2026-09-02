@@ -11,6 +11,7 @@ from scrapy.exceptions import IgnoreRequest
 from scrapy.http import Request, Response
 
 from src.alerting import AlertEvent
+from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.middlewares.circuit_breaker import CircuitBreakerMiddleware
 
 
@@ -239,3 +240,54 @@ def test_successful_responses_never_dispatch_an_alert(clock: _FakeClock) -> None
         middleware.process_response(req, _response(url, 200), spider=object())
 
     assert sent_events == []
+
+
+def test_opening_the_circuit_records_a_failure_registry_entry(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 28 (unified failure
+    taxonomy): the "open" event -- the user's own named diagnostic
+    ("Circuit Breaker open/close events") -- must be classified and
+    recorded, always as network-infra-transient (a circuit only ever
+    opens on a real HTTP 5xx or a request-level exception, never a
+    target's own anti-bot check this middleware can't see)."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.circuit_breaker.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    for _ in range(5):
+        req = _request(url)
+        middleware.process_request(req, spider=object())
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "example.com"
+    assert record.failure_category is FailureCategory.NETWORK_INFRA_TRANSIENT
+    assert record.source == "circuit_breaker.opened"
+    assert record.raw_signal["consecutive_failures"] == 5
+    assert record.raw_signal["reason"] == "http_503"
+
+
+def test_below_threshold_failures_do_not_record_anything(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Failure-adjacent case: only the actual "open" transition is
+    recorded, not every contributing failure below threshold -- avoids
+    turning one circuit-open event into a burst of near-duplicate rows."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.circuit_breaker.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    for _ in range(4):
+        req = _request(url)
+        middleware.process_request(req, spider=object())
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    assert recorded == []

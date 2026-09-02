@@ -128,6 +128,21 @@ jobs:
           # set, no separate toggle needed.
           TITAN_DEBUG_LOADING_RACE: "1"
           TITAN_LOAD_EVENT_LOG_DIR: ${{ github.workspace }}/ci-diagnostics/load-events
+          # docs/REQUIREMENTS.md section 9 entry 28 (unified failure
+          # taxonomy): off everywhere else (src/diagnostics/
+          # failure_registry.py's own module docstring -- a bare
+          # `pytest tests/unit` run never sets this, so every
+          # pre-existing failure-path unit test stays a genuine no-op).
+          # Active here so real crawl failures against real targets in
+          # this step get durably recorded -- uploaded below as part of
+          # ci-diagnostics/, the same way TITAN_TRACE_DIR/
+          # TITAN_LOAD_EVENT_LOG_DIR already are, not committed
+          # automatically: a real historical merge into
+          # test-environment/failure_log.jsonl (this project's own
+          # git-tracked copy) is a deliberate step a session takes after
+          # reading this artifact, the same discipline every other
+          # docs/REQUIREMENTS.md update in this project already follows.
+          TITAN_FAILURE_LOG_PATH: ${{ github.workspace }}/ci-diagnostics/failure_log.jsonl
         run: |
           mkdir -p "$TITAN_TRACE_DIR" "$TITAN_LOAD_EVENT_LOG_DIR"
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then
