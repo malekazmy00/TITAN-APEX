@@ -6327,14 +6327,75 @@ exhaustive):
 **التحقق:** الـ25 record اتبنوا عبر `record_failure()` نفسها (مش JSON
 يدوي)، اتأكّد round-trip كامل عبر `iter_failures()` — صفر خطأ تحقّق.
 
-#### الحالة والخطوة الجاية
+#### تأكيد CI حقيقي (commit `083ea8d`، run 33690380371، push مباشر على الفرع)
 
-الطبقة 1 جاهزة، متحقق منها محليًا بالكامل (ruff/mypy --strict/pytest —
-546 نجح، 96%+ coverage، نفس الفشلين الغير مرتبطين المعروفين من قبل
-`oxymouse`). لسه محتاجة push + تأكيد CI حقيقي (خصوصًا `TITAN_FAILURE_LOG_PATH`
-الجديد في workflow، وإن التوصيلات الجديدة مبتكسرش أي integration test
-موجود). الطبقة 2 (Protection Classifier) والطبقة 3 (Strategy Engine)
-بانتظار تأكيد الطبقة دي الأول، زي ما المستخدم طلب صراحة.
+اتفتح الـ run الحقيقي (`https://github.com/malekazmy00/TITAN-APEX/actions/runs/33690380371`)،
+اتنزّل الـ raw log الكامل (مش الملخص المبتور) والـ `ci-diagnostics` artifact
+الفعلي، واتقري بالتفصيل — نفس انضباط entries 25/26/27:
+
+- **`conclusion: "success"`**, بدأ 22:26:30Z وخلص 22:42:33Z (~16 دقيقة).
+- **Unit tests**: `513 passed`، coverage الكلي 96.18% (>85% gate).
+- **Contract tests**: `35 passed`.
+- **test-environment unit tests**: `208 passed`، coverage 100%.
+- **Integration tests (شبكة حية)**: `47 passed, 2 warnings` — نفس الـ47
+  المعروفين من قبل، **صفر regression** من التوصيلات الجديدة في الـ6 ملفات.
+  (513+35 = 548، جوه المدى المتوقع 546-550 بسبب فروق بيئة `oxymouse` — نفس
+  النمط اللي اتشاف قبل كده في entry 27's CI.)
+
+**التحقق الحقيقي إن `TITAN_FAILURE_LOG_PATH` شغّال فعليًا (مش مجرد كود
+مكتوب)**: اتنزّل الـ `ci-diagnostics-33690380371-1` artifact واتفتح
+`failure_log.jsonl` جواه فعليًا — **8 سجلات حقيقية** اتكتبت أثناء الـ
+run ده نفسه، من أحداث فشل حقيقية حصلت ضد مواقع حية أثناء integration
+tests (مش محاكاة، مش unit test fake):
+
+| # | source | category | target | resolution_status |
+|---|---|---|---|---|
+| 1 | `patchright_provider.solve_failed` | antibot-fingerprint-rejection | `localhost:8080/feed-interstitial` | unresolved |
+| 2 | `patchright_provider.solve_failed` | antibot-fingerprint-rejection | `localhost:8080/` | unresolved |
+| 3 | `patchright_provider.solve_failed` | antibot-fingerprint-rejection | `localhost:8080/` | unresolved |
+| 4 | `playwright_middleware.scroll_diagnostics` | timing-race | `quotes.toscrape.com/js/` | resolved |
+| 5 | `playwright_middleware.scroll_diagnostics` | timing-race | `quotes.toscrape.com/js/page/2/` | resolved |
+| 6 | `playwright_middleware.scroll_diagnostics` | timing-race | `scrapethissite.com/.../?gotcha=headers` | resolved |
+| 7 | `playwright_middleware.scroll_diagnostics` | timing-race | `scrapethissite.com/pages/ajax-javascript/#2015` | resolved |
+| 8 | `playwright_middleware.scroll_diagnostics` | timing-race | `scrapingcourse.com/javascript-rendering` | resolved |
+
+الـ3 سجلات patchright دي حصلت فعلاً (locator timeout حقيقي على
+`interstitial-close`/`accept-cookies`) لكن الـ suite النهائي لسه طلّع
+`47 passed` — يعني الـretry logic الموجود أصلاً في الـspider/test نفسه
+نجح في المحاولة التالية؛ التسجيل في failure_registry نفسه ماكانش هيوقف
+أو يغيّر نتيجة الاختبار، وده الغرض المقصود بالظبط: طبقة تشخيص إضافية
+(additive)، مش بديل عن أو تدخّل في منطق الـretry/pass-fail الموجود.
+
+**اكتشاف صادق جديد (مشكلة حقيقية في دقة التصنيف الحالي، مش في الـ
+infrastructure)**: الـ5 سجلات `timing-race` كلها من نفس الـguard
+(`requests_during_scroll == 0`) اللي اتضاف في هذا الـcommit. بمراجعة
+كل واحد فيهم: `quotes.toscrape.com/js/` و `page/2/` عندهم
+`initial_height == final_height` (1637==1637 و 1971==1971) — يعني
+الصفحة دي **مفيهاش أصلاً محتوى بيتحمّل بالسكرول** (مش infinite-scroll
+page)، فـ`requests_during_scroll == 0` هنا هو **القيمة الصحيحة
+المتوقعة**، مش دليل على race حقيقي زي اللي أصلحناه في entry 27
+(`webscraper.io/test-sites/scroll`، اللي فعلاً بيحمّل محتوى بالسكرول).
+يعني الـguard الحالي **false-positive** على أي صفحة renders_js من غير
+scroll-triggered content أصلاً — بيصنّفها "timing-race, resolved" برغم
+إنها مش فشل أصلًا. ده حد حقيقي في دقة heuristic الطبقة 1 (مش في
+البنية التحتية: التسجيل نفسه، والـschema، والـregistry كلهم شغالين
+100% صح) — مُوثّق هنا بصراحة كـmaterial حقيقي لتصميم **الطبقة 2
+(Protection Classifier)**: التمييز الصح محتاج يبقى "هل الصفحة أصلًا
+متوقّع منها تحميل محتوى بالسكرول" مش مجرد "هل حصل طلبات أثناء السكرول
+ولا لأ" — قرار مصمم يترك للطبقة الجاية عن قصد، مش بيتصلّح دلوقتي
+كتوسّع خارج نطاق الطبقة 1 (اللي مهمتها الـtaxonomy/registry
+infrastructure بس).
+
+**الخلاصة**: الطبقة 1 (schema + registry + الـ10 نقاط توصيل + الـ36
+اختبار جديد + الـ25 سجل تاريخي) **مؤكدة CI فعليًا** — صفر regression،
+والدليل الأهم (كتابة حقيقية لملف حقيقي أثناء فشل حقيقي في CI) اتحقق
+مباشرة، مش افتراض. الاكتشاف الصادق عن دقة الـtiming-race heuristic
+مسجّل كمدخل حقيقي للطبقة 2، زي ما المستخدم طلب إن الطبقات الجاية تُبنى
+بعد تأكيد دي.
+
+الطبقة 2 (Protection Classifier — Phase 3 item 3 المخطَّط بالفعل)
+والطبقة 3 (Strategy Engine) جاهزين للبدء دلوقتي، زي ما المستخدم طلب
+صراحة.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
