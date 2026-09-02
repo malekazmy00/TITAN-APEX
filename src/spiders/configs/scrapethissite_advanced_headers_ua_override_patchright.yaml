@@ -1,0 +1,21 @@
+# Mirror of scrapethissite_advanced_headers_ua_override_camoufox.yaml's
+# own module comment -- see that config for the full reasoning. Same
+# target, same override mechanism, driven by PatchrightProvider instead:
+# a distinct, deliberately non-mobile User-Agent (an Android Chrome
+# string) -- different both from Patchright's own real default (a
+# desktop Chromium UA) and from the camoufox config's own override
+# value, so a pass here can't be explained by "the two configs happen
+# to share one coincidentally-working string".
+name: scrapethissite_advanced_headers_ua_override_patchright
+start_urls:
+  - "https://www.scrapethissite.com/pages/advanced/?gotcha=headers"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: patchright
+user_agent_override: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+selectors:
+  item: "div.col-md-4.col-md-offset-4"
+  fields:
+    message: "::text"

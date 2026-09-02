@@ -224,7 +224,8 @@ class _RawSolve(NamedTuple):
 
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
 # progressive_extraction, login_flow, warm_session_urls,
-# use_accumulated_profile, cookie_jar_path) -> raw browser result
+# use_accumulated_profile, cookie_jar_path, user_agent_override) -> raw
+# browser result
 CamoufoxSolveFn = Callable[
     [
         str,
@@ -237,6 +238,7 @@ CamoufoxSolveFn = Callable[
         "list[str] | None",
         bool,
         str,
+        "str | None",
     ],
     _RawSolve,
 ]
@@ -294,6 +296,7 @@ def _default_camoufox_solve(  # pragma: no cover
     warm_session_urls: list[str] | None = None,
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
+    user_agent_override: str | None = None,
 ) -> _RawSolve:
     """Drive a real Camoufox browser: navigate, (optionally) click, wait
     past ``load``, read, close.
@@ -412,6 +415,15 @@ def _default_camoufox_solve(  # pragma: no cover
     profile every single call, with nothing read from or written to
     ``cookie_jar_path`` at all -- the same complete isolation entry 17's
     own test suite depends on.
+
+    ``user_agent_override`` (docs/REQUIREMENTS.md section 9 entry
+    24/27): passed straight through to
+    ``browser.new_context(user_agent=...)`` -- a real, documented
+    Playwright context-creation-time option, confirmed against its own
+    docs. ``None`` (the default) is Playwright's own default too
+    (unset), so this is a genuine no-op for every existing caller: the
+    real Camoufox/Firefox User-Agent is sent exactly as it always has
+    been.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
@@ -534,10 +546,33 @@ def _default_camoufox_solve(  # pragma: no cover
                     load_accumulated_state(cookie_jar_path) if use_accumulated_profile else None
                 )
                 context = browser.new_context(
-                    ignore_https_errors=True, storage_state=loaded_state  # type: ignore[arg-type]
+                    ignore_https_errors=True,
+                    storage_state=loaded_state,  # type: ignore[arg-type]
+                    user_agent=user_agent_override,
                 )
             else:
                 browser.on("close", _mark_browser_crashed)
+                if user_agent_override is not None:
+                    # This launch mode's own persistent context is
+                    # already open by the time this function ever sees
+                    # it (Camoufox(headless=True) built it internally) --
+                    # there's no "set the User-Agent on an already-open
+                    # context" call, only at creation time (the branch
+                    # above). Never actually exercised in practice (this
+                    # module's own comment right below already confirms
+                    # `browser` is always the concrete `Browser` type at
+                    # runtime here), but logged rather than silently
+                    # dropped anyway, the same defense-in-depth this
+                    # module already applies to `use_accumulated_profile`
+                    # right below for the identical launch mode.
+                    logger.warning(
+                        "camoufox_provider.user_agent_override_unsupported_in_this_launch_mode",
+                        extra={
+                            "url": url,
+                            "reason": "persistent-context launch has no post-creation "
+                            "User-Agent option",
+                        },
+                    )
                 # docs/REQUIREMENTS.md section 9 entry 21, Step 2: a
                 # persistent-context launch (never actually exercised by
                 # this project's own Camoufox(headless=True) call --
@@ -1576,6 +1611,7 @@ class CamoufoxProvider(AntibotProvider):
         login_flow: LoginFlow | None = None,
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
+        user_agent_override: str | None = None,
     ) -> Solution:
         # docs/REQUIREMENTS.md section 9 entry 17: a real, kernel-log-
         # confirmed Firefox engine crash (BrowserCrashedError's own
@@ -1600,6 +1636,7 @@ class CamoufoxProvider(AntibotProvider):
                     warm_session_urls,
                     use_accumulated_profile,
                     self._cookie_jar_path,
+                    user_agent_override,
                 )
             except BrowserCrashedError as exc:
                 if attempt >= self._max_browser_crash_attempts:

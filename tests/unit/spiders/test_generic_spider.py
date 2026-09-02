@@ -737,6 +737,35 @@ def test_request_meta_includes_warm_session_urls_and_use_accumulated_profile(
     assert requests[0].meta["use_accumulated_profile"] is False
 
 
+def test_request_meta_defaults_user_agent_override_to_none(config_path: str) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 24/27: reaches
+    request.meta unconditionally (same "harmless no-op" shape as
+    warm_session_urls/use_accumulated_profile above) -- every existing
+    config (none of which sets user_agent_override) must keep getting
+    None here, exactly as before this field existed."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["user_agent_override"] is None
+
+
+def test_request_meta_includes_a_configured_user_agent_override(tmp_path: Path) -> None:
+    """Happy path: a target that sets user_agent_override gets it verbatim
+    in request.meta -- this is what byparr_middleware.py's own
+    process_request actually reads and forwards to the provider."""
+    config_file = tmp_path / "ua_override_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML + '\nuser_agent_override: "Mozilla/5.0 (custom-test-ua)"\n',
+        encoding="utf-8",
+    )
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["user_agent_override"] == "Mozilla/5.0 (custom-test-ua)"
+
+
 def test_parse_warm_session_step_follows_to_the_next_warm_url(
     warm_session_config_path: str,
 ) -> None:

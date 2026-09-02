@@ -129,7 +129,9 @@ class _RawSolve(NamedTuple):
 
 
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
-# progressive_extraction, login_flow) -> raw browser result
+# progressive_extraction, login_flow, warm_session_urls,
+# use_accumulated_profile, cookie_jar_path, user_agent_override) -> raw
+# browser result
 PatchrightSolveFn = Callable[
     [
         str,
@@ -142,6 +144,7 @@ PatchrightSolveFn = Callable[
         "list[str] | None",
         bool,
         str,
+        "str | None",
     ],
     _RawSolve,
 ]
@@ -178,6 +181,7 @@ def _default_patchright_solve(  # pragma: no cover
     warm_session_urls: list[str] | None = None,
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
+    user_agent_override: str | None = None,
 ) -> _RawSolve:
     """Drive a real Patchright-stealthed Chromium: navigate, (optionally)
     click, wait past ``load``, read, close.
@@ -233,6 +237,16 @@ def _default_patchright_solve(  # pragma: no cover
     :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
     identical parameter (docs/REQUIREMENTS.md section 9 entry 15) -- see
     that function's own docstring for the full explanation.
+
+    ``user_agent_override`` (docs/REQUIREMENTS.md section 9 entry 24/27): same mechanism as
+    :func:`~src.providers.antibot.camoufox_provider._default_camoufox_solve`'s
+    identical parameter -- passed straight through to
+    ``browser.new_context(user_agent=...)``. This module never has
+    Camoufox's own dual-mode (persistent-vs-multi-context) launch
+    ambiguity (this function's own comment on ``browser.new_context()``
+    being unconditionally the real thing to call here already explains
+    why), so there's no second, unsupported-launch-mode branch to log a
+    warning for the way that module's identical parameter needs.
 
     Raises:
         AntibotError: if the browser fails to launch, navigate, or read
@@ -316,7 +330,9 @@ def _default_patchright_solve(  # pragma: no cover
                 load_accumulated_state(cookie_jar_path) if use_accumulated_profile else None
             )
             context = browser.new_context(
-                ignore_https_errors=True, storage_state=loaded_state  # type: ignore[arg-type]
+                ignore_https_errors=True,
+                storage_state=loaded_state,  # type: ignore[arg-type]
+                user_agent=user_agent_override,
             )
             page = context.new_page()
             page.on("crash", _mark_browser_crashed)
@@ -822,6 +838,7 @@ class PatchrightProvider(AntibotProvider):
         login_flow: LoginFlow | None = None,
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
+        user_agent_override: str | None = None,
     ) -> Solution:
         # docs/REQUIREMENTS.md section 9 entry 17: same bounded
         # browser-crash retry as CamoufoxProvider.solve()'s identical
@@ -839,6 +856,7 @@ class PatchrightProvider(AntibotProvider):
                     warm_session_urls,
                     use_accumulated_profile,
                     self._cookie_jar_path,
+                    user_agent_override,
                 )
             except BrowserCrashedError as exc:
                 if attempt >= self._max_browser_crash_attempts:

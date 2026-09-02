@@ -7,13 +7,28 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from src.core.interfaces.antibot_provider import AntibotProvider, LiveDomSelectors, Solution
+from src.core.interfaces.antibot_provider import (
+    AntibotProvider,
+    LiveDomSelectors,
+    LoginFlow,
+    Solution,
+)
 
 
 class _FakeAntibotProvider(AntibotProvider):
     """Minimal concrete implementation used only to exercise the contract."""
 
-    def solve(self, url: str) -> Solution:
+    def solve(
+        self,
+        url: str,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        user_agent_override: str | None = None,
+    ) -> Solution:
         return Solution(
             url=url,
             html="<html></html>",

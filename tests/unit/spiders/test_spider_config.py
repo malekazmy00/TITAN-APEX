@@ -586,6 +586,55 @@ def test_use_accumulated_profile_requires_a_real_browser_provider(tmp_path: Path
         load_spider_config(str(config_file))
 
 
+# --- user_agent_override (docs/REQUIREMENTS.md section 9 entry 24/27) ----
+
+
+def test_user_agent_override_defaults_to_none(tmp_path: Path) -> None:
+    """Every existing config (none of which sets this) must keep getting
+    None -- zero behavior change unless a target opts in."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.user_agent_override is None
+
+
+def test_user_agent_override_is_read_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        'user_agent_override: "Mozilla/5.0 (custom-test-ua)"\n',
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.user_agent_override == "Mozilla/5.0 (custom-test-ua)"
+
+
+def test_user_agent_override_does_not_require_antibot_needed_or_a_real_browser_provider(
+    tmp_path: Path,
+) -> None:
+    """Unlike extraction_mode/login/use_accumulated_profile, this field has
+    no cross-field requirement at all: ByparrProvider itself (not
+    SpiderConfig) is what decides it can't honor an override -- it logs a
+    clear warning and solves with its own real default instead of
+    crashing, so a config is free to set this with any antibot_provider,
+    or with antibot_needed left False entirely (a harmless no-op key in
+    request.meta ByparrMiddleware never reads for that target)."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + 'user_agent_override: "Mozilla/5.0 (custom-test-ua)"\n',
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.antibot_needed is False
+    assert config.user_agent_override == "Mozilla/5.0 (custom-test-ua)"
+
+
 # --- selectors.item_group_size (docs/REQUIREMENTS.md section 9 entry 23,
 # Known Limitation #5's real fix) --------------------------------------
 

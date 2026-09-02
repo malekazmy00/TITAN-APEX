@@ -1,0 +1,29 @@
+# The third provider, per the same "test all 3, document each
+# separately" instruction this project's own Level 3 round already
+# followed. Unlike the camoufox/patchright configs, user_agent_override
+# here is a real, confirmed no-op -- Byparr's own request payload model
+# (LinkRequest) has no userAgent field at all (confirmed by reading its
+# source directly, docs/REQUIREMENTS.md section 9 entry 27), so
+# ByparrProvider logs a clear warning and solves with its own real,
+# unmodified default User-Agent instead of crashing or silently
+# dropping the request. This config's own job is to prove that
+# graceful-degradation path for real, in CI, against a genuine external
+# target -- not to prove the override itself took effect (it
+# structurally cannot, for this provider) -- so the assertion is simply
+# that the crawl still succeeds, the same "Headers properly spoofed"
+# result the plain (no-override) scrapethissite_advanced_headers.yaml
+# config already gets: Byparr's own underlying browser already sends a
+# real browser UA regardless of this field.
+name: scrapethissite_advanced_headers_ua_override_byparr
+start_urls:
+  - "https://www.scrapethissite.com/pages/advanced/?gotcha=headers"
+allowed_domains:
+  - "www.scrapethissite.com"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: byparr
+user_agent_override: "Mozilla/5.0 (this value is expected to be ignored by byparr)"
+selectors:
+  item: "div.col-md-4.col-md-offset-4"
+  fields:
+    message: "::text"

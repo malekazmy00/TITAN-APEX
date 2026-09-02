@@ -144,6 +144,11 @@ class GenericSpider(scrapy.Spider):
             # it" shape every other optional meta key here already has.
             "warm_session_urls": self.config.warm_session_urls,
             "use_accumulated_profile": self.config.use_accumulated_profile,
+            # docs/REQUIREMENTS.md section 9 entry 24/27: same "harmless
+            # to always include" shape as warm_session_urls above --
+            # ByparrMiddleware only reads this when antibot_needed is
+            # also True, so it's a genuine no-op for every plain target.
+            "user_agent_override": self.config.user_agent_override,
             # docs/REQUIREMENTS.md section 9 entry 15: a real, discovered
             # prerequisite gap, not incidental -- Scrapy's own
             # HttpErrorMiddleware (spider middleware, enabled by default)

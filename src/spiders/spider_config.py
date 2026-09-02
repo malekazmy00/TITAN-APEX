@@ -178,6 +178,23 @@ class SpiderConfig(BaseModel):
     # empty browser profile every single solve() call -- the same
     # complete isolation entry 17's own test suite depends on.
     use_accumulated_profile: bool = False
+    # Real, evidenced gap (docs/REQUIREMENTS.md section 9 entry 24 --
+    # scrapethissite.com/pages/advanced/?gotcha=headers's own
+    # "User-Agent doesn't look like a standard mozilla/chrome/safari
+    # value" check, and this project's own finding that render_js was
+    # the *only* currently-possible fix, since no per-target UA field
+    # existed at all before this one). None (the default) keeps every
+    # existing target's exact prior behavior: each provider sends
+    # whatever real User-Agent it always has (Camoufox's real Firefox
+    # UA, Patchright/PlaywrightMiddleware's real Chromium UA, Byparr's
+    # own upstream default) -- zero change unless a config opts in.
+    # Applies only to the 3 AntibotProvider implementations
+    # (byparr/camoufox/patchright), not PlaywrightMiddleware's own,
+    # separate render_js path -- see AntibotProvider.solve()'s own
+    # docstring for the full per-provider contract (Byparr's /v1
+    # protocol has no such field at all, confirmed by reading its own
+    # source -- a real, documented, best-effort-only gap, not a bug).
+    user_agent_override: str | None = None
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:

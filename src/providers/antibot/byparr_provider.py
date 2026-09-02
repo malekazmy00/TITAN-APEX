@@ -72,7 +72,29 @@ class ByparrProvider(AntibotProvider):
         login_flow: LoginFlow | None = None,
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
+        user_agent_override: str | None = None,
     ) -> Solution:
+        if user_agent_override is not None:
+            # Real, structural gap -- confirmed by reading Byparr's own
+            # request payload model (LinkRequest, in its own source):
+            # it has no userAgent/user_agent field at all. This isn't a
+            # gap this project's Byparr deployment introduced -- the
+            # upstream FlareSolverr protocol Byparr implements has the
+            # identical limitation (a custom-User-Agent feature request
+            # against FlareSolverr itself, still unmerged upstream as of
+            # this writing). SpiderConfig places no restriction on
+            # setting user_agent_override with antibot_provider: "byparr"
+            # (unlike extraction_mode/login/progressive_extraction, which
+            # SpiderConfig's own validators require camoufox/patchright
+            # for) -- so this branch is genuinely reachable in practice,
+            # not just defense in depth.
+            self.logger.warning(
+                "byparr_provider.user_agent_override_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API (LinkRequest) has no userAgent field at all",
+                },
+            )
         if warm_session_urls:
             # Same structural gap as login_flow/progressive_extraction
             # below (docs/REQUIREMENTS.md section 9 entry 21, Step 2):

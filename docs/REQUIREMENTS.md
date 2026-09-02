@@ -6058,6 +6058,96 @@ runs بالتوازي"، مش سلسلة إعادة محاولات لنفس run_
 2 مستبعدين بقرار واعي موثّق ومُعاد التحقق منه). صفر gotcha متبقّي غير
 مغطّى. `docs/TEST_TARGETS.md` اتحدّث (جدول المستوى 3) ليعكس ده صراحة.
 
+### 27. `user_agent_override` — الحل الفعلي لفجوة الـUSER_AGENT اللي entry 24 اكتشفها (إضافة على البنية الموجودة، طلب المستخدم صراحة)
+
+**السياق:** entry 24 لقى إن `scrapethissite.com/pages/advanced/?gotcha=headers`
+بيرفض أي User-Agent مش شبه متصفح، وإن المشروع مفهوش أي حقل per-target
+لتغيير الـUser-Agent خالص — الحل المؤقت وقتها كان `render_js: true`
+(الاعتماد على Chromium حقيقي بيبعت UA حقيقي تلقائيًا). المستخدم طلب
+صراحة الحل الفعلي: حقل اختياري `user_agent_override` على `SpiderConfig`،
+صفر تغيير على سلوك أي config موجود.
+
+#### التصميم — إضافة، مش بند تصعيد منفصل
+
+- **`SpiderConfig.user_agent_override: str | None = None`** — افتراضي
+  `None` يحافظ على سلوك كل الـconfigs الموجودة زي ما هو بالظبط. صفر
+  cross-field validator (بعكس `extraction_mode`/`login`/
+  `use_accumulated_profile`) — الحقل ده منطقي مع أي `antibot_provider`،
+  بما فيهم `byparr` (اللي هيتجاهله بس مش هيرفضه).
+- **`AntibotProvider.solve()`** (الـinterface الأساسي): حقل جديد
+  `user_agent_override: str | None = None`، نفس عقد "best-effort" اللي
+  كل باراميتر تاني فيه (`click_selector`/`warm_session_urls`/...) —
+  provider يقدر يدعمه بيدعمه، provider ملوش القدرة يسجّل warning
+  ويكمل من غير ما يعطل أو يتجاهل بصمت.
+- **Camoufox/Patchright:** `browser.new_context(user_agent=user_agent_override)`
+  — خيار حقيقي موثّق في Playwright's context-creation API، اتأكّد من
+  توثيقه الرسمي. `None` (الافتراضي) هو نفس افتراضي Playwright نفسه
+  (بدون تمرير الباراميتر خالص) — صفر تغيير لأي caller قديم.
+- **Byparr — قيد حقيقي مؤكَّد بقراءة الكود المصدري، مش تخمين:** قرأت
+  `LinkRequest` (نموذج الـpayload الحقيقي بتاع Byparr، مش FlareSolverr
+  النظري) مباشرة من `github.com/thephaseless/byparr`'s `src/models.py` —
+  الحقول الموجودة فعليًا: `cmd`, `url`, `max_timeout`, `block_media`,
+  `return_only_cookies`. **صفر حقل `userAgent`/`user_agent` في نموذج
+  الطلب خالص** (موجود بس في نماذج الـresponse، بيوريك الـUA اللي
+  استخدمه Byparr، مش بيسيبك تحدده). بحث إضافي أكّد إن ده قيد حقيقي في
+  بروتوكول FlareSolverr الأصلي نفسه (Byparr بيطبّقه) — طلب ميزة UA
+  مخصص لسه مفتوح ومش merged رسميًا
+  (`github.com/FlareSolverr/FlareSolverr/discussions/1098`). `ByparrProvider.solve()`
+  بيسجّل `byparr_provider.user_agent_override_unsupported` ويكمل بـ
+  UA الافتراضي بتاعه، بالظبط زي عقد `click_selector`/`warm_session_urls`
+  الموجود بالفعل.
+
+#### التحقق المحلي
+
+- **11 اختبار unit جديد** موزّعين على 5 ملفات (`test_spider_config.py`
+  +3، `test_generic_spider.py` +2، `test_byparr_provider.py` +2،
+  `test_camoufox_provider.py` +2، `test_patchright_provider.py` +2) —
+  بيغطوا: القيمة الافتراضية `None`، القراءة من YAML، وصول القيمة
+  فعليًا لـ`solve_fn` المُحقن (camoufox/patchright)، وسيناريو
+  الـwarning + استمرار النجاح (byparr) — حالة نجاح وحالة فشل/قيد لكل
+  مكوّن، زي القاعدة المعتادة. اختبارين إضافيين اتصلحوا كمان
+  (`tests/unit/core/interfaces/test_antibot_provider.py`،
+  `tests/contract/test_antibot_provider_contract.py`) عشان الـfake
+  providers فيهم كانوا لازم يتوافقوا مع الـinterface الجديد.
+- **ruff check + mypy --strict** نضاف على كل ملف اتلمس، صفر استثناء
+  جديد غير مبرر.
+- **الـsuite كامل بعد التغيير:** 475 نجح (كان 464 قبل هذا البند —
+  فرق +11 بالظبط، مطابق للاختبارات الجديدة). الفشلين الوحيدين
+  (`test_mouse_movement.py`'s `oxymouse` tests) قيد بيئة محلي معروف من
+  قبل، صفر علاقة بالتغيير ده. Coverage: 95.84% (فوق حد الـ85% بمسافة
+  كبيرة).
+
+#### الاختبار الحي — 3 configs جديدة، الهدف الحقيقي اللي اكتشف الفجوة نفسه
+
+`scrapethissite.com/pages/advanced/?gotcha=headers` عبر الـ3 providers
+(`antibot_needed: true`، مش `render_js`)، كل واحد بـUA مختلف تمامًا عن
+افتراضي الـprovider بتاعه (وعن بعض):
+- `scrapethissite_advanced_headers_ua_override_camoufox.yaml` — UA
+  iPhone Safari (مختلف عن Firefox الحقيقي بتاع Camoufox).
+- `scrapethissite_advanced_headers_ua_override_patchright.yaml` — UA
+  Android Chrome (مختلف عن Chromium desktop بتاع Patchright، ومختلف
+  عن UA الـcamoufox config).
+- `scrapethissite_advanced_headers_ua_override_byparr.yaml` — UA وهمي
+  (متوقّع يتجاهله Byparr) — بيثبت مسار الـgraceful degradation حي، مش
+  بس بالـunit test.
+
+**فحص مسبق حقيقي (`curl`، الاتنين UA بالظبط):** الاتنين UA (iPhone/Android)
+اتأكّدوا يدويًا إنهم بيعدّوا فحص الموقع الحقيقي (`HTTP 200`) بشكل
+مستقل عن بعض قبل كتابة الاختبار.
+
+**حد الأمانة المطلوب توثيقه صراحة (مش ادّعاء زيادة عن اللازم):** الموقع
+مفهوش طريقة يرجّع الـUA اللي استقبله فعليًا في الـresponse — يعني نجاح
+الاختبار الحي وحده مبيثبتش قطعيًا إن الـstring بالظبط وصل (نجاح بـUA
+افتراضي الـprovider نفسه كان هيبان بنفس الشكل). الدليل القاطع على وصول
+الـstring نفسه حرفيًا هو الـunit tests (`seen["user_agent_override"] ==
+"..."` جوه `solve_fn` المُحقن) — الاختبار الحي بيثبت طبقة تانية مكمّلة:
+إن الآلية دي بتشتغل end-to-end ضد target خارجي حقيقي، مش بس ضد fake
+مصطنع.
+
+**الحالة:** الكود + الاختبارات جاهزين ومتحقق منهم محليًا بالكامل — لسه
+محتاجين push + تأكيد CI حقيقي (اختبار حي = شبكة حقيقية، متوفرة في CI
+بس زي كل round سابق).
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

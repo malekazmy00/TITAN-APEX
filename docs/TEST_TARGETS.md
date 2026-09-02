@@ -119,6 +119,7 @@ section 9 entry 24 — ملخص هنا:
 | الموقع/الصفحة | الحالة | ملحوظة |
 |---|---|---|
 | `scrapethissite.com/pages/advanced/?gotcha=headers` | ✅ config جديد | `render_js: true` إجباري — الموقع بيرفض أي User-Agent مش شبه متصفح، والمشروع مفهوش override لـUSER_AGENT |
+| نفس الصفحة، عبر `user_agent_override` الجديد (section 9 entry 27) | ✅ 3 configs جديدة (camoufox/patchright/byparr) | الحل الفعلي للفجوة فوق — UA مختلف تمامًا عن افتراضي كل provider، اتأكّد يدويًا (`curl`) إنه بيعدّي فحص الموقع؛ byparr بيثبت مسار graceful degradation (UA اتجاهل، الـcrawl لسه بينجح) |
 | `scrapethissite.com/pages/advanced/?gotcha=login`/`csrf` | ⛔ مستبعدين بقرار واعي | يحتاجوا حساب مدفوع (`/lessons/sign-up/`) — قيد وصول حقيقي، مش هنشتري حساب. **جرد كامل مؤكَّد (section 9 entry 26): دول كل الـ3 gotchas الموجودين في القسم، صفر رابع مخفي** |
 | `web-scraping.dev/products` | ✅ config جديد، اتأكّد محليًا (25 item حقيقي) | فجوة pagination حقيقية اتلقت: next-link بس بيوصل لـ25 من 28 (الموقع نفسه بيوقف يعرض روابط أكتر من صفحة 5) |
 | `web-scraping.dev/login` | ✅ configs جديدة (camoufox + patchright)، **مؤكَّد CI فعليًا** | أول اختبار حقيقي لبند 21 برّة mock-target — عدّى PASSED فعليًا في CI (section 9 entry 24's تحديث CI)، مش يدوي بس |

@@ -299,6 +299,74 @@ def test_progressive_extraction_logs_a_warning_and_still_solves() -> None:
     assert extra["url"] == "https://example.com/"
 
 
+def test_user_agent_override_logs_a_warning_and_still_solves() -> None:
+    """docs/REQUIREMENTS.md section 9 entry 24/27: a
+    real, structural gap confirmed by reading Byparr's own request
+    payload model (LinkRequest) -- it has no userAgent/user_agent field
+    at all, the same upstream FlareSolverr-protocol limitation Byparr
+    itself never adds. Passing user_agent_override must not crash or
+    silently drop it; it must log clearly and still solve with its own
+    real, unmodified default User-Agent."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        # Real, direct proof this is genuinely unsupported, not just
+        # documented as such: the payload sent over the wire has no
+        # userAgent key at all, regardless of what was requested.
+        assert "userAgent" not in payload
+        assert "user_agent" not in payload
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    solution = provider.solve(
+        "https://example.com/", user_agent_override="Mozilla/5.0 (custom-test-ua)"
+    )
+
+    assert solution.status_code == 200  # still solves despite the unsupported override
+    message, extra = logged[0]
+    assert message == "byparr_provider.user_agent_override_unsupported"
+    assert extra["url"] == "https://example.com/"
+
+
+def test_user_agent_override_none_logs_nothing() -> None:
+    """Backward compatible: every existing caller (None, the default)
+    must not trigger the new warning at all."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    solution = provider.solve("https://example.com/")
+
+    assert solution.status_code == 200
+    assert logged == []
+
+
 def test_base_url_trailing_slash_is_normalized() -> None:
     seen_urls: list[str] = []
 

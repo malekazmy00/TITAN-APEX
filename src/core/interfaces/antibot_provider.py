@@ -145,6 +145,7 @@ class AntibotProvider(ABC):
         login_flow: LoginFlow | None = None,
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
+        user_agent_override: str | None = None,
     ) -> Solution:
         """Solve whatever anti-bot challenge protects ``url``.
 
@@ -242,6 +243,22 @@ class AntibotProvider(ABC):
         silently drop it -- log a clear warning and solve with a fresh
         profile regardless, same as if ``use_accumulated_profile`` were
         ``False``.
+
+        ``user_agent_override`` (docs/REQUIREMENTS.md section 9 entry
+        24/27): same best-effort contract as the other
+        parameters -- when given, a provider with a real browser context
+        to create (Camoufox/Patchright) sends this exact string as the
+        browser's User-Agent for the whole ``solve()`` call instead of
+        its own real default. ``ByparrProvider`` cannot support this at
+        all -- confirmed by reading its own request payload model
+        (``LinkRequest``), which has no ``userAgent``/``user_agent``
+        field whatsoever (the same real, upstream FlareSolverr-protocol
+        limitation, not something this project's own Byparr deployment
+        chose to omit) -- so it must not crash or silently drop it: log
+        a clear warning and solve with its own real, unmodified default
+        User-Agent, same as if ``user_agent_override`` had not been
+        given. ``None`` (the default) keeps every existing caller's
+        exact prior behavior for every provider.
 
         Implementations must raise
         :class:`src.core.exceptions.AntibotError` (never a bare

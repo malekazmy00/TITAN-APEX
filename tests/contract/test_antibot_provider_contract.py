@@ -70,6 +70,7 @@ def _camoufox_ok_solve(
     warm_session_urls: list[str] | None = None,
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
+    user_agent_override: str | None = None,
 ) -> _CamoufoxRawSolve:
     return _CamoufoxRawSolve(
         url="https://example.com/protected",
@@ -90,6 +91,7 @@ def _camoufox_failing_solve(
     warm_session_urls: list[str] | None = None,
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
+    user_agent_override: str | None = None,
 ) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
@@ -113,6 +115,7 @@ def _patchright_ok_solve(
     warm_session_urls: list[str] | None = None,
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
+    user_agent_override: str | None = None,
 ) -> _PatchrightRawSolve:
     return _PatchrightRawSolve(
         url="https://example.com/protected",
@@ -133,6 +136,7 @@ def _patchright_failing_solve(
     warm_session_urls: list[str] | None = None,
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
+    user_agent_override: str | None = None,
 ) -> _PatchrightRawSolve:
     raise AntibotError(f"patchright failed to solve {url}: unsolvable")
 

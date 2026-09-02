@@ -39,6 +39,7 @@ class _FakeProvider(AntibotProvider):
         self.last_login_flow: LoginFlow | None = None
         self.last_warm_session_urls: list[str] | None = None
         self.last_use_accumulated_profile: bool = False
+        self.last_user_agent_override: str | None = None
 
     def solve(
         self,
@@ -49,6 +50,7 @@ class _FakeProvider(AntibotProvider):
         login_flow: LoginFlow | None = None,
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
+        user_agent_override: str | None = None,
     ) -> Solution:
         self.last_click_selector = click_selector
         self.last_extraction_selectors = extraction_selectors
@@ -56,6 +58,7 @@ class _FakeProvider(AntibotProvider):
         self.last_login_flow = login_flow
         self.last_warm_session_urls = warm_session_urls
         self.last_use_accumulated_profile = use_accumulated_profile
+        self.last_user_agent_override = user_agent_override
         if self._error is not None:
             raise self._error
         assert self._solution is not None
