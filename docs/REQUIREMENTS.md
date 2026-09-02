@@ -6148,6 +6148,38 @@ runs بالتوازي"، مش سلسلة إعادة محاولات لنفس run_
 محتاجين push + تأكيد CI حقيقي (اختبار حي = شبكة حقيقية، متوفرة في CI
 بس زي كل round سابق).
 
+#### تأكيد CI حقيقي (push، commit `5bbcdad`، run `33656595569`) — الأربعة الاختبارات عدّوا فعليًا
+
+اللوج الخام الكامل (zip اتنزّل بالكامل، مش ملخّص) اتقرا لكل خطوة على
+حدة:
+
+- **Unit tests:** `477 passed`، coverage `96.03%` (بيئة CI عندها
+  `oxymouse` مثبّتة فعليًا، فالاختبارين اللي كانوا فاشلين محليًا بسبب
+  القيد ده عدّوا هنا كمان — `475 + 2 = 477`، مطابق).
+- **Contract tests:** `35 passed`.
+- **Integration tests (شبكة حقيقية):** `47 passed, 0 failed` (كان 44
+  قبل هذا البند — فرق +3 بالظبط، مطابق للاختبارات الحية الجديدة). **الثلاثة
+  اختبارات الجديدة اتأكّدوا فرديًا من سطورهم الحرفية في اللوج:**
+  - `test_user_agent_override_via_camoufox_passes_the_real_site_check`
+    — PASSED. سطر لوج حقيقي من `camoufox_provider.py` نفسه أثناء
+    التشغيل: `"camoufox_provider.solved", "url":
+    "https://www.scrapethissite.com/pages/advanced/?gotcha=headers",
+    "status": 200`.
+  - `test_user_agent_override_via_patchright_passes_the_real_site_check`
+    — PASSED. نفس الشيء من `patchright_provider.py`: `"status": 200`.
+  - `test_user_agent_override_via_byparr_is_ignored_gracefully` —
+    PASSED، **والـwarning المتوقّع اتسجّل فعليًا في CI حقيقي ضد Byparr
+    حقيقي، مش يونيت تيست بس:**
+    `{"level": "WARNING", "logger": "src.providers.antibot.byparr_provider",
+    "message": "byparr_provider.user_agent_override_unsupported", "reason":
+    "byparr's /v1 API (LinkRequest) has no userAgent field at all"}` —
+    دليل مباشر إن مسار الـgraceful degradation شغال حي، مش بس مؤكَّد
+    بمحاكاة.
+
+**الخلاصة النهائية:** الحل اتأكّد بالكامل — الكود، الـunit tests، وأهم
+حاجة الاختبار الحي ضد الموقع الحقيقي نفسه اللي اكتشف الفجوة أصلًا (entry
+24). البند ده مقفول رسميًا، صفر جزء معلّق.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
