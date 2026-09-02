@@ -43,6 +43,29 @@ requests fired but returned nothing new) or a genuinely finite page
 (height simply stops growing on schedule, same as always). Purely
 observational: it changes zero scrolling *behavior* for any existing
 target, only what gets logged about it.
+
+**The fix (docs/REQUIREMENTS.md section 9 entry 25's follow-up — real CI
+evidence first showed the failure is flaky, not deterministic, so a
+single green run was explicitly not treated as proof; see that entry
+for the required multi-run confirmation before this is called
+resolved):** ``_scroll_to_load_lazy_content`` no longer calls
+``window.scrollTo()`` at all. It now drives scrolling with
+``page.mouse.wheel()`` — a real, trusted input-level event, the exact
+same fix this project already applied to
+``src/providers/antibot/_scroll.py`` for a different target/reason
+(entry 17's "Fourth revision") but had never ported here. A one-time
+``page.mouse.move()`` runs first (``page.mouse.wheel()`` alone, with no
+cursor ever positioned in the viewport, reliably produces zero real
+scroll — the identical constraint ``_scroll.py`` documents for its own
+callers). Deliberately *not* also ported: ``_scroll.py``'s randomized
+delta/pause/fatigue model and its progressive collect-every-step
+machinery — those solve a different problem (anti-detection realism,
+and virtualized-list eviction) that this function's callers have never
+needed; porting only the actual fix for *this* bug (an unreliable
+trigger, not a detectable timing signature) keeps the change minimal
+and the two modules' deliberate duplication (see this module's own
+functions vs. ``_scroll.py``'s) honest about *why* they differ, not
+just that they do.
 """
 
 from __future__ import annotations
@@ -186,6 +209,17 @@ def render_with_playwright(
             browser.close()
 
 
+#: Wheel-scroll delta, in pixels, for each attempt inside
+#: ``_scroll_to_load_lazy_content`` -- a fixed, generous jump (this
+#: function's own contract has never needed per-step randomization,
+#: unlike ``src/providers/antibot/_scroll.py``'s
+#: ``DEFAULT_SCROLL_DELTA_RANGE_PX``, which exists for a different
+#: reason -- see this module's own docstring). Large enough to clear a
+#: real page's "near the bottom" trigger threshold in one attempt on
+#: every already-proven lazy-load target this function serves.
+_SCROLL_WHEEL_DELTA_PX = 2500.0
+
+
 def _scroll_to_load_lazy_content(
     page: Any, max_attempts: int, pause_ms: int
 ) -> ScrollDiagnostics:
@@ -193,6 +227,15 @@ def _scroll_to_load_lazy_content(
 
     ``page`` is a ``playwright.sync_api.Page``, typed as ``Any`` here
     since Playwright ships without inline type stubs.
+
+    Drives scrolling with a real ``page.mouse.wheel()`` input event, not
+    ``window.scrollTo()`` -- see this module's own docstring's "The fix"
+    paragraph for why. A one-time ``page.mouse.move()`` runs first so the
+    (virtual) cursor is actually positioned somewhere in the viewport
+    before the first wheel event -- ``page.mouse.wheel()`` alone, with no
+    prior ``move()``, reliably produces zero real scroll (the same
+    constraint ``src/providers/antibot/_scroll.py`` documents for its own
+    callers).
 
     Returns a :class:`ScrollDiagnostics` snapshot (``requests_during_scroll``
     left ``None`` here — this function has no network visibility of its
@@ -205,8 +248,9 @@ def _scroll_to_load_lazy_content(
     previous_height = initial_height
     final_height = initial_height
     attempts_used = 0
+    page.mouse.move(200, 200)
     for _ in range(max_attempts):
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        page.mouse.wheel(0, _SCROLL_WHEEL_DELTA_PX)
         page.wait_for_timeout(pause_ms)
         current_height = page.evaluate("document.body.scrollHeight")
         attempts_used += 1

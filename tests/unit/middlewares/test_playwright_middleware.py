@@ -19,23 +19,36 @@ from src.middlewares.playwright_middleware import (
 )
 
 
+class _FakeMouse:
+    """Stands in for a playwright.sync_api.Mouse -- just records calls."""
+
+    def __init__(self) -> None:
+        self.move_calls: list[tuple[int, int]] = []
+        self.wheel_calls: list[tuple[float, float]] = []
+
+    def move(self, x: int, y: int) -> None:
+        self.move_calls.append((x, y))
+
+    def wheel(self, delta_x: float, delta_y: float) -> None:
+        self.wheel_calls.append((delta_x, delta_y))
+
+
 class _FakePage:
     """Stands in for a playwright.sync_api.Page for _scroll_to_load_lazy_content.
 
-    evaluate() is called for two different scripts in the real code
-    (scrollTo, which we ignore, and the scrollHeight read, which consumes
-    the next value from ``heights``) -- distinguished by script content,
-    same as the real DOM APIs being invoked.
+    evaluate() is only ever called for the ``document.body.scrollHeight``
+    read now -- scrolling itself goes through ``page.mouse`` (see
+    :class:`_FakeMouse`), not ``page.evaluate("window.scrollTo(...)")`` --
+    each call consumes the next value from ``heights``.
     """
 
     def __init__(self, heights: list[int]) -> None:
         self._heights = iter(heights)
         self.scroll_calls = 0
         self.wait_calls: list[int] = []
+        self.mouse = _FakeMouse()
 
     def evaluate(self, script: str) -> int | None:
-        if script.startswith("window.scrollTo"):
-            return None
         return next(self._heights)
 
     def wait_for_timeout(self, ms: int) -> None:
@@ -225,6 +238,26 @@ def test_scroll_stops_once_page_height_stops_growing() -> None:
     assert diagnostics == ScrollDiagnostics(
         attempts_used=3, initial_height=1000, final_height=2000
     )
+
+
+def test_scroll_drives_via_mouse_wheel_not_window_scrollto() -> None:
+    """Happy path (docs/REQUIREMENTS.md section 9 entry 25's follow-up fix):
+    scrolling must go through a real page.mouse.wheel() input event, not
+    page.evaluate("window.scrollTo(...)") -- the whole reason this changed is
+    that scrollTo() is documented as unreliable at triggering an
+    IntersectionObserver-based lazy-load trigger, unlike a real wheel event.
+    One page.mouse.move() first (positions the cursor so wheel() produces
+    real scroll at all), then exactly one wheel() call per attempt actually
+    taken."""
+    page = _FakePage(heights=[1000, 1500, 1500])
+
+    _scroll_to_load_lazy_content(page, max_attempts=8, pause_ms=100)
+
+    assert page.mouse.move_calls == [(200, 200)]
+    assert len(page.mouse.wheel_calls) == 2
+    for delta_x, delta_y in page.mouse.wheel_calls:
+        assert delta_x == 0
+        assert delta_y > 0
 
 
 def test_scroll_stops_immediately_on_a_page_with_no_lazy_content() -> None:
