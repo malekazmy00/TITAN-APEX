@@ -548,7 +548,7 @@ hosting بيرجّع 404 (S3 `NoSuchBucket`)، وحتى الـ frontend الشغ
 (`conduit.productionready.io` → Cloudflare 530، DNS error على الـ
 origin). مفيش بيانات حقيقية تتسحب حتى لو حلّينا مشكلة الـ selectors.
 
-### 6. `PlaywrightMiddleware`'s scroll trigger (`window.scrollTo`) مش موثوق فيه ضد صفحات مبنية على `IntersectionObserver` — كشف اتبنى (section 9 entry 25)، الحل لسه مؤجَّل
+### 6. `PlaywrightMiddleware`'s scroll trigger (`window.scrollTo`) مش موثوق فيه ضد صفحات مبنية على `IntersectionObserver` — ✅ resolved (2026-09-02، section 9 entry 25، مؤكَّد بـ4 تشغيلات CI مستقلة)
 
 **الفجوة:** `scrapingcourse.com/infinite-scrolling` (target حقيقي،
 `scrapingcourse_infinite_scrolling.yaml`) بيرجّع الدفعة الأولى الثابتة
@@ -594,6 +594,25 @@ requests_during_scroll) بيتبني وبيتسجّل structured logging لكل 
 مبدأ section 8)، عشان نجاح عرضي زي ده متتحسبش غلط كدليل حل. التفاصيل
 الكاملة، بما فيها دليل شغل الـdiagnostics فعليًا في نفس الـrun، في
 section 9 entry 25.
+
+**التحديث النهائي — الحل اتطبّق فعليًا واتأكّد بـ4 تشغيلات CI مستقلة
+(commit `0a02057`، طلب المستخدم صراحة بنفس معيار entry 17):**
+`_scroll_to_load_lazy_content` بقى بيستخدم `page.mouse.wheel()` (بعد
+`page.mouse.move()` مرة واحدة) بدل `window.scrollTo()` — بالظبط الحل
+المقترح فوق، الأول (`_scroll.py`'s "Fourth revision" fix). **صفر لمسة
+لـCamoufox/Patchright.** عشان الفشل الأصلي كان flaky (مش deterministic،
+زي ما اتأكّد فوق)، نجاح واحد ما كانش هيكفي — فاتشغّلت الـCI **4 مرات
+مستقلة** على نفس الـcommit (push واحد + 3 `workflow_dispatch`، نفس آلية
+entry 17's "10 runs بالتوازي"): runs
+[33628301230](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628301230)،
+[33628305760](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628305760)،
+[33628313668](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628313668)،
+[33628316983](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628316983).
+اللوج الخام (zip كامل، مش ملخّص) اتنزّل وقُرئ لكل الأربعة — **الأربعة
+عدّوا `test_infinite_scrolling_target_yields_more_than_the_static_batch`
+PASSED بالظبط، كل واحد بـ`44 passed, 0 failed`** (مفيش ولا فشل واحد في
+أي من الأربعة). دليل حقيقي، مش نجاح عرضي واحد — الفجوة **✅ resolved**
+رسميًا دلوقتي.
 
 ---
 
@@ -5945,6 +5964,48 @@ tests اللي بتستخدم `_live_helpers.run_spider_live` — فجوة صغ�
 اتوضّح فوق) لسه مؤجَّل لجولة منفصلة، ودلوقتي بمعلومة أدق: أي محاولة حل
 مستقبلية لازم تتأكد بعدة تشغيلات (مش نجاح واحد) بالظبط زي مبدأ section
 8's "لازم يكون ثابت/مش flaky قبل ما يتسجّل كنجاح نهائي".
+
+#### الحل اتطبّق واتأكّد — 4 تشغيلات CI مستقلة (commit `0a02057`، طلب المستخدم صراحة)
+
+بناءً على طلب المستخدم المباشر: الحل المقترح (`page.mouse.wheel()` بدل
+`window.scrollTo()`، منقول حرفيًا من `_scroll.py`'s "Fourth revision")
+اتطبّق فعليًا في `_scroll_to_load_lazy_content`
+(`src/middlewares/playwright_middleware.py`) — `page.mouse.move(200,
+200)` مرة واحدة قبل الحلقة، وبعدين `page.mouse.wheel(0, delta)` لكل
+محاولة بدل `page.evaluate("window.scrollTo(...)")`. عمدًا **ماتنقلش**
+منطق الـrandomization/fatigue/progressive-collect بتاع `_scroll.py` —
+ده بيحل مشكلة مختلفة (واقعية ضد كشف الأتمتة، وrace خاص بـvirtualized
+lists) مش المشكلة هنا (trigger غير موثوق فيه). صفر لمسة لكود
+Camoufox/Patchright. اختبار unit جديد
+(`test_scroll_drives_via_mouse_wheel_not_window_scrollto`) بيتأكد من
+شكل الاستدعاء الحقيقي (`mouse.move` مرة، `mouse.wheel` لكل محاولة، صفر
+`scrollTo`) — 14 اختبار في `test_playwright_middleware.py` (كان 13)،
+كلهم عدّوا محليًا، ruff/mypy --strict نضاف.
+
+**عشان الفشل الأصلي flaky بطبيعته، نجاح واحد ما كانش هيكفي كدليل حل —
+بالظبط زي ما طلب المستخدم.** اتشغّلت الـCI **4 مرات مستقلة** على نفس
+الـcommit (push واحد + 3 `workflow_dispatch`، نفس آلية entry 17's "10
+runs بالتوازي"، مش سلسلة إعادة محاولات لنفس run_id):
+
+| Run | Trigger | النتيجة |
+|---|---|---|
+| [33628301230](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628301230) | push | `test_infinite_scrolling_target_yields_more_than_the_static_batch` PASSED، `44 passed, 0 failed` |
+| [33628305760](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628305760) | workflow_dispatch | نفس الاختبار PASSED، `44 passed, 0 failed` |
+| [33628313668](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628313668) | workflow_dispatch | نفس الاختبار PASSED، `44 passed, 0 failed` |
+| [33628316983](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33628316983) | workflow_dispatch | نفس الاختبار PASSED، `44 passed, 0 failed` |
+
+كل الأربعة اتأكّدوا من اللوج الخام الكامل (zip اتنزّل بالكامل لكل واحد،
+مش ملخّص `get_job_logs` المقتطع) — سطر الاختبار الحرفي `PASSED`
+وسطر الملخّص النهائي `44 passed` اتقروا مباشرة لكل الأربعة، مش تخمين
+من عدد الـtotal بس. **صفر فشل في أي من الأربعة.**
+
+**الخلاصة النهائية:** الحل اتأكّد بدليل حقيقي كافي (4/4، مش 1/1 أو
+2/4) — الفجوة دي (section 7 entry 6) اتحدّثت لـ**✅ resolved** رسميًا.
+هل ده بيضمن صفر فشل مستقبلي 100%؟ لأ — طبيعة أي race لا تسمح بضمان
+مطلق، بس 4 تشغيلات مستقلة ناجحة كلها بعد تغيير جذري في آلية الـtrigger
+نفسها (مش صدفة زي التشغيلة الواحدة اللي سبقت الحل) دليل قوي وكافي
+بمعايير هذا المشروع، مطابق تمامًا للمعيار اللي entry 17 أرسته وطلبه
+المستخدم صراحة هنا.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
