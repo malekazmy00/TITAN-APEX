@@ -45,6 +45,7 @@ from structural.markup_randomizer import MarkupRandomizer
 from structural.placeholder_content import PLACEHOLDER_TEXT, render_swap_script
 from structural.shadow_dom import SHADOW_ATTACH_SCRIPT, encode_shadow_payload, is_shadow_wrapped
 from structural.spa_catalog import HYDRATION_SKELETON_TEXT, products_to_payload
+from structural.trust_score import TRUST_SESSION_COOKIE_NAME, TrustScoreTier, TrustScoreTracker
 
 INDEX_PAGE_SIZE = 10
 SESSION_COOKIE_NAME = "mocktarget_session"
@@ -98,6 +99,18 @@ def create_app(
     app.config["FEED_RATE_LIMITER"] = FeedRateLimiter(
         threshold=cfg.feed_rate_limit_threshold,
         window_seconds=cfg.feed_rate_limit_window_seconds,
+    )
+    app.config["TRUST_SCORE_TRACKER"] = TrustScoreTracker(
+        rate_limit_threshold=cfg.trust_score_rate_limit_threshold,
+        challenge_threshold=cfg.trust_score_challenge_threshold,
+        block_threshold=cfg.trust_score_block_threshold,
+        window_seconds=cfg.trust_score_window_seconds,
+        min_interval_samples=cfg.trust_score_min_interval_samples,
+        regularity_cv_threshold=cfg.trust_score_regularity_cv_threshold,
+        fingerprint_repeat_threshold=cfg.trust_score_fingerprint_repeat_threshold,
+        timing_points=cfg.trust_score_timing_points,
+        referer_points=cfg.trust_score_referer_points,
+        fingerprint_points=cfg.trust_score_fingerprint_points,
     )
     honeypot_logger = get_file_logger("mock_target.honeypot", cfg.honeypot_log_path)
     botd_logger = get_file_logger("mock_target.botd", cfg.botd_log_path)
@@ -428,6 +441,80 @@ def create_app(
                 mimetype="text/html",
             )
         return jsonify({"error": f"unknown pattern {pattern!r}"}), 400
+
+    @app.get("/trust-scored")
+    def trust_scored() -> Response:
+        """docs/REQUIREMENTS.md section 9 entry 22.1 (Phase 3 item 1, an
+        explicit extension of entry 22 -- ``src/middlewares/rate_limiter.py``'s
+        ``RateLimiterMiddleware``): the first mock-target layer that
+        accumulates evidence across a whole session and escalates its
+        response gradually, instead of judging one request in isolation.
+        See ``structural/trust_score.py``'s own module docstring for the
+        full signal/threshold design.
+
+        Escalation reuses this app's own already-established response
+        shapes, not new ones:
+
+        - ``RATE_LIMITED``: 429 + ``Retry-After``, the same JSON shape
+          ``/api/feed`` above returns for its own rate limiter.
+        - ``CHALLENGE``: the same ``titan-apex-mock-challenge`` HTML page
+          ``/reject-pattern?pattern=challenge`` above returns -- a
+          simulated *harder* challenge in this mock-target's own scope
+          (there is no way for this route to dynamically re-trigger the
+          real Anubis reverse-proxy challenge mid-request; Anubis sits
+          in *front* of this app, not inside it).
+        - ``BLOCKED``: an empty 403 body, the same
+          ``/reject-pattern`` (default ``pattern=empty``) shape --
+          ``ResponsePattern.SILENT_BLOCK``.
+
+        Every response carries ``X-Trust-Score``/``X-Trust-Tier``
+        headers regardless of tier, for test introspection (the tier
+        alone doesn't reveal how close a request is to the next
+        threshold).
+
+        Session-cookie-keyed (not IP-keyed) -- see
+        ``structural/trust_score.py``'s own ``TrustScoreTracker``
+        docstring for why: a fresh cookie jar is a fresh trust-score
+        identity, giving two concurrent live tests against the same
+        running container natural isolation with no synthetic override
+        needed.
+        """
+        if not cfg.enable_trust_score:
+            return jsonify({"status": "ok"})
+
+        tracker: TrustScoreTracker = app.config["TRUST_SCORE_TRACKER"]
+        existing_cookie = request.cookies.get(TRUST_SESSION_COOKIE_NAME)
+        client_key = existing_cookie or secrets.token_hex(8)
+        result = tracker.record_request(
+            client_key,
+            user_agent=request.headers.get("User-Agent"),
+            referer=request.referrer,
+        )
+
+        if result.tier is TrustScoreTier.RATE_LIMITED:
+            response = jsonify(
+                {"error": "rate_limited", "retry_after_seconds": result.retry_after_seconds}
+            )
+            response.status_code = 429
+            response.headers["Retry-After"] = str(result.retry_after_seconds)
+        elif result.tier is TrustScoreTier.CHALLENGE:
+            response = Response(
+                "<html><head><title>Access Denied</title></head>"
+                "<body><h1>titan-apex-mock-challenge</h1>"
+                "<p>Please verify you are human to continue.</p></body></html>",
+                status=403,
+                mimetype="text/html",
+            )
+        elif result.tier is TrustScoreTier.BLOCKED:
+            response = Response(status=403)
+        else:
+            response = jsonify({"status": "ok"})
+
+        response.headers["X-Trust-Score"] = str(result.score)
+        response.headers["X-Trust-Tier"] = result.tier.value
+        if not existing_cookie:
+            response.set_cookie(TRUST_SESSION_COOKIE_NAME, client_key)
+        return response
 
     @app.post("/botd-report")
     def botd_report() -> Response:

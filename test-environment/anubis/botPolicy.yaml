@@ -56,6 +56,18 @@ bots:
     path_regex: ^/reject-pattern$
     action: ALLOW
 
+  # docs/REQUIREMENTS.md section 9 entry 22.1 (Phase 3 item 1, an
+  # explicit extension of entry 22 -- Cumulative Session Trust Score):
+  # same reasoning and placement as reject-pattern-route above --
+  # structural/trust_score.py's own escalation (RATE_LIMITED ->
+  # CHALLENGE -> BLOCKED) is the thing under test here, not Anubis's
+  # own, unrelated challenge/deny page, which would otherwise shadow
+  # every one of those three tiers behind a real 200 challenge response
+  # instead.
+  - name: trust-scored-route
+    path_regex: ^/trust-scored$
+    action: ALLOW
+
   # You can import the entire default config with this macro:
   # - import: (data)/meta/default-config.yaml
 

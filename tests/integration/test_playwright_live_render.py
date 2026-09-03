@@ -5,6 +5,19 @@ navigation to a real external site -- this is deliberately NOT a unit
 test, and is expected to fail (or hang) in a sandboxed dev environment
 without full network access to arbitrary hosts. It runs for real in CI
 (see .github/workflows/ci.yml), which has unrestricted internet access.
+
+docs/REQUIREMENTS.md section 9 entry 30.2's own honest diagnostic-gap
+finding: this test used to assert only ``result.returncode`` and never
+printed the subprocess's own stderr on an *item-count* assertion
+failure (only `_live_helpers.py`'s ``run_spider_live`` did that, via its
+own unconditional print -- this file built its own subprocess call
+directly and never had it). That gap meant two real, CI-confirmed
+failures of this exact test (entry 30.2's own 4-data-point trail) had to
+be classified ``external-site-flake`` without being able to rule out a
+genuine recurrence of entries 25/27's own timing-race class
+(``requests_during_scroll: 0``) from the CI log alone.  The fix below is
+exactly `_live_helpers.py`'s own pattern, so any future occurrence is
+fully diagnosable from the CI log on the first try.
 """
 
 from __future__ import annotations
@@ -44,6 +57,16 @@ def test_infinite_scrolling_target_yields_more_than_the_static_batch(tmp_path: P
         timeout=150,
     )
 
+    # Printed unconditionally (not just on a non-zero returncode) -- same
+    # pattern as _live_helpers.py's own run_spider_live, added after
+    # entry 30.2's own honest diagnostic-gap finding (this module's own
+    # docstring has the full reasoning): pytest only surfaces captured
+    # stdout on a *failing* test, so this is a no-op for a passing one,
+    # but gives real, immediate diagnostic evidence (this test's own
+    # playwright_middleware.scroll_diagnostics log line --
+    # requests_during_scroll in particular) the next time the item-count
+    # assertion below fails, instead of an undiagnosable gap.
+    print(f"--- scrapy runspider stderr tail (infinite_scrolling) ---\n{result.stderr[-4000:]}")
     assert result.returncode == 0, f"scrapy runspider failed:\n{result.stderr[-4000:]}"
 
     lines = (

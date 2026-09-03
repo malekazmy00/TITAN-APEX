@@ -27,6 +27,13 @@ def _env_int(name: str, default: int) -> int:
     return int(value)
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if not value:
+        return default
+    return float(value)
+
+
 class MockTargetConfig:
     """Snapshot of environment-driven mock-target configuration."""
 
@@ -134,6 +141,33 @@ class MockTargetConfig:
         # own module docstring.
         self.spa_hydration_delay_ms: int = _env_int("SPA_HYDRATION_DELAY_MS", 800)
         self.spa_catalog_product_count: int = _env_int("SPA_CATALOG_PRODUCT_COUNT", 8)
+        # docs/REQUIREMENTS.md section 9 entry 22.1 (Phase 3 item 1, an
+        # explicit extension of entry 22 -- Cumulative Session Trust
+        # Score): unlike every layer above, this one actually enforces
+        # (escalating RATE_LIMITED -> CHALLENGE -> BLOCKED), not just
+        # logs -- see structural/trust_score.py's own module docstring
+        # for the full signal/threshold design these defaults mirror.
+        self.enable_trust_score: bool = _env_bool("ENABLE_TRUST_SCORE", True)
+        self.trust_score_rate_limit_threshold: int = _env_int(
+            "TRUST_SCORE_RATE_LIMIT_THRESHOLD", 30
+        )
+        self.trust_score_challenge_threshold: int = _env_int(
+            "TRUST_SCORE_CHALLENGE_THRESHOLD", 60
+        )
+        self.trust_score_block_threshold: int = _env_int("TRUST_SCORE_BLOCK_THRESHOLD", 85)
+        self.trust_score_window_seconds: float = _env_float("TRUST_SCORE_WINDOW_SECONDS", 60.0)
+        self.trust_score_min_interval_samples: int = _env_int(
+            "TRUST_SCORE_MIN_INTERVAL_SAMPLES", 3
+        )
+        self.trust_score_regularity_cv_threshold: float = _env_float(
+            "TRUST_SCORE_REGULARITY_CV_THRESHOLD", 0.15
+        )
+        self.trust_score_fingerprint_repeat_threshold: int = _env_int(
+            "TRUST_SCORE_FINGERPRINT_REPEAT_THRESHOLD", 5
+        )
+        self.trust_score_timing_points: int = _env_int("TRUST_SCORE_TIMING_POINTS", 15)
+        self.trust_score_referer_points: int = _env_int("TRUST_SCORE_REFERER_POINTS", 10)
+        self.trust_score_fingerprint_points: int = _env_int("TRUST_SCORE_FINGERPRINT_POINTS", 20)
 
 
 def get_config() -> MockTargetConfig:

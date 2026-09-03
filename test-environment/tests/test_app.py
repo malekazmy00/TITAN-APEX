@@ -1112,3 +1112,187 @@ def test_spa_catalog_product_count_is_configurable(tmp_path: Path) -> None:
     body = app.test_client().get("/spa-catalog").get_data(as_text=True)
 
     assert body.count('"product_id"') == 3
+
+
+# --- Cumulative Session Trust Score (docs/REQUIREMENTS.md section 9
+# entry 22.1, Phase 3 item 1, an explicit extension of entry 22) -------
+
+
+def _trust_score_client(tmp_path: Path, **overrides: object) -> FlaskClient:
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False
+    for name, value in overrides.items():
+        setattr(cfg, name, value)
+    app = create_app(cfg)
+    app.testing = True
+    return app.test_client()
+
+
+def test_trust_scored_allows_a_fresh_session_and_sets_a_cookie(tmp_path: Path) -> None:
+    """Happy path: a single, first-ever hit is unconditionally allowed
+    (score 0 -- structural/trust_score.py's own "missing referer on the
+    first request is normal" reasoning) and issues the session cookie
+    the rest of these tests rely on for carrying identity forward."""
+    client = _trust_score_client(tmp_path)
+
+    response = client.get("/trust-scored")
+
+    assert response.status_code == 200
+    assert response.headers["X-Trust-Score"] == "0"
+    assert response.headers["X-Trust-Tier"] == "allowed"
+    assert "mocktarget_trust_session" in response.headers.get("Set-Cookie", "")
+
+
+def test_trust_scored_escalates_to_rate_limited_then_challenge_then_blocked(
+    tmp_path: Path,
+) -> None:
+    """Failure case: worst-case behavior (no referer, same UA, low
+    thresholds so the walk is observable in a handful of requests) must
+    genuinely pass through all three escalation tiers in order, never
+    jump straight from allowed to blocked -- same property
+    test_trust_score.py's own
+    test_score_escalates_through_all_three_tiers_with_worst_case_behavior
+    proves at the tracker level; this proves the Flask route wiring
+    (status codes/headers/response shapes) carries it through
+    correctly."""
+    client = _trust_score_client(
+        tmp_path,
+        trust_score_rate_limit_threshold=10,
+        trust_score_challenge_threshold=30,
+        trust_score_block_threshold=50,
+        trust_score_timing_points=0,
+        trust_score_referer_points=8,
+        trust_score_fingerprint_points=20,
+        trust_score_fingerprint_repeat_threshold=5,
+    )
+
+    tiers_seen = []
+    for _ in range(10):
+        response = client.get("/trust-scored")
+        tiers_seen.append(response.headers["X-Trust-Tier"])
+
+    assert "rate_limited" in tiers_seen
+    assert "challenge" in tiers_seen
+    assert "blocked" in tiers_seen
+    tier_order = {"allowed": 0, "rate_limited": 1, "challenge": 2, "blocked": 3}
+    ranks = [tier_order[t] for t in tiers_seen]
+    assert ranks == sorted(ranks)  # monotonic, never regresses
+
+
+def test_trust_scored_rate_limited_response_matches_the_api_feed_shape(tmp_path: Path) -> None:
+    """The RATE_LIMITED tier reuses /api/feed's own established 429
+    shape, not a bespoke one -- same JSON error key and Retry-After
+    header a client already knows how to handle."""
+    client = _trust_score_client(
+        tmp_path,
+        trust_score_rate_limit_threshold=1,
+        trust_score_challenge_threshold=90,
+        trust_score_block_threshold=95,
+        trust_score_referer_points=50,
+    )
+    client.get("/trust-scored")  # first request: establishes the session, score 0
+
+    response = client.get("/trust-scored")
+
+    assert response.status_code == 429
+    assert response.get_json()["error"] == "rate_limited"
+    assert "Retry-After" in response.headers
+    assert int(response.headers["Retry-After"]) > 0
+    assert response.headers["X-Trust-Tier"] == "rate_limited"
+
+
+def test_trust_scored_challenge_response_matches_the_reject_pattern_shape(tmp_path: Path) -> None:
+    """The CHALLENGE tier reuses /reject-pattern?pattern=challenge's own
+    HTML page verbatim, so src/response_classifier.py's existing
+    CHALLENGE_PAGE pattern recognizes it unmodified -- no new marker to
+    teach the classifier."""
+    client = _trust_score_client(
+        tmp_path,
+        trust_score_rate_limit_threshold=1,
+        trust_score_challenge_threshold=2,
+        trust_score_block_threshold=95,
+        trust_score_referer_points=50,
+    )
+    client.get("/trust-scored")
+
+    response = client.get("/trust-scored")
+
+    assert response.status_code == 403
+    assert response.content_type.startswith("text/html")
+    assert b"titan-apex-mock-challenge" in response.data
+    assert b"verify you are human" in response.data.lower()
+    assert response.headers["X-Trust-Tier"] == "challenge"
+
+
+def test_trust_scored_blocked_response_matches_the_reject_pattern_shape(tmp_path: Path) -> None:
+    """The BLOCKED tier reuses /reject-pattern's own default (empty
+    body) shape -- ResponsePattern.SILENT_BLOCK, unmodified."""
+    client = _trust_score_client(
+        tmp_path,
+        trust_score_rate_limit_threshold=1,
+        trust_score_challenge_threshold=2,
+        trust_score_block_threshold=3,
+        trust_score_referer_points=50,
+    )
+    client.get("/trust-scored")
+
+    response = client.get("/trust-scored")
+
+    assert response.status_code == 403
+    assert response.data == b""
+    assert response.headers["X-Trust-Tier"] == "blocked"
+
+
+def test_trust_scored_different_sessions_are_tracked_independently(tmp_path: Path) -> None:
+    """Two different cookie jars against the same running app never
+    share a score -- the same session-isolation property
+    test_trust_score.py's own
+    test_different_sessions_are_tracked_independently proves at the
+    tracker level, now proven through two real, independent Flask test
+    clients hitting the same app instance."""
+    cfg = MockTargetConfig()
+    cfg.honeypot_log_path = str(tmp_path / "honeypot.log")
+    cfg.botd_log_path = str(tmp_path / "botd.log")
+    cfg.ja4_log_path = str(tmp_path / "ja4.log")
+    cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
+    cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.enable_cookie_wall = False
+    cfg.enable_shadow_dom = False
+    cfg.trust_score_referer_points = 50
+    app = create_app(cfg)
+    app.testing = True
+    client_a = app.test_client()
+    client_b = app.test_client()
+
+    for _ in range(5):
+        client_a.get("/trust-scored")
+    response_b = client_b.get("/trust-scored")
+
+    assert response_b.headers["X-Trust-Score"] == "0"
+    assert response_b.headers["X-Trust-Tier"] == "allowed"
+
+
+def test_trust_scored_disabled_always_allows(tmp_path: Path) -> None:
+    """Toggleable like every other layer here (config.py's own module
+    docstring): disabled means a plain, unconditional 200 -- no score
+    computed, no cookie games, matching the project's "one layer at a
+    time, each verifiable alone" principle."""
+    client = _trust_score_client(
+        tmp_path,
+        enable_trust_score=False,
+        trust_score_rate_limit_threshold=1,
+        trust_score_referer_points=50,
+    )
+
+    for _ in range(5):
+        response = client.get("/trust-scored")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ok"}
+    assert "X-Trust-Score" not in response.headers
