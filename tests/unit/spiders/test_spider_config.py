@@ -8,6 +8,7 @@ import pytest
 
 from src.core.exceptions import ConfigError
 from src.spiders.spider_config import load_spider_config
+from src.strategy.strategy_capability import TargetPolicyStatus
 
 VALID_YAML = """
 name: quotes_toscrape
@@ -678,6 +679,54 @@ def test_strategy_backoff_multiplier_rejects_a_value_above_the_absolute_ceiling(
     config_file = tmp_path / "target.yaml"
     config_file.write_text(
         VALID_YAML + "strategy_backoff_multiplier: 5.1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError):
+        load_spider_config(str(config_file))
+
+
+# --- target_policy_status (docs/REQUIREMENTS.md section 9 entry 30's own
+# follow-up -- the Target Policy Gate) ----------------------------------
+
+
+def test_target_policy_status_defaults_to_locked(tmp_path: Path) -> None:
+    """Every existing config (none of which sets this) must keep getting
+    LOCKED -- the fail-closed default, zero behavior change unless a
+    human deliberately edits a target's own config file."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.target_policy_status is TargetPolicyStatus.LOCKED
+
+
+@pytest.mark.parametrize(
+    ("yaml_value", "expected"),
+    [
+        ("whitelisted", TargetPolicyStatus.WHITELISTED),
+        ("pending-review", TargetPolicyStatus.PENDING_REVIEW),
+        ("rejected", TargetPolicyStatus.REJECTED),
+        ("locked", TargetPolicyStatus.LOCKED),
+    ],
+)
+def test_target_policy_status_is_read_from_yaml(
+    tmp_path: Path, yaml_value: str, expected: TargetPolicyStatus
+) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + f"target_policy_status: {yaml_value}\n", encoding="utf-8"
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.target_policy_status is expected
+
+
+def test_target_policy_status_rejects_an_unknown_value(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "target_policy_status: not-a-real-status\n", encoding="utf-8"
     )
 
     with pytest.raises(ConfigError):

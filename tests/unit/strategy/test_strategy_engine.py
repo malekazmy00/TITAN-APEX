@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.diagnostics.failure_taxonomy import FailureCategory
-from src.strategy.strategy_capability import StrategyEngineConfig, StrategyMode
+from src.strategy.strategy_capability import StrategyEngineConfig, StrategyMode, TargetPolicyStatus
 from src.strategy.strategy_engine import PROVIDER_ROTATION, StrategyEngine, _next_in_rotation
 
 
@@ -246,3 +246,104 @@ class TestDecideAdjustBackoff:
         assert result is not None
         assert result.proposed_action["multiplier"] == 3.0
         assert result.proposed_action["adjusted_cooldown_seconds"] == 180.0
+
+
+class TestDecideTargetNewUrls:
+    """docs/REQUIREMENTS.md section 9 entry 30's own follow-up -- the
+    Target Policy Gate."""
+
+    def test_disabled_engine_returns_none_without_inspecting_policy_status(self) -> None:
+        engine = StrategyEngine(StrategyEngineConfig(engine_enabled=False), now_fn=_fixed_now)
+
+        result = engine.decide_target_new_urls(
+            domain="example.com",
+            request_url="https://example.com/",
+            candidate_url="https://example.com/new-section",
+            policy_status=TargetPolicyStatus.WHITELISTED,
+            triggering_failure=FailureCategory.STRUCTURAL_SELECTOR_MISMATCH,
+        )
+
+        assert result is None
+
+    def test_locked_raises_value_error(self) -> None:
+        engine = StrategyEngine(StrategyEngineConfig(engine_enabled=True), now_fn=_fixed_now)
+
+        with pytest.raises(ValueError, match="locked"):
+            engine.decide_target_new_urls(
+                domain="example.com",
+                request_url="https://example.com/",
+                candidate_url="https://example.com/new-section",
+                policy_status=TargetPolicyStatus.LOCKED,
+                triggering_failure=FailureCategory.STRUCTURAL_SELECTOR_MISMATCH,
+            )
+
+    def test_locked_is_the_effective_default_for_any_target(self) -> None:
+        """Mirrors SpiderConfig.target_policy_status's own default --
+        this is exactly what happens for every existing/unconfigured
+        target if a future caller ever reaches this method."""
+        engine = StrategyEngine(StrategyEngineConfig(engine_enabled=True), now_fn=_fixed_now)
+
+        with pytest.raises(ValueError):
+            engine.decide_target_new_urls(
+                domain="example.com",
+                request_url="https://example.com/",
+                candidate_url="https://example.com/new-section",
+                policy_status=TargetPolicyStatus.LOCKED,
+                triggering_failure=FailureCategory.UNKNOWN,
+            )
+
+    @pytest.mark.parametrize(
+        ("status", "expected_proposal_status"),
+        [
+            (TargetPolicyStatus.WHITELISTED, "accepted-in-principle"),
+            (TargetPolicyStatus.PENDING_REVIEW, "pending-human-review"),
+            (TargetPolicyStatus.REJECTED, "rejected"),
+        ],
+    )
+    def test_non_locked_statuses_are_recorded_but_never_enacted(
+        self, status: TargetPolicyStatus, expected_proposal_status: str
+    ) -> None:
+        engine = StrategyEngine(StrategyEngineConfig(engine_enabled=True), now_fn=_fixed_now)
+
+        result = engine.decide_target_new_urls(
+            domain="example.com",
+            request_url="https://example.com/",
+            candidate_url="https://example.com/new-section",
+            policy_status=status,
+            triggering_failure=FailureCategory.STRUCTURAL_SELECTOR_MISMATCH,
+        )
+
+        assert result is not None
+        assert result.enacted is False  # never -- real enactment is separate, unbuilt work
+        assert result.proposed_action["policy_status"] == status.value
+        assert result.proposed_action["proposal_status"] == expected_proposal_status
+        assert result.proposed_action["candidate_url"] == "https://example.com/new-section"
+
+    def test_pending_review_and_rejected_are_recorded_distinctly(self) -> None:
+        """The whole point of the gate: a report must be able to tell
+        "still needs a decision" (PENDING_REVIEW) apart from "already
+        decided, no" (REJECTED) -- not collapse both into one generic
+        "refused" bucket."""
+        engine = StrategyEngine(StrategyEngineConfig(engine_enabled=True), now_fn=_fixed_now)
+
+        pending = engine.decide_target_new_urls(
+            domain="a.example",
+            request_url="https://a.example/",
+            candidate_url="https://a.example/new",
+            policy_status=TargetPolicyStatus.PENDING_REVIEW,
+            triggering_failure=FailureCategory.UNKNOWN,
+        )
+        rejected = engine.decide_target_new_urls(
+            domain="b.example",
+            request_url="https://b.example/",
+            candidate_url="https://b.example/new",
+            policy_status=TargetPolicyStatus.REJECTED,
+            triggering_failure=FailureCategory.UNKNOWN,
+        )
+
+        assert pending is not None
+        assert rejected is not None
+        assert (
+            pending.proposed_action["proposal_status"]
+            != rejected.proposed_action["proposal_status"]
+        )

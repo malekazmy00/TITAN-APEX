@@ -14,6 +14,7 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from src.core.exceptions import ConfigError
+from src.strategy.strategy_capability import TargetPolicyStatus
 
 
 class SelectorsConfig(BaseModel):
@@ -208,6 +209,22 @@ class SpiderConfig(BaseModel):
     # env-configured ceiling), so a target can request less than the
     # ceiling but never more.
     strategy_backoff_multiplier: float | None = Field(default=None, gt=1.0, le=5.0)
+    # docs/REQUIREMENTS.md section 9 entry 30's own follow-up (the
+    # Target Policy Gate) -- LOCKED (the fail-closed default) for every
+    # existing config, and every new one that doesn't set this
+    # explicitly: StrategyEngine.decide_target_new_urls refuses (raises)
+    # any TARGET_NEW_URLS proposal for a target still at this default,
+    # the exact same hard stop that capability has always had. Moving a
+    # target to WHITELISTED/PENDING_REVIEW/REJECTED is a deliberate,
+    # manual edit to *this* target's own config file -- never something
+    # the engine changes on its own (a legal/human judgment call, not a
+    # heuristic one -- see TargetPolicyStatus's own docstring). Not
+    # threaded into request.meta (unlike strategy_backoff_multiplier/
+    # user_agent_override above): no real call site reads it from there
+    # yet -- decide_target_new_urls takes it as a direct, explicit
+    # argument instead, since no request-level plumbing exists for a
+    # URL that, by definition, isn't part of any request yet.
+    target_policy_status: TargetPolicyStatus = TargetPolicyStatus.LOCKED
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:

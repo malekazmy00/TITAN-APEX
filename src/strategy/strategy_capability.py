@@ -36,15 +36,27 @@ class StrategyCapability(StrEnum):
       otherwise get, on this domain's circuit *only* -- never below the
       target's own configured minimum (never undermines
       ``RateLimiterMiddleware``'s own budget).
-    - ``TARGET_NEW_URLS``: reserved for a future round -- proposing a
-      URL not already present in a target's own ``start_urls``/
-      ``next_page`` chain. Explicit user decision (docs/REQUIREMENTS.md
-      section 9 entry 30's own design discussion): no executor exists
-      for this anywhere in this codebase yet, and none is built as part
-      of this entry -- :class:`StrategyEngineConfig`'s own validator
-      refuses any mode for it other than
-      :attr:`StrategyMode.DISABLED_NOT_IMPLEMENTED`, so enabling it here
-      is a loud, immediate config error rather than a silent no-op.
+    - ``TARGET_NEW_URLS``: proposing a URL not already present in a
+      target's own ``start_urls``/``next_page`` chain. This
+      capability's own *enactment* mode
+      (:attr:`StrategyEngineConfig.target_new_urls_mode`) stays
+      hard-locked to :attr:`StrategyMode.DISABLED_NOT_IMPLEMENTED` --
+      no executor that actually crawls a newly-proposed URL exists
+      anywhere in this codebase, and none is built here either.
+      **Correction to an earlier design note** (docs/REQUIREMENTS.md
+      section 9 entry 30's own follow-up, the same entry): this
+      capability was first described as "reserved for a future
+      round, deferred to the dashboard" -- on review that was wrong.
+      *Deciding whether a proposal is even allowed to be registered*
+      (accepted-in-principle, pending human review, previously
+      rejected, or refused outright) is pure internal decision logic,
+      the exact same shape every other capability here already has --
+      it needs no user interface at all, so it belongs in this layer
+      now, not deferred alongside the dashboard. See
+      :class:`TargetPolicyStatus` and
+      :meth:`~src.strategy.strategy_engine.StrategyEngine.decide_target_new_urls`
+      for that gate -- a genuinely separate axis from this capability's
+      own enactment mode above, which stays locked regardless.
     """
 
     SWITCH_PROVIDER = "switch-provider"
@@ -66,9 +78,55 @@ class StrategyMode(StrEnum):
     #: limits (never a permanent config-file mutation, for either
     #: capability that supports this mode today).
     ENACT = "enact"
-    #: The only legal value for ``TARGET_NEW_URLS`` in this round -- see
-    #: that capability's own docstring for why.
+    #: The only legal value for ``TARGET_NEW_URLS``'s own *enactment*
+    #: mode -- see that capability's own docstring for why (unrelated to
+    #: :class:`TargetPolicyStatus` below, which governs a narrower,
+    #: separate question).
     DISABLED_NOT_IMPLEMENTED = "disabled-not-implemented"
+
+
+class TargetPolicyStatus(StrEnum):
+    """Per-target gate for :attr:`StrategyCapability.TARGET_NEW_URLS`
+    proposals -- docs/REQUIREMENTS.md section 9 entry 30's own
+    follow-up, a correction of that capability's first design note (see
+    its own docstring). Set on a target's own
+    :class:`~src.spiders.spider_config.SpiderConfig` via
+    ``target_policy_status`` -- **never** changed by the engine itself;
+    only a human, editing that target's own config file, moves a target
+    out of the default.
+
+    This governs one narrow question only: when the engine considers
+    proposing a URL not already in a target's own crawl scope, is even
+    *registering that proposal* (as a :class:`~src.strategy.strategy_decision.StrategyDecision`)
+    allowed for this specific target? It says nothing about whether the
+    proposal is ever actually acted on -- real enactment of
+    ``TARGET_NEW_URLS`` stays a separate, unbuilt question (that
+    capability's own ``target_new_urls_mode``, hard-locked to
+    :attr:`StrategyMode.DISABLED_NOT_IMPLEMENTED` regardless of any
+    target's policy status here).
+
+    - ``WHITELISTED``: a human has explicitly cleared this target for
+      new-URL proposals -- registered as accepted-in-principle.
+    - ``PENDING_REVIEW``: a proposal for this target needs a human
+      decision -- registered as exactly that, not silently treated as
+      approval or refusal either way.
+    - ``REJECTED``: a human already reviewed and decided against this
+      target -- registered as a real, final decision, distinct from
+      ``PENDING_REVIEW``'s open question (so a future report can tell
+      "still needs a decision" apart from "already decided, no").
+    - ``LOCKED``: the default for every target that hasn't set this
+      field at all, and the fail-closed state generally -- refuses the
+      proposal outright (``ValueError``), the exact same hard stop
+      ``TARGET_NEW_URLS`` has always had for every target. Changing a
+      target away from ``LOCKED`` is a deliberate, manual edit to that
+      target's own config file -- never automatic, never the engine's
+      own decision (a legal/human judgment call, not a heuristic one).
+    """
+
+    WHITELISTED = "whitelisted"
+    PENDING_REVIEW = "pending-review"
+    REJECTED = "rejected"
+    LOCKED = "locked"
 
 
 class StrategyEngineConfig(BaseModel):

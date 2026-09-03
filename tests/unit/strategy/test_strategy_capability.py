@@ -3,7 +3,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from src.strategy.strategy_capability import StrategyCapability, StrategyEngineConfig, StrategyMode
+from src.strategy.strategy_capability import (
+    StrategyCapability,
+    StrategyEngineConfig,
+    StrategyMode,
+    TargetPolicyStatus,
+)
 
 
 def test_default_config_is_fully_disabled() -> None:
@@ -57,3 +62,12 @@ def test_capability_and_mode_values() -> None:
 def test_switch_provider_after_n_challenges_must_be_at_least_one() -> None:
     with pytest.raises(ValidationError):
         StrategyEngineConfig(switch_provider_after_n_challenges=0)
+
+
+def test_target_policy_status_values() -> None:
+    assert {member.value for member in TargetPolicyStatus} == {
+        "whitelisted",
+        "pending-review",
+        "rejected",
+        "locked",
+    }
