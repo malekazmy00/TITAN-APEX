@@ -149,6 +149,14 @@ class GenericSpider(scrapy.Spider):
             # ByparrMiddleware only reads this when antibot_needed is
             # also True, so it's a genuine no-op for every plain target.
             "user_agent_override": self.config.user_agent_override,
+            # docs/REQUIREMENTS.md section 9 entry 30 ("الطبقة 3" --
+            # Strategy Engine): same "harmless to always include" shape
+            # as user_agent_override above -- CircuitBreakerMiddleware
+            # only reads this at all when its own Strategy Engine is
+            # enabled (off by default), so this is a genuine no-op for
+            # every target that hasn't opted in, which is every target
+            # this session had before this entry.
+            "strategy_backoff_multiplier": self.config.strategy_backoff_multiplier,
             # docs/REQUIREMENTS.md section 9 entry 15: a real, discovered
             # prerequisite gap, not incidental -- Scrapy's own
             # HttpErrorMiddleware (spider middleware, enabled by default)

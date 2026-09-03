@@ -766,6 +766,29 @@ def test_request_meta_includes_a_configured_user_agent_override(tmp_path: Path) 
     assert requests[0].meta["user_agent_override"] == "Mozilla/5.0 (custom-test-ua)"
 
 
+def test_request_meta_defaults_strategy_backoff_multiplier_to_none(config_path: str) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 30: same "harmless no-op"
+    shape as user_agent_override above -- every existing config (none of
+    which sets strategy_backoff_multiplier) must keep getting None."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["strategy_backoff_multiplier"] is None
+
+
+def test_request_meta_includes_a_configured_strategy_backoff_multiplier(tmp_path: Path) -> None:
+    config_file = tmp_path / "backoff_multiplier_target.yaml"
+    config_file.write_text(
+        CONFIG_YAML + "\nstrategy_backoff_multiplier: 2.5\n", encoding="utf-8"
+    )
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["strategy_backoff_multiplier"] == 2.5
+
+
 def test_parse_warm_session_step_follows_to_the_next_warm_url(
     warm_session_config_path: str,
 ) -> None:

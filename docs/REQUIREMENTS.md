@@ -6639,6 +6639,133 @@ mock. الدليل الحقيقي على نجاح التصنيف نفسه هو �
 الطبقة 3 (Strategy Engine) جاهزة للبدء دلوقتي، زي ما المستخدم طلب
 صراحة.
 
+### 30. نظام تشخيص وقرار موحّد — الطبقة 3: Strategy Engine (طلب المستخدم صراحة، مبني فوق الطبقتين 1 و2 المؤكدتين)
+
+قبل أي تصميم، المستخدم بعت متطلب معماري صريح لازم يحكم الطبقة كلها من
+الأساس: **كل قرار الـStrategy Engine هيقدر ياخده (تبديل provider،
+تعديل backoff) لازم يكون خلف flag/config صريح قابل للتفعيل والتعطيل من
+الخارج — مش hardcoded كسلوك دائم**، عشان داشبورد مستقبلي (لسه مؤجل) يقدر
+يشتغل فوق نفس نقاط التحكم دي مباشرة بدون إعادة هندسة — نفس مبدأ
+الـinterfaces (`AntibotProvider`، `StorageBackend`) من المرحلة 1. اتبعت
+تصميم كامل للمستخدم قبل أي كود، واتناقشت حدود السلطة الثلاثة صراحة:
+
+| القدرة | القرار | الحد |
+|---|---|---|
+| تبديل provider | قابل للتفعيل (enact) خلف flag | تعديل مؤقت على الـretry الحالي بس، صفر تعديل دائم على الـconfig |
+| تعديل timing/backoff | قابل للتفعيل خلف flag، بحد أقصى صارم | 1x–5x، محدد لاحقًا لكل target في الـconfig نفسه |
+| استهداف target/URL جديد | ممنوع تنفيذيًا في v1 | محجوز في الـtaxonomy بس، رفض صريح لو حد حاول يفعّله |
+
+وسؤالين توضيح إضافيين اتأكدوا: المفتاح الرئيسي (`engine_enabled`) مطفي
+بالكامل افتراضيًا (صفر تغيير سلوك في أي مكان تاني في الكودبيس)، وسقف
+الـADJUST_BACKOFF (1x–5x) بيتحدد لاحقًا لكل target في الـconfig نفسه،
+مش رقم عام واحد.
+
+#### 1. `src/strategy/` — نفس بنية `src/diagnostics/` بالظبط
+
+- **`strategy_capability.py`**: `StrategyCapability` (3 قيم: `switch-provider`،
+  `adjust-backoff`، `target-new-urls`)، `StrategyMode` (`observe-only`/
+  `enact`/`disabled-not-implemented`)، `StrategyEngineConfig` (pydantic) —
+  كل حقل فيها هو بالظبط نقطة التحكم اللي داشبورد مستقبلي هيقرأها/يكتبها
+  (سواء عبر env vars دلوقتي أو config store بعدين، بدون إعادة هندسة).
+  `target_new_urls_mode` عنده `model_validator` بيرفض أي قيمة غير
+  `DISABLED_NOT_IMPLEMENTED` بـ`ValueError` صريح — محاولة تفعيلها بالغلط
+  ترفض فورًا، مش تتجاهل بصمت (نفس مبدأ المشروع "صفر سلوك صامت").
+- **`strategy_decision.py`**: `StrategyDecision` (نفس روح `FailureRecord`
+  بالحرف) — كل قرار (اتنفذ أو لأ) بيتسجّل، مع `enacted: bool` صريح.
+- **`strategy_registry.py`**: `record_decision()`/`iter_decisions()` —
+  نسخة طبق الأصل من `failure_registry.py`'s الخاص (نفس آلية الأمان:
+  الكتابة الحقيقية بس لما `path` صريح أو `TITAN_STRATEGY_DECISION_LOG_PATH`
+  متظبطة، وإلا no-op).
+- **`strategy_engine.py`**: `StrategyEngine` — حالة داخلية (per-domain
+  streak tracking، نفس شكل `CircuitBreakerMiddleware._circuits`)، ميثودين:
+  - `decide_switch_provider`: بعد `switch_provider_after_n_challenges`
+    (افتراضي 2) تصنيفات `CHALLENGE_PAGE` متتالية على نفس الدومين بنفس
+    الـprovider، يقترح (أو ينفّذ) الانتقال للـprovider الجاي في تدوير
+    ثابت (`byparr → camoufox → patchright → byparr`) — heuristic بسيط
+    ومتعمد الصدق (تدوير ثابت مش تصنيف ذكي)، موثّق كده صراحة، مش وعد
+    بذكاء غير موجود. الـstreak بيترجع صفر بعد أي اقتراح (اتنفذ أو لأ)
+    عشان ما يكررش نفس الاقتراح كل فشلة لاحقة.
+  - `decide_adjust_backoff`: مضاعف الـtarget (من config الـtarget نفسه)
+    بيتحد (`min`) بالسقف العام (`adjust_backoff_max_multiplier`، افتراضي
+    5.0) — دفاع مضاعف حتى لو target غلط في تهيئته.
+  - كل الميثودين يرجعوا `None` فورًا لو `engine_enabled=False` — صفر
+    تأثير أداء/سلوك للأغلبية الساحقة من الـtargets الحاليين.
+
+#### 2. التوصيل الحقيقي (نقطتين، مش middleware جديد)
+
+- **`SpiderConfig.strategy_backoff_multiplier: float | None = None`** —
+  opt-in لكل target صراحة (زي `user_agent_override` بالظبط: `None`
+  يعني الهدف ده لسه ما دخلش في ADJUST_BACKOFF خالص، فـ`CircuitBreakerMiddleware`
+  ما بيستشيرش الـengine أصلًا، مش بس بيتجاهل نتيجته). بيوصل لـ
+  `request.meta["strategy_backoff_multiplier"]` عبر `GenericSpider._request_meta()`
+  (نفس نمط `user_agent_override`).
+- **`CircuitBreakerMiddleware`**: بيحمل `StrategyEngine` واحد دايمًا
+  (مبني في `from_crawler`، أو معطى مباشرة للاختبارات) — مش `None` أبدًا،
+  عشان كل نقطة استدعاء تستشيره من غير `is not None` checks متناثرة؛
+  الـengine نفسه هو اللي بيقرر لو معطّل.
+  - **`_resolve_cooldown`** (جديدة): تُستشار في كل نقطة بيتحدد فيها
+    cooldown (سواء `_record_failure` العادي أو `IMMEDIATE_LONG_BACKOFF`
+    المباشر) — بس لو `request.meta["strategy_backoff_multiplier"]`
+    موجودة أصلًا (مفيش استشارة للـengine خالص غير كده).
+  - **`_handle_classifiable_response`**'s فرع `TRY_ANTIBOT_PROVIDER`:
+    بيستشير `decide_switch_provider` دايمًا (الـstreak محتاج كل حدث
+    عشان يفضل دقيق)، بس بيطبّق النتيجة على الـretry الجاي بس لو
+    `enacted=True`.
+  - `_record_failure` اكتسب `request: Request` كـparameter مطلوب (كان
+    مش موجود قبل كده) — كل الـ4 نقط نداء اتحدثت.
+
+#### 3. الحدود الصارمة (اتطبقت فعليًا، مش نية)
+
+- صفر تعديل دائم على أي ملف config — كل تعديل (provider أو cooldown)
+  نطاقه الـretry/الدائرة الحالية بس، بنفس آلية `TRY_ANTIBOT_PROVIDER`
+  الموجودة فعليًا من الطبقة 2.
+- سقف `ADJUST_BACKOFF` (1x–5x) بيتفرض مرتين: `SpiderConfig`'s الخاص
+  `Field(gt=1.0, le=5.0)` عند تحميل الـconfig، و`min()` مرة تانية جوه
+  `decide_adjust_backoff` نفسها وقت اتخاذ القرار.
+- `TARGET_NEW_URLS` — صفر منفّذ في الكود كله، رفض صريح عند بناء الـconfig.
+- كل قرار (enacted أو لأ) بيتسجّل في `strategy_decisions.jsonl` — تدقيق
+  كامل من اليوم الأول، حتى في وضع المراقبة البحتة.
+
+#### 4. الاختبارات
+
+- `tests/unit/strategy/` (4 ملفات، 32 اختبار): `StrategyEngineConfig`'s
+  الحدود والرفض الصريح لـ`TARGET_NEW_URLS`، `StrategyDecision`'s
+  الحقول، `strategy_registry.py`'s الأمان (نسخة كاملة من اختبارات
+  `failure_registry.py`)، و`StrategyEngine`'s الحالتين (streak tracking،
+  التقييد بالسقف العام).
+- `tests/unit/spiders/test_spider_config.py` + `test_generic_spider.py`:
+  4 اختبارات جديدة لـ`strategy_backoff_multiplier` (افتراضي `None`،
+  القراءة من YAML، رفض الحدود، الوصول لـ`request.meta`).
+- `tests/unit/middlewares/test_circuit_breaker.py`: 9 اختبارات جديدة —
+  الانحدار الصريح (target غير مشترك = صفر تأثير حتى لو الـengine مفعّل)،
+  تفعيل/مراقبة كل قدرة على حدة، التقييد بالسقف، وضمان إن الـengine
+  المعطّل افتراضيًا ما بيلمسش سلوك الطبقة 2 القديم إطلاقًا.
+- `tests/integration/test_strategy_engine_live.py` (جديد، 3 اختبارات):
+  نفس القرار المعماري المتعمد اللي `test_response_classifier_live.py`
+  (بند 29) اتخده — استدعاء مباشر لـ`CircuitBreakerMiddleware.process_response`
+  ببيانات حقيقية من `/reject-pattern` الحي، بدون تشغيل crawl كامل (نفس
+  سبب تفادي محاولة حل Byparr حقيقية غير ذات صلة). يثبت: ADJUST_BACKOFF
+  فعليًا بيضاعف الـcooldown، SWITCH_PROVIDER فعليًا بيبدّل provider الـretry،
+  والـengine المعطّل افتراضيًا صفر تأثير على نفس البيانات الحقيقية.
+
+#### التحقق المحلي (قبل الـpush)
+
+`ruff check src/ tests/` نظيف، `mypy src/ --strict` نظيف (49 ملف).
+`pytest tests/unit --cov=src --cov-fail-under=85`: 590 نجح (نفس فشلي
+`oxymouse` المحليين المعروفين)، coverage الكلي 96.38% —
+`circuit_breaker.py` و`src/strategy/*` كلهم 100%. `pytest tests/contract`:
+35 نجح. `tests/integration --collect-only`: 55 اختبار (52 + 3 الجداد)
+بيتجمّعوا بنجاح.
+
+#### الحالة والخطوة الجاية
+
+الطبقة 3 (المنطق الأساسي: تبديل provider + تعديل backoff، خلف flags
+صريحة، معطّلة افتراضيًا) جاهزة، متحقق منها محليًا بالكامل، لسه محتاجة
+push + تأكيد CI حقيقي — نفس المعيار في كل بند سابق، خصوصًا الدليل الحي
+الجديد. الطبقات الثلاث (Taxonomy + Classifier + Strategy) دلوقتي مبنية
+ومتصلة ببعض؛ التوسعات المستقبلية (`TARGET_NEW_URLS` الفعلي، والداشبورد
+نفسه) مؤجلة عن قصد، زي ما اتفق مع المستخدم من البداية.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

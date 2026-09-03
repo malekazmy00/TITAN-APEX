@@ -143,6 +143,22 @@ jobs:
           # reading this artifact, the same discipline every other
           # docs/REQUIREMENTS.md update in this project already follows.
           TITAN_FAILURE_LOG_PATH: ${{ github.workspace }}/ci-diagnostics/failure_log.jsonl
+          # docs/REQUIREMENTS.md section 9 entry 30 ("الطبقة 3" --
+          # Strategy Engine): identical off-by-default reasoning and
+          # artifact-upload mechanism as TITAN_FAILURE_LOG_PATH directly
+          # above (src/strategy/strategy_registry.py's own module
+          # docstring mirrors failure_registry.py's). The Strategy
+          # Engine itself stays disabled by default everywhere (this
+          # round's own explicit design decision -- see
+          # StrategyEngineConfig.engine_enabled), so in practice this
+          # only ever fills in for the two entry-30 live tests that
+          # construct their own, deliberately enabled StrategyEngine
+          # instances (both of which override this to an isolated
+          # tmp_path of their own regardless) -- set here anyway for the
+          # same forward-looking consistency every other diagnostics env
+          # var in this step already has, ready the moment a real target
+          # config actually opts a capability into ENACT.
+          TITAN_STRATEGY_DECISION_LOG_PATH: ${{ github.workspace }}/ci-diagnostics/strategy_decisions.jsonl
         run: |
           mkdir -p "$TITAN_TRACE_DIR" "$TITAN_LOAD_EVENT_LOG_DIR"
           if [ -n "$(find tests/integration -name 'test_*.py' -print -quit)" ]; then

@@ -14,6 +14,8 @@ from src.alerting import AlertEvent
 from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.middlewares.circuit_breaker import CircuitBreakerMiddleware
 from src.response_classifier import ResponsePattern, ResponseStrategy
+from src.strategy.strategy_capability import StrategyEngineConfig, StrategyMode
+from src.strategy.strategy_engine import StrategyEngine
 
 
 class _FakeClock:
@@ -182,6 +184,9 @@ def test_from_crawler_reads_settings() -> None:
 
         def getfloat(self, name: str, default: float) -> float:
             return {"TITAN_CIRCUIT_COOLDOWN_SECONDS": 10.0}.get(name, default)
+
+        def getbool(self, name: str, default: bool) -> bool:
+            return default
 
         def get(self, name: str, default: object = None) -> object:
             return default
@@ -571,6 +576,9 @@ def test_from_crawler_reads_the_silent_block_cooldown_setting() -> None:
         def getfloat(self, name: str, default: float) -> float:
             return {"TITAN_CIRCUIT_SILENT_BLOCK_COOLDOWN_SECONDS": 120.0}.get(name, default)
 
+        def getbool(self, name: str, default: bool) -> bool:
+            return default
+
         def get(self, name: str, default: object = None) -> object:
             return default
 
@@ -580,3 +588,177 @@ def test_from_crawler_reads_the_silent_block_cooldown_setting() -> None:
     built = CircuitBreakerMiddleware.from_crawler(_FakeCrawler())
 
     assert built.silent_block_cooldown_seconds == 120.0
+
+
+# docs/REQUIREMENTS.md section 9 entry 30 ("الطبقة 3" -- Strategy
+# Engine): CircuitBreakerMiddleware's own real-time hooks into
+# StrategyEngine.decide_adjust_backoff / decide_switch_provider.
+
+
+def test_default_middleware_never_consults_the_engine_for_a_non_opted_in_target(
+    clock: _FakeClock,
+) -> None:
+    """Regression guard: a default CircuitBreakerMiddleware() (its own
+    always-constructed, disabled-by-default StrategyEngine) against a
+    target that never set strategy_backoff_multiplier must behave
+    exactly as it did before this entry -- the engine is never even
+    consulted (see _resolve_cooldown's own "opt-in" gate)."""
+    middleware = CircuitBreakerMiddleware(cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    for _ in range(5):
+        req = _request(url)
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    circuit = middleware._circuits["example.com"]
+    assert circuit.cooldown_override is None  # plain cooldown_seconds, unchanged
+
+
+def test_adjust_backoff_not_consulted_without_a_per_target_multiplier(clock: _FakeClock) -> None:
+    """Even with the engine fully enabled and ENACT, a request whose
+    target never opted in (no strategy_backoff_multiplier in meta) gets
+    zero adjustment -- opt-in is per-target, not global."""
+    engine = StrategyEngine(
+        StrategyEngineConfig(engine_enabled=True, adjust_backoff_mode=StrategyMode.ENACT)
+    )
+    middleware = CircuitBreakerMiddleware(
+        cooldown_seconds=60.0, clock=clock, strategy_engine=engine
+    )
+    url = "https://example.com/"
+    for _ in range(5):
+        req = Request(url)  # no strategy_backoff_multiplier meta at all
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    circuit = middleware._circuits["example.com"]
+    assert circuit.cooldown_override is None
+
+
+def test_adjust_backoff_enacted_scales_the_cooldown_for_an_opted_in_target(
+    clock: _FakeClock,
+) -> None:
+    engine = StrategyEngine(
+        StrategyEngineConfig(engine_enabled=True, adjust_backoff_mode=StrategyMode.ENACT)
+    )
+    middleware = CircuitBreakerMiddleware(
+        cooldown_seconds=60.0, clock=clock, strategy_engine=engine
+    )
+    url = "https://example.com/"
+    for _ in range(5):
+        req = Request(url, meta={"strategy_backoff_multiplier": 2.0})
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    circuit = middleware._circuits["example.com"]
+    assert circuit.cooldown_override == 120.0  # 60.0 * 2.0
+
+    clock.advance(65.0)  # past the plain 60s, still under the adjusted 120s
+    with pytest.raises(IgnoreRequest):
+        middleware.process_request(_request(url), spider=object())
+
+
+def test_adjust_backoff_observe_only_does_not_change_the_cooldown(clock: _FakeClock) -> None:
+    engine = StrategyEngine(
+        StrategyEngineConfig(engine_enabled=True, adjust_backoff_mode=StrategyMode.OBSERVE_ONLY)
+    )
+    middleware = CircuitBreakerMiddleware(
+        cooldown_seconds=60.0, clock=clock, strategy_engine=engine
+    )
+    url = "https://example.com/"
+    for _ in range(5):
+        req = Request(url, meta={"strategy_backoff_multiplier": 3.0})
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    circuit = middleware._circuits["example.com"]
+    assert circuit.cooldown_override is None  # computed, never applied
+
+
+def test_adjust_backoff_multiplier_clamped_to_the_global_ceiling(clock: _FakeClock) -> None:
+    engine = StrategyEngine(
+        StrategyEngineConfig(
+            engine_enabled=True,
+            adjust_backoff_mode=StrategyMode.ENACT,
+            adjust_backoff_max_multiplier=3.0,
+        )
+    )
+    middleware = CircuitBreakerMiddleware(
+        cooldown_seconds=60.0, clock=clock, strategy_engine=engine
+    )
+    url = "https://example.com/"
+    for _ in range(5):
+        req = Request(url, meta={"strategy_backoff_multiplier": 4.9})
+        middleware.process_response(req, _response(url, 503), spider=object())
+
+    circuit = middleware._circuits["example.com"]
+    assert circuit.cooldown_override == 180.0  # 60.0 * 3.0 ceiling, not 4.9x
+
+
+def test_switch_provider_enacted_changes_the_retry_requests_provider(clock: _FakeClock) -> None:
+    engine = StrategyEngine(
+        StrategyEngineConfig(
+            engine_enabled=True,
+            switch_provider_mode=StrategyMode.ENACT,
+            switch_provider_after_n_challenges=1,
+        )
+    )
+    middleware = CircuitBreakerMiddleware(clock=clock, strategy_engine=engine)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    req = Request(url, meta={"antibot_provider": "byparr"})
+
+    result = middleware.process_response(req, _response_with(url, 403, body=body), spider=object())
+
+    assert isinstance(result, Request)
+    assert result.meta["antibot_provider"] == "camoufox"  # next in PROVIDER_ROTATION after byparr
+
+
+def test_switch_provider_observe_only_does_not_change_the_provider(clock: _FakeClock) -> None:
+    engine = StrategyEngine(
+        StrategyEngineConfig(
+            engine_enabled=True,
+            switch_provider_mode=StrategyMode.OBSERVE_ONLY,
+            switch_provider_after_n_challenges=1,
+        )
+    )
+    middleware = CircuitBreakerMiddleware(clock=clock, strategy_engine=engine)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    req = Request(url, meta={"antibot_provider": "byparr"})
+
+    result = middleware.process_response(req, _response_with(url, 403, body=body), spider=object())
+
+    assert isinstance(result, Request)
+    assert result.meta["antibot_provider"] == "byparr"  # unchanged -- observe-only
+
+
+def test_switch_provider_below_streak_threshold_leaves_the_provider_unchanged(
+    clock: _FakeClock,
+) -> None:
+    engine = StrategyEngine(
+        StrategyEngineConfig(
+            engine_enabled=True,
+            switch_provider_mode=StrategyMode.ENACT,
+            switch_provider_after_n_challenges=3,
+        )
+    )
+    middleware = CircuitBreakerMiddleware(clock=clock, strategy_engine=engine)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    req = Request(url, meta={"antibot_provider": "byparr"})
+
+    result = middleware.process_response(req, _response_with(url, 403, body=body), spider=object())
+
+    assert isinstance(result, Request)
+    assert result.meta["antibot_provider"] == "byparr"  # streak == 1, below threshold 3
+
+
+def test_disabled_engine_never_touches_the_retried_requests_provider(clock: _FakeClock) -> None:
+    """The default, always-constructed-but-disabled StrategyEngine
+    (CircuitBreakerMiddleware()'s own default) must leave
+    TRY_ANTIBOT_PROVIDER's own Layer 2 behavior completely untouched."""
+    middleware = CircuitBreakerMiddleware(clock=clock)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    req = Request(url, meta={"antibot_provider": "byparr"})
+
+    result = middleware.process_response(req, _response_with(url, 403, body=body), spider=object())
+
+    assert isinstance(result, Request)
+    assert result.meta["antibot_provider"] == "byparr"

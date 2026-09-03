@@ -635,6 +635,55 @@ def test_user_agent_override_does_not_require_antibot_needed_or_a_real_browser_p
     assert config.user_agent_override == "Mozilla/5.0 (custom-test-ua)"
 
 
+# --- strategy_backoff_multiplier (docs/REQUIREMENTS.md section 9 entry
+# 30, "الطبقة 3" -- Strategy Engine) -----------------------------------
+
+
+def test_strategy_backoff_multiplier_defaults_to_none(tmp_path: Path) -> None:
+    """Every existing config (none of which sets this) must keep getting
+    None -- zero opt-in into ADJUST_BACKOFF unless a target explicitly
+    sets a value."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.strategy_backoff_multiplier is None
+
+
+def test_strategy_backoff_multiplier_is_read_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "strategy_backoff_multiplier: 2.5\n", encoding="utf-8"
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.strategy_backoff_multiplier == 2.5
+
+
+def test_strategy_backoff_multiplier_rejects_a_value_at_or_below_one(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "strategy_backoff_multiplier: 1.0\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError):
+        load_spider_config(str(config_file))
+
+
+def test_strategy_backoff_multiplier_rejects_a_value_above_the_absolute_ceiling(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "strategy_backoff_multiplier: 5.1\n", encoding="utf-8"
+    )
+
+    with pytest.raises(ConfigError):
+        load_spider_config(str(config_file))
+
+
 # --- selectors.item_group_size (docs/REQUIREMENTS.md section 9 entry 23,
 # Known Limitation #5's real fix) --------------------------------------
 

@@ -20,6 +20,18 @@ status code throws away. ``_handle_classifiable_response`` below is that
 second, narrower path — a genuine extension of this middleware, not a
 separate one, since both ultimately govern the same per-domain circuit
 state.
+
+docs/REQUIREMENTS.md section 9, "الطبقة 3" (Strategy Engine): this
+middleware always holds one :class:`~src.strategy.strategy_engine.StrategyEngine`
+instance (built in :meth:`from_crawler`, or injected directly for
+tests) and consults it at the two real-time decision points Layer 2
+already has (``_resolve_cooldown`` for ``ADJUST_BACKOFF``,
+``_handle_classifiable_response``'s own ``TRY_ANTIBOT_PROVIDER`` branch
+for ``SWITCH_PROVIDER``) — but every one of that engine's own methods
+returns ``None`` immediately while
+:attr:`~src.strategy.strategy_capability.StrategyEngineConfig.engine_enabled`
+is ``False`` (the default), so this is a genuine no-op, not a new code
+path, for every crawl until Layer 3 is explicitly turned on.
 """
 
 from __future__ import annotations
@@ -45,6 +57,8 @@ from src.response_classifier import (
     classify_response,
     strategy_for,
 )
+from src.strategy.strategy_capability import StrategyEngineConfig, StrategyMode
+from src.strategy.strategy_engine import StrategyEngine
 
 FAILURE_STATUSES = frozenset({500, 502, 503, 504})
 
@@ -97,6 +111,7 @@ class CircuitBreakerMiddleware:
         cooldown_seconds: float = DEFAULT_COOLDOWN_SECONDS,
         silent_block_cooldown_seconds: float = DEFAULT_SILENT_BLOCK_COOLDOWN_SECONDS,
         strategy_overrides: Mapping[ResponsePattern, ResponseStrategy] | None = None,
+        strategy_engine: StrategyEngine | None = None,
         clock: Callable[[], float] | None = None,
         logger: Logger | None = None,
         alert_dispatcher: AlertDispatcher | None = None,
@@ -120,6 +135,14 @@ class CircuitBreakerMiddleware:
         # override it here, without touching response_classifier.py's
         # own DEFAULT_STRATEGY_FOR_PATTERN.
         self.strategy_overrides = strategy_overrides
+        # docs/REQUIREMENTS.md section 9, "الطبقة 3": always a real
+        # StrategyEngine instance, never None by construction default --
+        # a fresh, disabled-by-default one (StrategyEngineConfig()) when
+        # the caller doesn't inject one, so every call site below can
+        # unconditionally consult self._strategy_engine without an
+        # `is not None` check scattered everywhere; the engine's own
+        # methods are what actually gate on engine_enabled.
+        self._strategy_engine = strategy_engine or StrategyEngine(StrategyEngineConfig())
         self._clock = clock or time.monotonic
         self.logger = logger or get_logger(__name__)
         self._alert_dispatcher = alert_dispatcher or AlertDispatcher()
@@ -128,6 +151,26 @@ class CircuitBreakerMiddleware:
     @classmethod
     def from_crawler(cls, crawler: Any) -> CircuitBreakerMiddleware:
         settings = crawler.settings
+        # docs/REQUIREMENTS.md section 9, "الطبقة 3": every field here
+        # is StrategyEngineConfig's own control-point surface -- the
+        # exact env vars a future dashboard's config store would
+        # eventually replace, without this middleware needing to change
+        # at all (see that config model's own module docstring).
+        strategy_config = StrategyEngineConfig(
+            engine_enabled=settings.getbool("TITAN_STRATEGY_ENGINE_ENABLED", False),
+            switch_provider_mode=StrategyMode(
+                settings.get("TITAN_STRATEGY_SWITCH_PROVIDER_MODE", StrategyMode.OBSERVE_ONLY.value)
+            ),
+            adjust_backoff_mode=StrategyMode(
+                settings.get("TITAN_STRATEGY_ADJUST_BACKOFF_MODE", StrategyMode.OBSERVE_ONLY.value)
+            ),
+            adjust_backoff_max_multiplier=settings.getfloat(
+                "TITAN_STRATEGY_ADJUST_BACKOFF_MAX_MULTIPLIER", 5.0
+            ),
+            switch_provider_after_n_challenges=settings.getint(
+                "TITAN_STRATEGY_SWITCH_PROVIDER_AFTER_N_CHALLENGES", 2
+            ),
+        )
         return cls(
             failure_threshold=settings.getint(
                 "TITAN_CIRCUIT_FAILURE_THRESHOLD", DEFAULT_FAILURE_THRESHOLD
@@ -139,6 +182,7 @@ class CircuitBreakerMiddleware:
                 "TITAN_CIRCUIT_SILENT_BLOCK_COOLDOWN_SECONDS",
                 DEFAULT_SILENT_BLOCK_COOLDOWN_SECONDS,
             ),
+            strategy_engine=StrategyEngine(strategy_config),
             alert_dispatcher=dispatcher_from_settings(settings),
         )
 
@@ -185,7 +229,7 @@ class CircuitBreakerMiddleware:
         domain = self._domain(request)
         circuit = self._circuit_for(domain)
         if response.status in FAILURE_STATUSES:
-            self._record_failure(domain, circuit, reason=f"http_{response.status}")
+            self._record_failure(domain, circuit, reason=f"http_{response.status}", request=request)
         elif response.status in CLASSIFIABLE_STATUSES:
             return self._handle_classifiable_response(request, response, domain, circuit)
         else:
@@ -195,8 +239,39 @@ class CircuitBreakerMiddleware:
     def process_exception(self, request: Request, exception: Exception, spider: Any) -> None:
         domain = self._domain(request)
         circuit = self._circuit_for(domain)
-        self._record_failure(domain, circuit, reason=type(exception).__name__)
+        self._record_failure(domain, circuit, reason=type(exception).__name__, request=request)
         return None
+
+    def _resolve_cooldown(
+        self,
+        request: Request,
+        domain: str,
+        base_cooldown_seconds: float,
+        failure_category: FailureCategory,
+    ) -> float:
+        """docs/REQUIREMENTS.md section 9, "الطبقة 3":
+        ``StrategyCapability.ADJUST_BACKOFF``'s real-time hook -- only
+        ever consults the Strategy Engine at all when *this request's
+        own target* opted in
+        (``SpiderConfig.strategy_backoff_multiplier`` set, reaching here
+        via ``request.meta["strategy_backoff_multiplier"]``); a target
+        that hasn't opted in gets zero engine interaction (not merely a
+        disabled-mode no-op inside the engine), so this stays cheap and
+        side-effect-free for every target this project has today.
+        """
+        target_multiplier = request.meta.get("strategy_backoff_multiplier")
+        if target_multiplier is None:
+            return base_cooldown_seconds
+        decision = self._strategy_engine.decide_adjust_backoff(
+            domain=domain,
+            request_url=request.url,
+            base_cooldown_seconds=base_cooldown_seconds,
+            target_multiplier=target_multiplier,
+            triggering_failure=failure_category,
+        )
+        if decision is not None and decision.enacted:
+            return float(decision.proposed_action["adjusted_cooldown_seconds"])
+        return base_cooldown_seconds
 
     def _handle_classifiable_response(
         self, request: Request, response: Response, domain: str, circuit: _DomainCircuit
@@ -241,11 +316,17 @@ class CircuitBreakerMiddleware:
             # 28's own byparr_middleware decision already reasoned
             # about avoiding).
             circuit.consecutive_failures += 1
+            cooldown_seconds = self._resolve_cooldown(
+                request,
+                domain,
+                self.silent_block_cooldown_seconds,
+                FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
+            )
             self._open_circuit(
                 domain,
                 circuit,
                 reason=f"classified_{pattern.value}",
-                cooldown_seconds=self.silent_block_cooldown_seconds,
+                cooldown_seconds=cooldown_seconds,
                 failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
             )
             return response
@@ -265,6 +346,7 @@ class CircuitBreakerMiddleware:
                     domain,
                     circuit,
                     reason=f"classified_{pattern.value}_antibot_retry_exhausted",
+                    request=request,
                     failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
                 )
                 return response
@@ -272,6 +354,26 @@ class CircuitBreakerMiddleware:
             new_request.meta["antibot_needed"] = True
             new_request.meta["circuit_breaker_antibot_retried"] = True
             new_request.dont_filter = True
+            # docs/REQUIREMENTS.md section 9, "الطبقة 3":
+            # StrategyCapability.SWITCH_PROVIDER's real-time hook -- a
+            # repeated CHALLENGE_PAGE streak against this domain (on
+            # the provider this request was already going to use) may
+            # propose rotating to a different provider instead of
+            # retrying the same one again. Always consulted (streak
+            # tracking needs every classified event to stay accurate),
+            # but only ever *applied* to this retry when the engine is
+            # both enabled and this capability is in ENACT mode -- see
+            # StrategyEngine.decide_switch_provider's own docstring.
+            switch_decision = self._strategy_engine.decide_switch_provider(
+                domain=domain,
+                request_url=request.url,
+                current_provider=request.meta.get("antibot_provider") or "byparr",
+                triggering_failure=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
+            )
+            if switch_decision is not None and switch_decision.enacted:
+                new_request.meta["antibot_provider"] = switch_decision.proposed_action[
+                    "new_provider"
+                ]
             self.logger.warning(
                 "circuit_breaker.retrying_via_antibot_provider",
                 extra={"domain": domain, "url": request.url, "pattern": pattern.value},
@@ -317,6 +419,7 @@ class CircuitBreakerMiddleware:
             domain,
             circuit,
             reason=f"classified_{pattern.value}",
+            request=request,
             failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION,
         )
         return response
@@ -326,17 +429,21 @@ class CircuitBreakerMiddleware:
         domain: str,
         circuit: _DomainCircuit,
         reason: str,
+        request: Request,
         failure_category: FailureCategory = FailureCategory.NETWORK_INFRA_TRANSIENT,
     ) -> None:
         circuit.consecutive_failures += 1
         if circuit.state is CircuitState.HALF_OPEN or (
             circuit.consecutive_failures >= self.failure_threshold
         ):
+            cooldown_seconds = self._resolve_cooldown(
+                request, domain, self.cooldown_seconds, failure_category
+            )
             self._open_circuit(
                 domain,
                 circuit,
                 reason=reason,
-                cooldown_seconds=self.cooldown_seconds,
+                cooldown_seconds=cooldown_seconds,
                 failure_category=failure_category,
             )
 

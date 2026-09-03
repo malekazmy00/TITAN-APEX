@@ -195,6 +195,19 @@ class SpiderConfig(BaseModel):
     # protocol has no such field at all, confirmed by reading its own
     # source -- a real, documented, best-effort-only gap, not a bug).
     user_agent_override: str | None = None
+    # docs/REQUIREMENTS.md section 9 entry 30 ("الطبقة 3" -- Strategy
+    # Engine): per-target opt-in for StrategyCapability.ADJUST_BACKOFF
+    # (src/strategy/strategy_capability.py) -- None (every existing
+    # config's unchanged default) means this target has not opted into
+    # backoff adjustment at all, so CircuitBreakerMiddleware never even
+    # consults the Strategy Engine for it (see that middleware's own
+    # _resolve_cooldown). When set, this is the multiplier *this
+    # target* wants applied on top of a classified failure's own base
+    # cooldown -- always clamped again at decide-time to
+    # StrategyEngineConfig.adjust_backoff_max_multiplier (the absolute,
+    # env-configured ceiling), so a target can request less than the
+    # ceiling but never more.
+    strategy_backoff_multiplier: float | None = Field(default=None, gt=1.0, le=5.0)
 
     @model_validator(mode="after")
     def _exactly_one_selectors_block_for_format(self) -> SpiderConfig:
