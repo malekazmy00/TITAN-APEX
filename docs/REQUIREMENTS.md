@@ -6581,13 +6581,63 @@ Gate: نفس `TITAN_BYPARR_URL` المستخدم في كل اختبارات mock
 `test-environment`: 213 نجح، coverage 100%. `tests/integration
 --collect-only`: 52 اختبار (47 + 5 الجديدة) بيتجمّعوا بنجاح بدون أخطاء.
 
-#### الحالة والخطوة الجاية
+#### تأكيد CI حقيقي (commit `7b8deaf`، run 33758200789، push مباشر على الفرع)
 
-الطبقة 2 جاهزة، متحقق منها محليًا بالكامل، لسه محتاجة push + تأكيد CI
-حقيقي — نفس المعيار المتبع في كل بند سابق، خصوصًا الدليل الحي
-(`test_response_classifier_live.py`) اللي محتاج الـstack الحي فعليًا
-(متاح بس في CI). الطبقة 3 (Strategy Engine) بانتظار تأكيد الطبقة دي
-الأول، زي ما المستخدم طلب صراحة في بند 28.
+اتفتح الـ run الحقيقي (`https://github.com/malekazmy00/TITAN-APEX/actions/runs/33758200789`)،
+اتنزّل الـ raw log الكامل والـ `ci-diagnostics` artifact الفعلي، واتقري
+بالتفصيل — نفس انضباط كل بند سابق:
+
+- **`conclusion: "success"`**, بدأ 12:57:03Z وخلص 13:11:41Z (~14.5 دقيقة).
+- **Unit tests**: `545 passed`، coverage الكلي 96.33% (>85% gate).
+- **Contract tests**: `35 passed`.
+- **test-environment unit tests**: `213 passed`، coverage 100%.
+- **Integration tests**: `52 passed, 2 warnings in 627.33s` (47 القدامى +
+  5 الجداد، **صفر regression**).
+
+**كل الـ5 اختبارات الحية الجديدة PASSED فعليًا بالاسم**، اتأكدت من الـlog
+مباشرة (مش افتراض من "52 passed" بس):
+`test_classify_response_matches_the_real_mock_target_shape[empty-silent-block]`،
+`[headers-header-fingerprinted]`، `[challenge-challenge-page]`،
+`test_silent_block_opens_the_circuit_via_circuit_breaker_against_a_real_response`،
+`test_challenge_page_returns_a_retry_request_via_circuit_breaker_against_a_real_response`
+— كلهم PASSED، يعني الدليل المباشر اللي البند طلبه بالحرف ("تصنيف مختلف
+وصحيح لكل نمط من التلاتة") **اتحقق فعليًا ضد الشبكة الحية**، مش محليًا
+بس.
+
+**الدليل الأهم — تأكيد إصلاح الـfalse positive حقيقي في CI نفسها**: نزّلت
+الـartifact الحقيقي وقريت `failure_log.jsonl` — **7 سجلات حقيقية** من هذا
+الـrun:
+
+| source | category | التفاصيل | target |
+|---|---|---|---|
+| `patchright_provider.solve_failed` ×3 | antibot-fingerprint-rejection | `interstitial-close`/`accept-cookies` timeout حقيقي | `localhost:8080/...` |
+| `circuit_breaker.classified_rejection` ×2 | antibot-fingerprint-rejection | `response_pattern=unrecognized` (401 على `/feed-protected`، بدون header/marker معروف) | `localhost:8080/feed-protected` |
+| `playwright_middleware.scroll_diagnostics` ×2 | **no-scrollable-content** | `quotes.toscrape.com/js/` و`.../page/2/` | — |
+
+آخر سطرين هما **الدليل المباشر إن إصلاح الفجوة اشتغل فعليًا**: نفس
+الرابطين بالحرف اللي في run entry 28 (33690380371) اتسجلوا غلط
+كـ`timing-race` — دلوقتي، بنفس الظروف الحية بالظبط، بيتصنفوا صح
+كـ`no-scrollable-content`. مش تخمين ولا افتراض — نفس الصفحات، نفس
+الشرط (`initial_height == final_height`)، تصنيف مختلف وصحيح.
+
+ملحوظة صادقة: سجلات الـ`/reject-pattern` (silent-block/header-
+fingerprinted/challenge-page) اللي الاختبار الحي أنشأها ماظهرتش في
+`ci-diagnostics/failure_log.jsonl` المشترك — **متعمّد، مش نقص**:
+`test_response_classifier_live.py`'s الخاص بيحوّل `TITAN_FAILURE_LOG_PATH`
+مؤقتًا لملف `tmp_path` معزول (ويرجّعه زي ما كان في `finally`) عشان
+سجلات الاختبار الصناعية ما تلوثش ملف التشخيص الحقيقي المشترك — نفس
+مبدأ العزل اللي كل unit test في المشروع بيتبعه، بس هنا لدليل حي بدل
+mock. الدليل الحقيقي على نجاح التصنيف نفسه هو نجاح الاختبارات الـ5
+بالاسم فوق، مش وجودها في الملف المشترك.
+
+**الخلاصة**: الطبقة 2 (response_classifier.py + توصيل circuit_breaker
+الكامل + إصلاح NO_SCROLLABLE_CONTENT + mock-target endpoint + الدليل
+الحي) **مؤكدة CI فعليًا** — صفر regression، والدليلان الأهم (تصنيف
+صحيح لكل الأنماط الحية، وإصلاح false-positive حقيقي مؤكد بنفس البيانات
+اللي كشفت المشكلة أصلًا) اتحققوا مباشرة من بيانات CI حقيقية.
+
+الطبقة 3 (Strategy Engine) جاهزة للبدء دلوقتي، زي ما المستخدم طلب
+صراحة.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
