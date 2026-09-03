@@ -7047,11 +7047,43 @@ BLOCKED (score=100) بينما الـjitter لسه ALLOWED (score=20) — فرق
 `coefficient_of_variation`/`is_pattern_too_regular` الجداد لتغطية
 100%)، coverage 99% إجمالي، `trust_score.py` نفسه 100%.
 
-**⏳ لسه محتاج تأكيد CI حقيقي** — الأرقام فوق من تشغيل Flask dev server
-محلي مباشر، مش الـstack الكامل (Docker + Anubis + JA4-proxy) اللي CI
-بيشغّله فعليًا. هيتضاف قسم تأكيد CI حقيقي (run ID + نتيجة فعلية من
-الـlog) بعد الدفع، بنفس انضباط كل بند سابق — مفيش ادّعاء إغلاق قبل
-كده.
+#### 6. ✅ تأكيد CI حقيقي (commit `db9d9e2`، run 33805946963) — نفس الأرقام بالحرف، على الـstack الكامل
+
+الدفع تم، والاثنين workflows رجعوا `success` حقيقي: **`Lint`**
+([run 33805946950](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33805946950))
+و**`CI`**
+([run 33805946963](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33805946963)،
+job 100816314461). فُتح الـraw log الكامل فعليًا (مش الاكتفاء بعلامة ✅
+الخضرا)، والدليل المباشر:
+
+- **`test-environment unit tests`**: `246 passed in 18.16s` — بما فيهم
+  الـ26 اختبار الجداد لـ`test_trust_score.py` (كلهم PASSED بالاسم في
+  الـlog) والـ7 اختبار الجداد في `test_app.py`.
+- **`Integration tests (live network)`**: `57 passed, 2 warnings in
+  652.93s` — صفر فشل، صفر skip. الاختبارين الجداد اتنفذوا فعليًا على
+  الـstack الكامل (Docker + Anubis + JA4-proxy، مش Flask dev server
+  محلي زي القسم فوق) وطبعوا الـtrail الكامل بنفس انضباط
+  `_live_helpers.py`.
+
+**الأرقام الحقيقية من الـstack الكامل — مطابقة بالحرف للأرقام المحلية
+في القسم فوق (صفر انحراف بين البيئتين):**
+
+| السيناريو | RATE_LIMITED | CHALLENGE | BLOCKED |
+|---|---|---|---|
+| توقيت ثابت (worst case) | الطلب 4 (score=45) | الطلب 5 (score=70) | الطلب 6 (score=100) |
+| jitter طبيعي + referer منطقي | الطلب 7 (score=40) | الطلب 8 (score=60) | الطلب 10 (score=100) |
+
+سطر المقارنة الكمّية نفسه من الـlog الحقيقي، حرفيًا:
+
+> fixed-timing reached BLOCKED at request 6 (score 100); at that same
+> request, natural-jitter's score was only 20 (tier=allowed).
+> natural-jitter itself first reached BLOCKED at request 10.
+
+مطابقة تامة للتشغيلة المحلية (قسم 4 فوق) تؤكد إن التصميم deterministic
+فعليًا (الإشارات الثلاث كلها boolean-triggered، مش قيم مستمرة حساسة
+لعشوائية الـjitter الفعلية) — مش صدفة تشغيلة واحدة. **بند 31 مقفول
+رسميًا: تنفيذ + توثيق + تحقق محلي + تأكيد CI حقيقي بدليل log مفتوح
+ومقروء، مش علامة خضرا بس.**
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
