@@ -26,7 +26,8 @@
 | CAPTCHA (reCAPTCHA/hCAPTCHA) | تحدي بصري/تفاعلي | ⬜ غير مُختبر |
 | Proof-of-Work (Anubis-style) | تحدي حسابي | ✅ اتغلب عليه (Round 2/3) |
 | WAF signature-based | فحص أنماط الطلبات | ⬜ (SafeLine مؤجل) |
-| Behavioral biometrics | حركة ماوس/كتابة/scroll | ⬜ مسجّل كهدف بحثي (fpscanner+JA4) |
+| Behavioral biometrics | حركة ماوس/كتابة/scroll | ⬜ **مُفصَّلة بدقة (2026-09-03)**: `docs/PHASE_2_BACKLOG.md` — فحص كود حقيقي أكّد: حركة الماوس (oxymouse) موجودة بس نقطة استدعاء واحدة (hover قبل scroll)، صفر velocity/acceleration/pause/overshoot/context-awareness؛ توقيت الكتابة (`_login.py`'s `page.fill()`) صفر تمامًا؛ session-level behavior (dwell/idle/tab-switch) صفر ومختلف عن rate limiter (بند 22، ده inter-request مش session narrative). جرد كامل + تصميم مقترح لكل بند، صفر تنفيذ لسه |
+| Canvas/WebGL/AudioContext/WebRTC fingerprint | بصمات مستوى المتصفح | ⬜ **مُفصَّلة (2026-09-03)**: `docs/PHASE_2_BACKLOG.md` — فحص مصدر حزمة camoufox المُثبَّتة أكّد: canvas+audio seed **بيتدوّر تلقائيًا** كل launch (التقرير الأصلي غلط هنا)، WebGL **غائب تمامًا** (مش جزئي — مُكتشف ومُراقَب فعليًا من بند 19، مش فجوة جديدة)، WebRTC **مش محمي** رغم إن Camoufox عنده `block_webrtc` جاهز ومش مستخدم (فجوة حقيقية سهلة السد). Patchright: صفر تغطية للأربعة كلهم (تصميمه أصلًا مختلف — إزالة إشارات أتمتة، مش تدوير بصمة) |
 | ML bot scoring (Cloudflare-style) | نقاط تراكمية من كذا إشارة مع بعض | ⬜ غير قابل للمحاكاة الكاملة (مفتوح المصدر محدود هنا) |
 | Honeypots (روابط/حقول مخفية) | فخاخ تكشف الأتمتة | ✅ Round 1 |
 | Decoy/poisoned data | بيانات قديمة مخفية لتسميم النتائج | ✅ Round 1 — **ملحوظة مسجّلة (2026-08-30)**: اتأكّد من الكود (`decoy_data.py`) إنها **ثابتة (static)**، مش تفاعلية — نفس الـtwin لكل زائر، صفر اعتماد على اشتباه/سلوك. الصيغة **التفاعلية** (بيانات مختلفة لمن يُشتبه فيه تحديدًا) مسجّلة كفجوة منفصلة تحتها في نفس المحور |
