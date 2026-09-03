@@ -45,6 +45,17 @@ bots:
     path_regex: ^/spa-catalog$
     action: ALLOW
 
+  # docs/REQUIREMENTS.md section 9 entry 29 ("الطبقة 2" -- Protection
+  # Classifier): same reasoning and placement as spa-catalog-route
+  # above -- /reject-pattern's own deliberate 403 shapes are the thing
+  # under test (src/response_classifier.py's three ResponsePattern
+  # values), not Anubis's own, unrelated challenge/deny page, which
+  # would otherwise shadow every one of them behind a real 200
+  # challenge response instead.
+  - name: reject-pattern-route
+    path_regex: ^/reject-pattern$
+    action: ALLOW
+
   # You can import the entire default config with this macro:
   # - import: (data)/meta/default-config.yaml
 

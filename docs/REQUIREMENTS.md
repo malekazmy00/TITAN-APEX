@@ -6397,6 +6397,198 @@ infrastructure بس).
 والطبقة 3 (Strategy Engine) جاهزين للبدء دلوقتي، زي ما المستخدم طلب
 صراحة.
 
+### 29. نظام تشخيص وقرار موحّد — الطبقة 2: Protection Classifier (طلب المستخدم صراحة، مبني فوق الطبقة 1 المؤكدة)
+
+نفس نظام الـ3 طبقات (بند 28)، الطبقة 2 دلوقتي: تصنيف *شكل* أي response
+مرفوض (403/429/إلخ) لنمط معروف (headers مميزة، شكل الـbody)، وتوصيله
+بـCircuit Breaker الموجود بحيث كل نمط يتصرف باستراتيجية مختلفة —
+امتداد لـCircuit Breaker، مش middleware منفصل. المستخدم بعت المواصفات
+كاملة لأول مرة هنا (الملف الأصلي المخطَّط قبل كده اتبنى بس ما اتبعتش
+فعليًا).
+
+#### 1. src/response_classifier.py — منطق التصنيف الصرف
+
+وحدة جديدة، صفر I/O وصفر استيراد Scrapy (قابلة للاختبار مباشرة بـdicts
+يدوية):
+
+- **`ResponsePattern`** (`StrEnum`, 4 قيم): `HEADER_FINGERPRINTED`
+  ("header-fingerprinted")، `SILENT_BLOCK` ("silent-block")،
+  `CHALLENGE_PAGE` ("challenge-page")، `UNRECOGNIZED` ("unrecognized").
+  الأولوية عند التصنيف (`classify_response`): header معروف يفوز أولًا
+  (أدق إشارة متاحة — Cloudflare's الحقيقي `cf-mitigated` مثلًا ممكن
+  يظهر مع body فاضي أو غامض)، بعدين body فاضي/whitespace-only =
+  silent-block، بعدين marker تحدي معروف في الـbody = challenge-page،
+  وإلا unrecognized (fallback صادق، زي `FailureCategory.UNKNOWN` بالظبط
+  — مش تخمين لما مفيش دليل كافي).
+- **`KNOWN_BLOCK_HEADERS`**: 4 headers — 3 حقيقية من vendors فعليين
+  (`cf-mitigated` Cloudflare، `x-datadome` DataDome، `x-px-block-reason`
+  PerimeterX/HUMAN) + `x-antibot-block` (fixture حتمي خاص بمشروعنا،
+  يستخدمه `/reject-pattern?pattern=headers` بس، مش vendor حقيقي).
+- **`KNOWN_CHALLENGE_MARKERS`**: عبارات شائعة واقعية ("checking your
+  browser"، "verify you are human"، "access denied"، "attention
+  required"، "cloudflare") + `titan-apex-mock-challenge` (fixture
+  المشروع الخاص، يستخدمه `/reject-pattern?pattern=challenge`).
+- **`ResponseStrategy`** (`StrEnum`, 3 قيم): `IMMEDIATE_LONG_BACKOFF`،
+  `TRY_ANTIBOT_PROVIDER`، `STANDARD`. المستخدم حدد استراتيجية صريحة
+  لنمطين بس (فاضي بلا علامة = backoff طويل فورًا → `SILENT_BLOCK`؛
+  صفحة تحدي واضحة = جرّب antibot provider → `CHALLENGE_PAGE`).
+  `HEADER_FINGERPRINTED`/`UNRECOGNIZED` ما اتحددش لهم استراتيجية —
+  اتساب على `STANDARD` (السلوك الحالي الصحيح أصلًا) عمدًا مش تخمين:
+  header فيه اسم vendor لوحده مش دليل إن التارجت أصلًا عنده antibot
+  provider شغّال، وunrecognized مش واثق في حاجة بالتعريف. قابل
+  للتهيئة بالكامل عبر `strategy_for(pattern, overrides=...)` —
+  `CircuitBreakerMiddleware`'s الخاص `strategy_overrides` constructor
+  param، زي ما المستخدم طلب ("قابلة للتهيئة عبر config").
+
+#### 2. توصيله بـCircuit Breaker (src/middlewares/circuit_breaker.py)
+
+- `CLASSIFIABLE_STATUSES = {401, 403, 407, 429}` — منفصل تمامًا عن
+  `FAILURE_STATUSES` الموجود (`{500, 502, 503, 504}`): الأول أبدًا مش
+  قرار antibot، والتاني (401/403/407/429) هو أمثلة المستخدم نفسها
+  ("403/429/إلخ").
+- `_DomainCircuit` اكتسب حقل جديد `cooldown_override: float | None` —
+  `None` يعني "استخدم `cooldown_seconds` العادي"، وبيتحدد بقيمة مختلفة
+  بس لما الدائرة تتفتح فجأة عبر `IMMEDIATE_LONG_BACKOFF`
+  (`silent_block_cooldown_seconds`, افتراضي 300 ثانية — 5 أضعاف الـ60
+  ثانية العادية، قابل للتهيئة عبر
+  `TITAN_CIRCUIT_SILENT_BLOCK_COOLDOWN_SECONDS`) — بيترجع `None` تاني
+  عند أي إغلاق ناجح (`_record_success`) عشان فتحة عادية لاحقة على نفس
+  الدومين ما تورّثش cooldown ممدود قديم.
+- `_handle_classifiable_response` (جديد): يصنّف الـresponse، ويحدد
+  الاستراتيجية، وبعدين:
+  - **`IMMEDIATE_LONG_BACKOFF`**: يفتح الدائرة فورًا (بيتخطى
+    `failure_threshold` تمامًا)، بـcooldown ممدود. تسجيل واحد بس في
+    failure_registry (لحظة الفتح، `source="circuit_breaker.opened"`) —
+    مش تسجيل منفصل زيادة، لأن اللحظتين متطابقتين هنا (مطابق لقرار
+    entry 28 بعدم تسجيل byparr_middleware's catch-all عشان تفادي
+    double-counting).
+  - **`TRY_ANTIBOT_PROVIDER`**: يرجّع نسخة من الـrequest بـ
+    `meta["antibot_needed"] = True` و
+    `meta["circuit_breaker_antibot_retried"] = True` — Scrapy
+    بيعيد جدولتها تلقائيًا (إرجاع `Request` من `process_response`
+    سلوك موثّق في Scrapy نفسه). **حارس ضد اللوب اللانهائي**: طلب
+    اتصعّد قبل كده (`circuit_breaker_antibot_retried` موجود بالفعل)
+    ولو رجع classifiable تاني، بيسقط لمسار الفشل العادي بدل ما
+    يتصعّد تاني — بدون الحارس ده، صفحة ثابتة زي
+    `/reject-pattern?pattern=challenge` (مفيهاش تحدي حقيقي أي antibot
+    provider يقدر "يحله") كانت هتعمل لوب لحد ما حد أعلى من Scrapy نفسه
+    (زي `DEPTH_LIMIT`) يوقفها — مش إيقاف نظيف ومقصود.
+  - **`STANDARD`**: يسجّل event التصنيف نفسه (كل رفض مصنّف على حدة —
+    granularity أعلى من مسار الـ5xx العادي اللي بيسجّل بس لحظة الفتح،
+    لأن هنا الـpattern نفسه هو الإشارة المفيدة مش مجرد عداد — نفس
+    granularity اللي byparr_provider.py/camoufox_provider.py بيسجلوا
+    بيها أصلًا كل رفض على حدة)، وبعدين يمرّ بمسار `_record_failure`
+    العادي (بيفتح الدائرة بس لو وصل `failure_threshold`).
+  - كل الـ`record_failure` calls الجديدة بـ
+    `failure_category=FailureCategory.ANTIBOT_FINGERPRINT_REJECTION`
+    (مش `NETWORK_INFRA_TRANSIENT` الافتراضي القديم — رفض antibot حقيقي
+    مش مشكلة infra). `_record_failure`/`_open_circuit` اكتسبوا
+    parameter `failure_category` (افتراضي `NETWORK_INFRA_TRANSIENT` —
+    يحافظ على سلوك الـ5xx/exception الموجود بالظبط، صفر تغيير في أي
+    اختبار قديم).
+- **28 اختبار وحدة جديد** في `tests/unit/test_response_classifier.py`
+  (18) + إضافات لـ`tests/unit/middlewares/test_circuit_breaker.py`
+  (16 اختبار جديد، منها اختبارات الحارس ضد اللوب، الـcooldown الممدود
+  وإعادة تعيينه، الـstrategy_overrides، وكل مسارات التسجيل الثلاثة).
+
+#### 3. إصلاح الاكتشاف من الطبقة 1 (false positive في timing-race)
+
+`FailureCategory` اكتسب فئة تاسعة: `NO_SCROLLABLE_CONTENT`
+("no-scrollable-content"). في `playwright_middleware.py`'s
+`scroll_diagnostics` guard: قبل ما نسجّل `TIMING_RACE`، بنقارن
+`initial_height` بـ`final_height` — لو متساويين تمامًا (صفر تغيير من
+أول قياس)، التصنيف بقى `NO_SCROLLABLE_CONTENT` (`resolution_status
+RESOLVED` — الـmisclassification نفسه هو اللي "اتحل" بإضافة الفئة دي)
+مش `TIMING_RACE`. الدليل الحقيقي على المشكلة: entry 28's CI run نفسه
+(33690380371) سجّل 5 حالات `timing-race` كلها على صفحات
+`quotes.toscrape.com/js/`، `.../page/2/`، وغيرها — بمراجعتها واحدة
+واحدة، `initial_height == final_height` في كل الحالات (الصفحة مفيهاش
+أصلًا محتوى بيتحمّل بالسكرول، مش إن التحميل اتمنع). صفحة `entry 27`
+الحقيقية اللي اتأكد إصلاحها (`webscraper.io/test-sites/scroll`) دايمًا
+بتوريّ `final_height > initial_height` بمجرد ما أول batch ينجح يتحمّل،
+بغض النظر عن الـbug — الفرق ده هو دليل التمييز، مش افتراض. اختباران
+جديدان في `tests/unit/middlewares/test_playwright_middleware.py`
+(واحد لكل فرع)، والاختبار القديم (`test_zero_requests_during_scroll_
+records_a_timing_race_failure`) اتصلّح ليستخدم ارتفاعين مختلفين
+(1200→1800) عشان يفضل يغطي فرع `TIMING_RACE` الحقيقي بدل ما ينزلق
+لفرع `NO_SCROLLABLE_CONTENT` الجديد بالغلط.
+
+#### 4. mock-target: `/reject-pattern` endpoint اختباري
+
+`test-environment/mock-target/app.py` — route جديد `GET /reject-pattern`
+(نفس شكل `/test-expire-session`/`/honeypot-trap/<token>` الموجودين —
+test-only instrumentation، مش جزء من أي flow حقيقي)، بيرجّع 403 دايمًا،
+و`?pattern=` بيحدد الشكل:
+
+| `?pattern=` | الشكل | `ResponsePattern` المتوقع |
+|---|---|---|
+| `empty` (افتراضي) | body فاضي تمامًا، بدون header مميز | `SILENT_BLOCK` |
+| `headers` | body فاضي، لكن `X-Antibot-Block: titan-apex-mock` | `HEADER_FINGERPRINTED` |
+| `challenge` | صفحة HTML كاملة فيها `titan-apex-mock-challenge` + "verify you are human" | `CHALLENGE_PAGE` |
+| أي حاجة تانية | 400 | (خطأ صريح، مش تخمين) |
+
+`test-environment/anubis/botPolicy.yaml` اكتسب ALLOW rule جديد
+(`^/reject-pattern$`، نفس مكان ونمط `spa-catalog-route`/
+`warmup-referer-check-routes` الموجودين) — بدونه، Anubis كان هيبلّع
+الطلب بصفحة challenge خاصة بيه هو (200 حقيقي) قبل ما يوصل لـmock-target
+أصلًا، فيغطّي كل الأنماط التلاتة تحت رد واحد غير ذي صلة. 5 اختبارات
+وحدة جديدة في `test-environment/tests/test_app.py` (الأربع أنماط +
+الـ400 للـpattern غير معروف) — 213 اختبار في test-environment كله،
+coverage 100%، صفر انكسار.
+
+#### 5. الدليل الحي (live proof)
+
+`tests/integration/test_response_classifier_live.py` (جديد، 5
+اختبارات) — **قرار معماري متعمد يستاهل توضيح**: مش عبر `scrapy
+runspider` subprocess زي باقي اختبارات mock-target-* (نفس الملف نفسه
+شرحه كامل في الـdocstring بتاعه). السبب: لو استخدمنا crawl كامل عبر
+`GenericSpider`، استراتيجية `TRY_ANTIBOT_PROVIDER` هتخلي
+`CircuitBreakerMiddleware` يرجّع `Request` مُعاد جدولته فعليًا عبر
+محرك Scrapy، وده هيشغّل محاولة حل Byparr حقيقية ضد صفحة ثابتة
+(`/reject-pattern?pattern=challenge`) مفيهاش أصلًا تحدي حقيقي أي
+antibot provider يقدر "يحله" — تأخير وسطح فشل حقيقي ماله علاقة بالمقاس
+هنا (دقة التصنيف نفسه، مش نجاح الـescalation الكامل ضد صفحة مش مصممة
+تُحل، ده خارج نطاق البند صراحة). البديل المتبع: `urllib.request` (نفس
+المكتبة اللي `byparr_provider.py` بيستخدمها فعليًا لطلباته الحقيقية)
+لجلب الـ3 أنماط من الـstack الحي مباشرة، وبعدين:
+
+1. `classify_response()` مباشرة على البيانات الحقيقية (status/headers/
+   body حقيقيين من الشبكة، مش dict يدوي) — 3 اختبارات
+   parametrized، واحد لكل نمط. **ده الدليل المباشر اللي البند طلبه
+   بالحرف**: "اختبار يتأكد إن response_classifier بيرجّع تصنيف مختلف
+   وصحيح لكل نمط من التلاتة، بدليل مباشر مش تخمين."
+2. `CircuitBreakerMiddleware.process_response()` مباشرة (بناء
+   `scrapy.http.Response` حقيقي من نفس البيانات، بدون تشغيل محرك
+   Scrapy الكامل) — اختباران إضافيان يتأكدوا من الـdispatch الفعلي
+   (فتح الدائرة فورًا لـ`silent-block`، إرجاع `Request` صحيح
+   لـ`challenge-page`) وكتابة `failure_registry` الحقيقية (عبر
+   `TITAN_FAILURE_LOG_PATH` env var، نفس آلية entry 28 بالظبط).
+
+Gate: نفس `TITAN_BYPARR_URL` المستخدم في كل اختبارات mock-target
+الحية (نفس الإشارة الأساسية — "هل الـstack الحي شغّال" — حتى إن
+الاختبار ده نفسه ما بيستخدمش Byparr، مطابق تمامًا لقرار
+`test_mock_target_warmup_referer_live.py` السابق بنفس الحجة). لم يمكن
+تشغيل الـstack محليًا في هذا الـsandbox (Docker daemon بدون صلاحية —
+نفس القيد المعروف طول الجلسة دي)؛ التأكيد الحقيقي هيجي من CI، زي كل
+اختبار حي تاني في هذا المشروع.
+
+#### التحقق المحلي (قبل الـpush)
+
+`ruff check src/ tests/` نظيف، `mypy src/ --strict` نظيف (44 ملف).
+`pytest tests/unit --cov=src --cov-fail-under=85`: 543 نجح (نفس الفشلين
+الغير مرتبطين المعروفين من `oxymouse` محليًا)، coverage الكلي 96.16%
+(`circuit_breaker.py` نفسه 100%). `pytest tests/contract`: 35 نجح.
+`test-environment`: 213 نجح، coverage 100%. `tests/integration
+--collect-only`: 52 اختبار (47 + 5 الجديدة) بيتجمّعوا بنجاح بدون أخطاء.
+
+#### الحالة والخطوة الجاية
+
+الطبقة 2 جاهزة، متحقق منها محليًا بالكامل، لسه محتاجة push + تأكيد CI
+حقيقي — نفس المعيار المتبع في كل بند سابق، خصوصًا الدليل الحي
+(`test_response_classifier_live.py`) اللي محتاج الـstack الحي فعليًا
+(متاح بس في CI). الطبقة 3 (Strategy Engine) بانتظار تأكيد الطبقة دي
+الأول، زي ما المستخدم طلب صراحة في بند 28.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

@@ -344,35 +344,67 @@ class PlaywrightMiddleware:
                 },
             )
             if diagnostics.requests_during_scroll == 0:
-                # Unified failure taxonomy (docs/REQUIREMENTS.md section
-                # 9 entry 28): the exact signal entry 25 investigated
-                # and entry 27's mouse.wheel() fix targeted -- the
-                # scroll trigger genuinely never fired a single request.
-                # A page with no lazy-load content at all also reads
-                # this way (harmless false positive on this signal
-                # alone, same as the diagnostic itself already
-                # documents) -- resolution_status is RESOLVED (not
-                # unresolved) because a real, CI-confirmed fix exists
-                # for the class of failure this represents (entry 27,
-                # confirmed 4/4 independent CI runs); an individual
-                # occurrence still gets recorded since the underlying
-                # mechanism remains a real, if rare, race.
-                record_failure(
-                    FailureRecord(
-                        timestamp=datetime.now(tz=UTC),
-                        target=request.url,
-                        provider="playwright",
-                        failure_category=FailureCategory.TIMING_RACE,
-                        raw_signal={
-                            "attempts_used": diagnostics.attempts_used,
-                            "initial_height": diagnostics.initial_height,
-                            "final_height": diagnostics.final_height,
-                            "requests_during_scroll": diagnostics.requests_during_scroll,
-                        },
-                        resolution_status=ResolutionStatus.RESOLVED,
-                        source="playwright_middleware.scroll_diagnostics",
+                # docs/REQUIREMENTS.md section 9 entry 29 ("الطبقة 2"):
+                # a real, CI-observed false positive caught in entry
+                # 28's own CI-confirmation run -- requests_during_scroll
+                # == 0 alone cannot distinguish "the scroll trigger
+                # should have loaded more content but didn't" (a real
+                # timing race) from "this page never had scroll-
+                # triggered content to load in the first place" (page
+                # height never changed even once -- there was nothing
+                # to race against). initial_height == final_height is
+                # direct, in-the-log proof of the second case: real
+                # infinite-scroll pages this project has confirmed the
+                # fix against (entry 27's webscraper.io/test-sites/scroll)
+                # always show final_height > initial_height once the
+                # first successful batch loads, scroll bug or not.
+                if diagnostics.initial_height == diagnostics.final_height:
+                    record_failure(
+                        FailureRecord(
+                            timestamp=datetime.now(tz=UTC),
+                            target=request.url,
+                            provider="playwright",
+                            failure_category=FailureCategory.NO_SCROLLABLE_CONTENT,
+                            raw_signal={
+                                "attempts_used": diagnostics.attempts_used,
+                                "initial_height": diagnostics.initial_height,
+                                "final_height": diagnostics.final_height,
+                                "requests_during_scroll": diagnostics.requests_during_scroll,
+                            },
+                            resolution_status=ResolutionStatus.RESOLVED,
+                            source="playwright_middleware.scroll_diagnostics",
+                        )
                     )
-                )
+                else:
+                    # Unified failure taxonomy (docs/REQUIREMENTS.md
+                    # section 9 entry 28): the exact signal entry 25
+                    # investigated and entry 27's mouse.wheel() fix
+                    # targeted -- the scroll trigger genuinely never
+                    # fired a single request, on a page that (unlike
+                    # the branch above) does have real scroll-triggered
+                    # content, since its height did change.
+                    # resolution_status is RESOLVED (not unresolved)
+                    # because a real, CI-confirmed fix exists for the
+                    # class of failure this represents (entry 27,
+                    # confirmed 4/4 independent CI runs); an individual
+                    # occurrence still gets recorded since the
+                    # underlying mechanism remains a real, if rare, race.
+                    record_failure(
+                        FailureRecord(
+                            timestamp=datetime.now(tz=UTC),
+                            target=request.url,
+                            provider="playwright",
+                            failure_category=FailureCategory.TIMING_RACE,
+                            raw_signal={
+                                "attempts_used": diagnostics.attempts_used,
+                                "initial_height": diagnostics.initial_height,
+                                "final_height": diagnostics.final_height,
+                                "requests_during_scroll": diagnostics.requests_during_scroll,
+                            },
+                            resolution_status=ResolutionStatus.RESOLVED,
+                            source="playwright_middleware.scroll_diagnostics",
+                        )
+                    )
         return HtmlResponse(
             url=request.url, body=page.html.encode("utf-8"), status=page.status, request=request
         )

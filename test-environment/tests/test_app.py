@@ -864,6 +864,51 @@ def test_test_expire_session_without_a_session_reports_no_session(tmp_path: Path
     assert response.get_json() == {"status": "no_session"}
 
 
+# --- /reject-pattern (docs/REQUIREMENTS.md section 9 entry 29, "الطبقة
+# 2" -- Protection Classifier): deterministic fixtures for
+# src/response_classifier.py's three ResponsePattern values. ----------
+
+
+def test_reject_pattern_default_is_a_completely_empty_403(client: FlaskClient) -> None:
+    response = client.get("/reject-pattern")
+
+    assert response.status_code == 403
+    assert response.data == b""
+    assert "X-Antibot-Block" not in response.headers
+
+
+def test_reject_pattern_empty_is_a_completely_empty_403(client: FlaskClient) -> None:
+    response = client.get("/reject-pattern?pattern=empty")
+
+    assert response.status_code == 403
+    assert response.data == b""
+
+
+def test_reject_pattern_headers_carries_the_known_block_header(client: FlaskClient) -> None:
+    response = client.get("/reject-pattern?pattern=headers")
+
+    assert response.status_code == 403
+    assert response.headers.get("X-Antibot-Block") == "titan-apex-mock"
+
+
+def test_reject_pattern_challenge_is_a_full_html_page_with_the_known_marker(
+    client: FlaskClient,
+) -> None:
+    response = client.get("/reject-pattern?pattern=challenge")
+
+    assert response.status_code == 403
+    assert response.content_type.startswith("text/html")
+    assert b"titan-apex-mock-challenge" in response.data
+    assert b"verify you are human" in response.data.lower()
+
+
+def test_reject_pattern_unknown_pattern_is_a_400(client: FlaskClient) -> None:
+    response = client.get("/reject-pattern?pattern=nonsense")
+
+    assert response.status_code == 400
+    assert "error" in (response.get_json() or {})
+
+
 # --- Interstitials (docs/OBSTACLE_MAP_AND_ESCALATION_SCHEDULE.md's محور
 # 6) -----------------------------------------------------------------
 

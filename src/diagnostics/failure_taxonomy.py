@@ -45,10 +45,11 @@ from pydantic import BaseModel, Field
 
 
 class FailureCategory(StrEnum):
-    """The 8 categories the user specified explicitly, verbatim -- this
-    enum's own value strings are the literal taxonomy names given, not
-    a paraphrase, so a historical classification or a future Layer 2/3
-    consumer can match against them exactly.
+    """The 8 categories the user specified explicitly, verbatim, plus one
+    9th added deliberately during "الطبقة 2" (Protection Classifier) --
+    this enum's own value strings are the literal taxonomy names given,
+    not a paraphrase, so a historical classification or a future Layer
+    2/3 consumer can match against them exactly.
 
     - ``ANTIBOT_FINGERPRINT_REJECTION``: the target correctly detected
       this as automated traffic and refused to serve real content --
@@ -89,6 +90,23 @@ class FailureCategory(StrEnum):
     - ``UNKNOWN``: none of the above fit, or there isn't yet enough
       evidence to tell -- an honest placeholder, never silently
       defaulted to without being visible as exactly that.
+    - ``NO_SCROLLABLE_CONTENT``: the 9th category, added while wiring
+      "الطبقة 2" (docs/REQUIREMENTS.md section 9 entry 29) after a real
+      CI run's own data (entry 28's own CI-confirmation writeup) caught
+      a genuine false positive in the ``TIMING_RACE`` guard added by
+      that same commit: ``requests_during_scroll == 0`` alone cannot
+      distinguish "the scroll trigger should have loaded more content
+      but didn't" (a real timing race) from "this page simply has no
+      scroll-triggered content at all" (``initial_height ==
+      final_height`` from the very first measurement -- nothing was
+      ever going to load, scroll or no scroll). Distinct from
+      ``TIMING_RACE`` on purpose rather than folded into it with a
+      flag: a *category* that structurally cannot represent a project
+      bug (there is nothing to fix about a page that was never going to
+      scroll-load anything) keeps the taxonomy itself honest, the same
+      way ``EXTERNAL_SITE_FLAKE`` is kept distinct from ``TIMING_RACE``
+      above for an analogous reason (whose "side" the cause is
+      attributable to).
     """
 
     ANTIBOT_FINGERPRINT_REJECTION = "antibot-fingerprint-rejection"
@@ -99,6 +117,7 @@ class FailureCategory(StrEnum):
     NETWORK_INFRA_TRANSIENT = "network-infra-transient"
     EXTERNAL_SITE_FLAKE = "external-site-flake"
     UNKNOWN = "unknown"
+    NO_SCROLLABLE_CONTENT = "no-scrollable-content"
 
 
 class ResolutionStatus(StrEnum):

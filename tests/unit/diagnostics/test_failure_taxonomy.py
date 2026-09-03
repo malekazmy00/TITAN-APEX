@@ -11,10 +11,12 @@ from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord, Res
 
 
 def test_failure_category_values_match_the_literal_taxonomy_given() -> None:
-    """The 8 category strings must match exactly what was specified --
-    a future consumer (a report, Layer 2/3) matches against these
-    literal values, so a silent rename here would break that matching
-    without any type error to catch it."""
+    """The original 8 category strings (plus NO_SCROLLABLE_CONTENT, the
+    9th, added while wiring "الطبقة 2" -- see that member's own
+    docstring) must match exactly what was specified -- a future
+    consumer (a report, Layer 2/3) matches against these literal values,
+    so a silent rename here would break that matching without any type
+    error to catch it."""
     assert {member.value for member in FailureCategory} == {
         "antibot-fingerprint-rejection",
         "timing-race",
@@ -24,6 +26,7 @@ def test_failure_category_values_match_the_literal_taxonomy_given() -> None:
         "network-infra-transient",
         "external-site-flake",
         "unknown",
+        "no-scrollable-content",
     }
 
 

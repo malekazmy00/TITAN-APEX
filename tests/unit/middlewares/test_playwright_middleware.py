@@ -404,9 +404,56 @@ def test_zero_requests_during_scroll_records_a_timing_race_failure(
 ) -> None:
     """docs/REQUIREMENTS.md section 9 entries 25/27: the exact signal
     that investigation was built around -- requests_during_scroll == 0
-    despite real scroll attempts. resolution_status is RESOLVED since a
-    real, CI-confirmed fix exists for this class (entry 27), not because
-    this specific occurrence is assumed fine."""
+    despite real scroll attempts, on a page whose height DID change
+    (proof real scroll-triggered content exists here -- entry 29's own
+    initial_height != final_height distinction, see
+    test_zero_requests_and_unchanged_height_records_no_scrollable_content
+    below for the sibling, non-failure case this same signal alone used
+    to be misclassified as). resolution_status is RESOLVED since a real,
+    CI-confirmed fix exists for this class (entry 27), not because this
+    specific occurrence is assumed fine."""
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.playwright_middleware.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+
+    def fake_renderer(
+        url: str, render_wait_ms: int | None = None, click_selector: str | None = None
+    ) -> RenderedPage:
+        return RenderedPage(
+            html="<html></html>",
+            status=200,
+            scroll_diagnostics=ScrollDiagnostics(
+                attempts_used=8, initial_height=1200, final_height=1800, requests_during_scroll=0
+            ),
+        )
+
+    middleware = PlaywrightMiddleware(renderer=fake_renderer, thread_runner=_sync_thread_runner)
+    request = Request("https://example.com/", meta={"playwright": True})
+
+    middleware.process_request(request, spider=object())
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "https://example.com/"
+    assert record.provider == "playwright"
+    assert record.failure_category is FailureCategory.TIMING_RACE
+    assert record.resolution_status is ResolutionStatus.RESOLVED
+    assert record.source == "playwright_middleware.scroll_diagnostics"
+    assert record.raw_signal["requests_during_scroll"] == 0
+
+
+def test_zero_requests_and_unchanged_height_records_no_scrollable_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """docs/REQUIREMENTS.md section 9 entry 29 ("الطبقة 2"): a real,
+    CI-observed false positive (entry 28's own CI-confirmation run,
+    quotes.toscrape.com/js/ -- initial_height == final_height, i.e. this
+    page never had scroll-triggered content to load in the first place)
+    must classify as NO_SCROLLABLE_CONTENT, not TIMING_RACE -- the
+    project's own timing bug (entries 25/27) never applies when there
+    was nothing to race against."""
     recorded: list[FailureRecord] = []
     monkeypatch.setattr(
         "src.middlewares.playwright_middleware.record_failure",
@@ -433,7 +480,7 @@ def test_zero_requests_during_scroll_records_a_timing_race_failure(
     record = recorded[0]
     assert record.target == "https://example.com/"
     assert record.provider == "playwright"
-    assert record.failure_category is FailureCategory.TIMING_RACE
+    assert record.failure_category is FailureCategory.NO_SCROLLABLE_CONTENT
     assert record.resolution_status is ResolutionStatus.RESOLVED
     assert record.source == "playwright_middleware.scroll_diagnostics"
     assert record.raw_signal["requests_during_scroll"] == 0

@@ -13,6 +13,7 @@ from scrapy.http import Request, Response
 from src.alerting import AlertEvent
 from src.diagnostics.failure_taxonomy import FailureCategory, FailureRecord
 from src.middlewares.circuit_breaker import CircuitBreakerMiddleware
+from src.response_classifier import ResponsePattern, ResponseStrategy
 
 
 class _FakeClock:
@@ -42,6 +43,14 @@ def _request(url: str = "https://example.com/") -> Request:
 
 def _response(url: str, status: int) -> Response:
     return Response(url=url, status=status, request=_request(url))
+
+
+def _response_with(
+    url: str, status: int, headers: dict[str, str] | None = None, body: bytes = b""
+) -> Response:
+    return Response(
+        url=url, status=status, headers=headers or {}, body=body, request=_request(url)
+    )
 
 
 def test_successful_responses_never_open_the_circuit(middleware: CircuitBreakerMiddleware) -> None:
@@ -291,3 +300,283 @@ def test_below_threshold_failures_do_not_record_anything(
         middleware.process_response(req, _response(url, 503), spider=object())
 
     assert recorded == []
+
+
+# docs/REQUIREMENTS.md section 9 entry 29 ("الطبقة 2" -- Protection
+# Classifier): CLASSIFIABLE_STATUSES (401/403/407/429) responses now get
+# classified via src.response_classifier and handled per-pattern instead
+# of the plain http_<status> failure counting FAILURE_STATUSES still
+# uses.
+
+
+def test_silent_block_opens_the_circuit_immediately_with_the_long_cooldown(
+    clock: _FakeClock,
+) -> None:
+    """ResponseStrategy.IMMEDIATE_LONG_BACKOFF (docs/REQUIREMENTS.md's
+    own Layer 2 spec: "نمط 'فاضي بلا علامة' = backoff طويل فورًا") --
+    a single empty-body, no-known-header 403 opens the circuit right
+    away, well below the normal failure_threshold, and the next request
+    is blocked for silent_block_cooldown_seconds, not cooldown_seconds."""
+    middleware = CircuitBreakerMiddleware(
+        failure_threshold=5,
+        cooldown_seconds=60.0,
+        silent_block_cooldown_seconds=300.0,
+        clock=clock,
+    )
+    url = "https://example.com/"
+    req = _request(url)
+    middleware.process_request(req, spider=object())
+    result = middleware.process_response(req, _response_with(url, 403), spider=object())
+    assert result.status == 403
+
+    circuit = middleware._circuits["example.com"]
+    assert circuit.consecutive_failures == 1  # nowhere near failure_threshold=5
+
+    # Blocked well past the *normal* 60s cooldown -- proves the long
+    # cooldown, not the default, is what's actually governing here.
+    clock.advance(65.0)
+    with pytest.raises(IgnoreRequest, match="is open"):
+        middleware.process_request(_request(url), spider=object())
+
+    # But released once the *long* cooldown genuinely elapses.
+    clock.advance(240.0)  # total 305s > 300s
+    assert middleware.process_request(_request(url), spider=object()) is None
+
+
+def test_silent_block_cooldown_override_resets_to_normal_after_a_close(
+    clock: _FakeClock,
+) -> None:
+    """A domain that recovers (half-open trial succeeds) must not keep
+    an extended cooldown from a previous silent-block open -- a later,
+    ordinary threshold-triggered open on the same domain uses the plain
+    cooldown_seconds again, not a stale override."""
+    middleware = CircuitBreakerMiddleware(
+        failure_threshold=5,
+        cooldown_seconds=60.0,
+        silent_block_cooldown_seconds=300.0,
+        clock=clock,
+    )
+    url = "https://example.com/"
+    req = _request(url)
+    middleware.process_request(req, spider=object())
+    middleware.process_response(req, _response_with(url, 403), spider=object())
+    assert middleware._circuits["example.com"].cooldown_override == 300.0
+
+    clock.advance(300.0)
+    trial = _request(url)
+    middleware.process_request(trial, spider=object())
+    middleware.process_response(trial, _response(url, 200), spider=object())
+    assert middleware._circuits["example.com"].cooldown_override is None
+
+    for _ in range(5):
+        req = _request(url)
+        middleware.process_request(req, spider=object())
+        middleware.process_response(req, _response(url, 503), spider=object())
+    assert middleware._circuits["example.com"].cooldown_override is None
+
+    clock.advance(65.0)  # past the plain 60s cooldown, well under 300s
+    assert middleware.process_request(_request(url), spider=object()) is None
+
+
+def test_challenge_page_retries_via_antibot_provider(clock: _FakeClock) -> None:
+    """ResponseStrategy.TRY_ANTIBOT_PROVIDER (docs/REQUIREMENTS.md's own
+    Layer 2 spec: "نمط 'صفحة تحدي واضحة' = جرّب antibot provider") -- a
+    full HTML page carrying a known challenge marker gets a fresh Request
+    back (not a Response), flagged for antibot solving."""
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    req = _request(url)
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    result = middleware.process_response(req, _response_with(url, 403, body=body), spider=object())
+
+    assert isinstance(result, Request)
+    assert result.url == url
+    assert result.meta["antibot_needed"] is True
+    assert result.meta["circuit_breaker_antibot_retried"] is True
+    assert result.dont_filter is True
+    # The original request is untouched -- a *copy* was escalated.
+    assert "antibot_needed" not in req.meta
+
+
+def test_challenge_page_retry_is_not_counted_as_a_circuit_failure(clock: _FakeClock) -> None:
+    """The escalation itself is not a circuit-breaker failure -- only a
+    retry that comes back classifiable *again* (the guard below) is."""
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    middleware.process_response(
+        _request(url), _response_with(url, 403, body=body), spider=object()
+    )
+    assert middleware._circuits["example.com"].consecutive_failures == 0
+
+
+def test_challenge_page_retry_guard_stops_a_second_escalation(clock: _FakeClock) -> None:
+    """A request already escalated once (circuit_breaker_antibot_retried
+    already set) that comes back classifiable again must NOT be
+    escalated a second time -- falls through to plain failure counting
+    instead, so this can never loop forever."""
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    already_retried = Request(url, meta={"circuit_breaker_antibot_retried": True})
+
+    result = middleware.process_response(
+        already_retried, _response_with(url, 403, body=body), spider=object()
+    )
+
+    assert isinstance(result, Response)
+    assert middleware._circuits["example.com"].consecutive_failures == 1
+
+
+def test_header_fingerprinted_uses_the_standard_strategy(clock: _FakeClock) -> None:
+    """No strategy was given for HEADER_FINGERPRINTED in the Layer 2
+    spec -- must behave exactly like a plain failure (counted, opens
+    only at failure_threshold), never force-open and never retry."""
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    for _ in range(4):
+        req = _request(url)
+        result = middleware.process_response(
+            req, _response_with(url, 403, headers={"X-Antibot-Block": "x"}), spider=object()
+        )
+        assert isinstance(result, Response)
+
+    assert middleware._circuits["example.com"].consecutive_failures == 4
+    assert middleware.process_request(_request(url), spider=object()) is None  # still closed
+
+    req = _request(url)
+    middleware.process_response(
+        req, _response_with(url, 403, headers={"X-Antibot-Block": "x"}), spider=object()
+    )
+    with pytest.raises(IgnoreRequest):
+        middleware.process_request(_request(url), spider=object())
+
+
+def test_unrecognized_pattern_uses_the_standard_strategy(clock: _FakeClock) -> None:
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    body = b"<html><body>some other, unrelated non-empty page</body></html>"
+    for _ in range(5):
+        req = _request(url)
+        middleware.process_response(req, _response_with(url, 403, body=body), spider=object())
+
+    with pytest.raises(IgnoreRequest):
+        middleware.process_request(_request(url), spider=object())
+
+
+def test_strategy_overrides_change_the_behavior_for_a_named_pattern(clock: _FakeClock) -> None:
+    """docs/REQUIREMENTS.md's own Layer 2 spec: "استراتيجية استجابة
+    مختلفة (قابلة للتهيئة عبر config)" -- a caller can route
+    HEADER_FINGERPRINTED to IMMEDIATE_LONG_BACKOFF instead of the
+    module-level default STANDARD, without touching response_classifier.py."""
+    middleware = CircuitBreakerMiddleware(
+        failure_threshold=5,
+        cooldown_seconds=60.0,
+        silent_block_cooldown_seconds=300.0,
+        strategy_overrides={
+            ResponsePattern.HEADER_FINGERPRINTED: ResponseStrategy.IMMEDIATE_LONG_BACKOFF
+        },
+        clock=clock,
+    )
+    url = "https://example.com/"
+    req = _request(url)
+    middleware.process_response(
+        req, _response_with(url, 403, headers={"X-Antibot-Block": "x"}), spider=object()
+    )
+
+    # A single classified rejection already opened the circuit, well
+    # below failure_threshold -- proves the override actually took effect.
+    assert middleware._circuits["example.com"].consecutive_failures == 1
+    with pytest.raises(IgnoreRequest):
+        middleware.process_request(_request(url), spider=object())
+
+
+def test_silent_block_records_a_failure_registry_entry_on_open(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.circuit_breaker.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = CircuitBreakerMiddleware(
+        failure_threshold=5, cooldown_seconds=60.0, silent_block_cooldown_seconds=300.0, clock=clock
+    )
+    url = "https://example.com/"
+    middleware.process_response(_request(url), _response_with(url, 403), spider=object())
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == "example.com"
+    assert record.failure_category is FailureCategory.ANTIBOT_FINGERPRINT_REJECTION
+    assert record.source == "circuit_breaker.opened"
+    assert record.raw_signal["reason"] == "classified_silent-block"
+    assert record.raw_signal["cooldown_seconds"] == 300.0
+
+
+def test_challenge_page_retry_records_a_failure_registry_entry(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.circuit_breaker.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    body = b"<html><body>Please verify you are human to continue.</body></html>"
+    middleware.process_response(_request(url), _response_with(url, 403, body=body), spider=object())
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == url
+    assert record.failure_category is FailureCategory.ANTIBOT_FINGERPRINT_REJECTION
+    assert record.source == "circuit_breaker.retrying_via_antibot_provider"
+    assert record.raw_signal["response_pattern"] == "challenge-page"
+
+
+def test_classified_rejection_under_standard_strategy_records_a_failure_registry_entry(
+    clock: _FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded: list[FailureRecord] = []
+    monkeypatch.setattr(
+        "src.middlewares.circuit_breaker.record_failure",
+        lambda record, path=None: recorded.append(record),
+    )
+    middleware = CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=60.0, clock=clock)
+    url = "https://example.com/"
+    middleware.process_response(
+        _request(url), _response_with(url, 403, headers={"X-Antibot-Block": "x"}), spider=object()
+    )
+
+    assert len(recorded) == 1
+    record = recorded[0]
+    assert record.target == url
+    assert record.failure_category is FailureCategory.ANTIBOT_FINGERPRINT_REJECTION
+    assert record.source == "circuit_breaker.classified_rejection"
+    assert record.raw_signal["response_pattern"] == "header-fingerprinted"
+    assert record.raw_signal["strategy"] == "standard"
+
+
+def test_invalid_silent_block_cooldown_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="silent_block_cooldown_seconds must be > 0"):
+        CircuitBreakerMiddleware(silent_block_cooldown_seconds=0)
+
+
+def test_from_crawler_reads_the_silent_block_cooldown_setting() -> None:
+    class _FakeSettings:
+        def getint(self, name: str, default: int) -> int:
+            return default
+
+        def getfloat(self, name: str, default: float) -> float:
+            return {"TITAN_CIRCUIT_SILENT_BLOCK_COOLDOWN_SECONDS": 120.0}.get(name, default)
+
+        def get(self, name: str, default: object = None) -> object:
+            return default
+
+    class _FakeCrawler:
+        settings = _FakeSettings()
+
+    built = CircuitBreakerMiddleware.from_crawler(_FakeCrawler())
+
+    assert built.silent_block_cooldown_seconds == 120.0

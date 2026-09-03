@@ -386,6 +386,49 @@ def create_app(
         expired = session_store.force_expire(token)
         return jsonify({"status": "expired" if expired else "no_session"})
 
+    @app.get("/reject-pattern")
+    def reject_pattern() -> Response | tuple[Response, int]:
+        """Test-only instrumentation -- same shape as
+        ``/test-expire-session``/``/honeypot-trap/<token>`` above: a real
+        route that exists purely to make src/response_classifier.py's
+        three named ``ResponsePattern`` values deterministically
+        testable against real HTTP responses, not just hand-built dicts
+        in a unit test (docs/REQUIREMENTS.md section 9 entry 29,
+        "الطبقة 2" -- Protection Classifier). Always returns 403;
+        ``?pattern=`` selects *how* it rejects:
+
+        - ``empty`` (default): a completely empty body, no distinctive
+          header -- ``ResponsePattern.SILENT_BLOCK``.
+        - ``headers``: an empty body but carries
+          ``src.response_classifier.KNOWN_BLOCK_HEADERS``' own
+          deliberately-synthetic ``X-Antibot-Block`` header --
+          ``ResponsePattern.HEADER_FINGERPRINTED``.
+        - ``challenge``: a full HTML page containing
+          ``src.response_classifier.KNOWN_CHALLENGE_MARKERS``' own
+          ``titan-apex-mock-challenge`` marker (plus a generic "verify
+          you are human" phrase, for realism) --
+          ``ResponsePattern.CHALLENGE_PAGE``.
+
+        Deliberately allowed straight through Anubis (test-environment/
+        anubis/botPolicy.yaml's own ALLOW rule, same reasoning as
+        ``/warmup-home``/``/spa-catalog`` above) -- this route's own 403
+        is the thing under test, not Anubis's unrelated challenge page.
+        """
+        pattern = request.args.get("pattern", "empty")
+        if pattern == "empty":
+            return Response(status=403)
+        if pattern == "headers":
+            return Response(status=403, headers={"X-Antibot-Block": "titan-apex-mock"})
+        if pattern == "challenge":
+            return Response(
+                "<html><head><title>Access Denied</title></head>"
+                "<body><h1>titan-apex-mock-challenge</h1>"
+                "<p>Please verify you are human to continue.</p></body></html>",
+                status=403,
+                mimetype="text/html",
+            )
+        return jsonify({"error": f"unknown pattern {pattern!r}"}), 400
+
     @app.post("/botd-report")
     def botd_report() -> Response:
         payload: dict[str, Any] = request.get_json(silent=True) or {}
