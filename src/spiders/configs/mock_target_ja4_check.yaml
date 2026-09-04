@@ -1,0 +1,35 @@
+# Quick, real re-verification (docs/REQUIREMENTS.md section 9, an
+# addition after entry 31): the user asked for a fast live re-check of
+# entry 19's own conclusive finding ("Camoufox's JA4 fingerprint is
+# byte-for-byte identical to real Firefox's -- daijro/camoufox issue
+# #555") before redoing any JA4-based work, rather than trusting a
+# months-old citation without re-running it against the currently
+# installed camoufox version. This is that re-check's own live target.
+#
+# Identical to mock_target_camoufox.yaml in every way except the port:
+# https://localhost:8443/ (test-environment/ja4-proxy, Step B of this
+# same entry-18 lineage) instead of plain http://localhost:8080/ --
+# ja4-proxy terminates real TLS, computes the real JA4 fingerprint from
+# Camoufox's actual ClientHello, and forwards it as
+# X-JA4-Fingerprint to Anubis -> mock-target, which logs it
+# (security/ja4_integration.py, Step C, already log-only and
+# unconditional). Zero spider config has ever pointed here before
+# (docs/REQUIREMENTS.md entry 18's own CI confirmation noted zero JA4
+# log lines for exactly this reason) -- this is the first.
+name: mock_target_ja4_check
+start_urls:
+  - "https://localhost:8443/"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+click_selector: "#accept-cookies"
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
+    author: '[data-role="post-author"]::text'
+    text: '[data-role="post-text"]::text'
+    likes: '[data-role="post-likes"]::text'
