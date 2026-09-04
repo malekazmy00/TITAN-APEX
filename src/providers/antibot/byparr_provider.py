@@ -75,7 +75,20 @@ class ByparrProvider(AntibotProvider):
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> Solution:
+        if block_webrtc:
+            # docs/PHASE_2_BACKLOG.md item 5: same structural gap as
+            # user_agent_override right below -- Byparr's /v1 protocol
+            # is a stateless "fetch and return HTML" HTTP call with no
+            # browser-launch control this process ever touches at all.
+            self.logger.warning(
+                "byparr_provider.block_webrtc_unsupported",
+                extra={
+                    "url": url,
+                    "reason": "byparr's /v1 API has no browser-launch control at all",
+                },
+            )
         if user_agent_override is not None:
             # Real, structural gap -- confirmed by reading Byparr's own
             # request payload model (LinkRequest, in its own source):

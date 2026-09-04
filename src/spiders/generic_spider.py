@@ -149,6 +149,12 @@ class GenericSpider(scrapy.Spider):
             # ByparrMiddleware only reads this when antibot_needed is
             # also True, so it's a genuine no-op for every plain target.
             "user_agent_override": self.config.user_agent_override,
+            # docs/PHASE_2_BACKLOG.md item 5: same "harmless to always
+            # include" shape as user_agent_override above --
+            # ByparrMiddleware only reads this when antibot_needed is
+            # also True, so it's a genuine no-op for every target that
+            # hasn't opted in.
+            "block_webrtc": self.config.block_webrtc,
             # docs/REQUIREMENTS.md section 9 entry 30 ("الطبقة 3" --
             # Strategy Engine): same "harmless to always include" shape
             # as user_agent_override above -- CircuitBreakerMiddleware

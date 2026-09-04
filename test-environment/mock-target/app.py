@@ -31,6 +31,7 @@ from security.referer_session_integration import (
     WARMUP_SESSION_COOKIE_NAME,
     log_referer_session_check,
 )
+from security.webrtc_leak_detector import log_webrtc_leak_report
 from structural.ab_variant import choose_variant, container_tag_for
 from structural.cookie_wall import (
     ACCEPT_PATH,
@@ -126,6 +127,7 @@ def create_app(
         "mock_target.referer_session", cfg.referer_session_log_path
     )
     cross_signal_logger = get_file_logger("mock_target.cross_signal", cfg.cross_signal_log_path)
+    webrtc_leak_logger = get_file_logger("mock_target.webrtc_leak", cfg.webrtc_leak_log_path)
     app.config["CSRF_TOKEN_STORE"] = CsrfTokenStore()
     app.config["AUTH_SESSION_STORE"] = SessionStore(ttl_seconds=cfg.session_ttl_seconds)
 
@@ -586,6 +588,81 @@ def create_app(
         if not existing_cookie:
             response.set_cookie(SESSION_COOKIE_NAME, session_key)
         return response
+
+    @app.get("/webrtc-leak-check")
+    def webrtc_leak_check() -> Response:
+        """docs/PHASE_2_BACKLOG.md item 5 (WebRTC Leak Prevention): a
+        real, standalone diagnostic page -- same shape as
+        ``/reject-pattern`` above (a real, deterministic check, not
+        part of the main page's own challenge flow, no config toggle).
+        Real client-side JS (not vendored -- this project's own, same
+        as ``security/fpscanner_integration.py``'s own script) creates
+        a real ``RTCPeerConnection``, triggers real ICE candidate
+        gathering (``createDataChannel`` + ``createOffer`` is enough --
+        no STUN/TURN server needed, and this stack has no reachable
+        one anyway per test-environment/README.md's own network-
+        isolation rule), and posts every candidate line it receives to
+        ``/webrtc-leak-report`` below once gathering completes. If
+        ``RTCPeerConnection`` itself is unavailable (Camoufox's own
+        ``block_webrtc`` removes it from JS entirely --
+        ``src/core/interfaces/antibot_provider.py``'s own
+        ``block_webrtc`` parameter), that is reported directly instead
+        of attempting to use an API that doesn't exist.
+        """
+        return Response(
+            """<!doctype html><html><head><title>WebRTC Leak Check</title></head>
+<body>
+<script>
+(function () {
+  function report(webrtcAvailable, candidates) {
+    fetch('/webrtc-leak-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webrtc_available: webrtcAvailable, candidates: candidates })
+    }).catch(function () {
+      // Never let a detection error break the page -- same rule
+      // every other report call in this app already follows.
+    });
+  }
+  if (typeof RTCPeerConnection === 'undefined') {
+    report(false, []);
+    return;
+  }
+  var candidates = [];
+  var pc = new RTCPeerConnection({ iceServers: [] });
+  pc.createDataChannel('');
+  pc.onicecandidate = function (event) {
+    if (event.candidate) {
+      candidates.push(event.candidate.candidate);
+    } else {
+      report(true, candidates);
+    }
+  };
+  pc.createOffer()
+    .then(function (offer) { return pc.setLocalDescription(offer); })
+    .catch(function () { report(true, candidates); });
+})();
+</script>
+</body></html>
+""",
+            mimetype="text/html",
+        )
+
+    @app.post("/webrtc-leak-report")
+    def webrtc_leak_report() -> Response:
+        payload: dict[str, Any] = request.get_json(silent=True) or {}
+        webrtc_available = bool(payload.get("webrtc_available"))
+        candidates = payload.get("candidates") or []
+        if not isinstance(candidates, list):
+            candidates = []
+        result = log_webrtc_leak_report(webrtc_leak_logger, webrtc_available, candidates)
+        return jsonify(
+            {
+                "status": "logged",
+                "leak_detected": result.leak_detected,
+                "leaked_addresses": result.leaked_addresses,
+            }
+        )
 
     @app.get("/honeypot-trap/<token>")
     def honeypot_trap(token: str) -> Response:

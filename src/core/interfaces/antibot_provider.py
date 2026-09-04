@@ -146,6 +146,7 @@ class AntibotProvider(ABC):
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> Solution:
         """Solve whatever anti-bot challenge protects ``url``.
 
@@ -259,6 +260,33 @@ class AntibotProvider(ABC):
         User-Agent, same as if ``user_agent_override`` had not been
         given. ``None`` (the default) keeps every existing caller's
         exact prior behavior for every provider.
+
+        ``block_webrtc`` (docs/PHASE_2_BACKLOG.md item 5, WebRTC Leak
+        Prevention -- a real, confirmed gap: neither real-browser
+        provider disables WebRTC by default, so a page's own JS can
+        enumerate real local/network IP addresses via
+        ``RTCPeerConnection`` ICE candidates regardless of every other
+        anti-fingerprinting layer this project already has). Same
+        best-effort contract as the other parameters -- when ``True``,
+        a provider with a real browser-launch step it controls disables
+        WebRTC entirely for the whole ``solve()`` call, not just the one
+        page (``CamoufoxProvider``: a real, existing library capability,
+        ``camoufox.utils.launch_options``'s own ``block_webrtc`` sets
+        Firefox's ``media.peerconnection.enabled`` pref to ``False`` --
+        the exact same mechanism this project already reads from that
+        library's own source, confirmed directly, not assumed).
+        ``PatchrightProvider``/``ByparrProvider`` cannot support this
+        yet: Chromium has no equivalent context-creation-time option
+        (a real gap would need an independent, launch-*flag*-based
+        solution -- e.g. ``--force-webrtc-ip-handling-policy`` --
+        deliberately out of this parameter's own scope for now, see
+        docs/PHASE_2_BACKLOG.md item 5's own proposed design), and
+        Byparr's ``/v1`` API has no browser-launch control at all (the
+        same structural limitation ``user_agent_override`` already has
+        for it) -- both must not crash or silently drop it: log a clear
+        warning and solve with WebRTC left exactly as it already is.
+        ``False`` (the default) keeps every existing caller's exact
+        prior behavior for every provider.
 
         Implementations must raise
         :class:`src.core.exceptions.AntibotError` (never a bare

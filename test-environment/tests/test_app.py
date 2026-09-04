@@ -28,6 +28,7 @@ def config(tmp_path: Path) -> MockTargetConfig:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.feed_rate_limit_threshold = 3
     cfg.feed_rate_limit_window_seconds = 60
     cfg.feed_page_size = 4
@@ -239,6 +240,93 @@ def test_cross_signal_check_handles_a_missing_body(client: FlaskClient) -> None:
     assert response.get_json()["inconsistency_score"] == 0
 
 
+# --- WebRTC Leak Check (docs/PHASE_2_BACKLOG.md item 5) --------------------
+
+
+def test_webrtc_leak_check_serves_real_html_with_the_detection_script(
+    client: FlaskClient,
+) -> None:
+    response = client.get("/webrtc-leak-check")
+
+    assert response.status_code == 200
+    assert response.content_type.startswith("text/html")
+    body = response.get_data(as_text=True)
+    assert "RTCPeerConnection" in body
+    assert "/webrtc-leak-report" in body
+
+
+def test_webrtc_leak_report_flags_a_real_leaked_ip(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    response = client.post(
+        "/webrtc-leak-report",
+        json={
+            "webrtc_available": True,
+            "candidates": [
+                "candidate:842163049 1 udp 2122260223 192.168.1.42 51823 typ host"
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["leak_detected"] is True
+    assert data["leaked_addresses"] == ["192.168.1.42"]
+    log_content = Path(config.webrtc_leak_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["level"] == "WARNING"
+
+
+def test_webrtc_leak_report_mdns_only_is_not_a_leak(client: FlaskClient) -> None:
+    response = client.post(
+        "/webrtc-leak-report",
+        json={
+            "webrtc_available": True,
+            "candidates": [
+                "candidate:842163049 1 udp 2122260223 "
+                "8f3e1a2b-71cd-4e21-9a4c-1a2b3c4d5e6f.local 51823 typ host"
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["leak_detected"] is False
+
+
+def test_webrtc_leak_report_unavailable_is_never_a_leak(client: FlaskClient) -> None:
+    """The strongest possible "not leaking" signal -- block_webrtc
+    removed the API entirely (src/core/interfaces/antibot_provider.py's
+    own block_webrtc parameter)."""
+    response = client.post(
+        "/webrtc-leak-report", json={"webrtc_available": False, "candidates": []}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["leak_detected"] is False
+
+
+def test_webrtc_leak_report_handles_a_missing_body(client: FlaskClient) -> None:
+    """Failure-adjacent case: a POST with no/invalid JSON body must not
+    500 -- treated as webrtc_available=False, no candidates."""
+    response = client.post("/webrtc-leak-report")
+
+    assert response.status_code == 200
+    assert response.get_json()["leak_detected"] is False
+
+
+def test_webrtc_leak_report_rejects_non_list_candidates_without_crashing(
+    client: FlaskClient,
+) -> None:
+    """Failure-adjacent case: a malformed (non-list) candidates field
+    must not 500 -- treated as no candidates at all."""
+    response = client.post(
+        "/webrtc-leak-report", json={"webrtc_available": True, "candidates": "not-a-list"}
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["leak_detected"] is False
+
+
 def test_warmup_home_sets_a_session_cookie(client: FlaskClient) -> None:
     """docs/REQUIREMENTS.md section 9 entry 21, Step 1: the real entry
     point of the warm-up chain issues the session cookie Level 2 later
@@ -423,6 +511,7 @@ def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_dom_virtualization = False
     app = create_app(cfg)
@@ -443,6 +532,7 @@ def test_feed_page_window_size_is_configurable(tmp_path: Path) -> None:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.dom_virtualization_window_size = 3
     app = create_app(cfg)
@@ -463,6 +553,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_markup_randomizer = False
     cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
@@ -485,6 +576,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_honeypots = False
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
@@ -508,6 +600,7 @@ def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
@@ -552,6 +645,7 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False
@@ -578,6 +672,7 @@ def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     app = create_app(cfg)
@@ -601,6 +696,7 @@ def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path)
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_placeholder_content = False
@@ -623,6 +719,7 @@ def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.placeholder_delay_ms = 2000
@@ -642,6 +739,7 @@ def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = True
     cfg.enable_shadow_dom = False  # isolate the cookie-wall layer alone
     app = create_app(cfg)
@@ -700,6 +798,7 @@ def _shadow_dom_client(tmp_path: Path) -> FlaskClient:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False  # isolate the shadow-DOM layer alone
     cfg.enable_shadow_dom = True
     app = create_app(cfg)
@@ -747,6 +846,7 @@ def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> 
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     app = create_app(cfg)
@@ -774,6 +874,7 @@ def _auth_client(
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False  # isolate the login/session layer alone
     cfg.enable_shadow_dom = False
     cfg.protected_feed_total_pages = protected_feed_total_pages
@@ -1025,6 +1126,7 @@ def _interstitial_client(
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False  # isolate the interstitial layer alone
     cfg.enable_shadow_dom = False
     cfg.interstitial_trigger = trigger
@@ -1202,6 +1304,7 @@ def test_spa_catalog_product_count_is_configurable(tmp_path: Path) -> None:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.spa_catalog_product_count = 3
     app = create_app(cfg)
@@ -1224,6 +1327,7 @@ def _trust_score_client(tmp_path: Path, **overrides: object) -> FlaskClient:
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     for name, value in overrides.items():
@@ -1362,6 +1466,7 @@ def test_trust_scored_different_sessions_are_tracked_independently(tmp_path: Pat
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
     cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
+    cfg.webrtc_leak_log_path = str(tmp_path / "webrtc_leak.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     cfg.trust_score_referer_points = 50

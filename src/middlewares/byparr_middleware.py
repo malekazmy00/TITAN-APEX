@@ -171,6 +171,11 @@ class ByparrMiddleware:
         # AntibotProvider.solve()'s own docstring for the full per-
         # provider contract (Byparr logs and ignores it).
         user_agent_override = request.meta.get("user_agent_override")
+        # docs/PHASE_2_BACKLOG.md item 5: forwarded straight through,
+        # same best-effort contract as every other optional solve()
+        # parameter here -- see AntibotProvider.solve()'s own
+        # docstring for the full per-provider contract.
+        block_webrtc = bool(request.meta.get("block_webrtc"))
         try:
             solution = provider.solve(
                 request.url,
@@ -181,6 +186,7 @@ class ByparrMiddleware:
                 warm_session_urls=warm_session_urls,
                 use_accumulated_profile=use_accumulated_profile,
                 user_agent_override=user_agent_override,
+                block_webrtc=block_webrtc,
             )
         except AntibotError as exc:
             self.logger.error(

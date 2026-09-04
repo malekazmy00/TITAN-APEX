@@ -241,6 +241,7 @@ CamoufoxSolveFn = Callable[
         bool,
         str,
         "str | None",
+        bool,
     ],
     _RawSolve,
 ]
@@ -299,6 +300,7 @@ def _default_camoufox_solve(  # pragma: no cover
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
     user_agent_override: str | None = None,
+    block_webrtc: bool = False,
 ) -> _RawSolve:
     """Drive a real Camoufox browser: navigate, (optionally) click, wait
     past ``load``, read, close.
@@ -427,6 +429,18 @@ def _default_camoufox_solve(  # pragma: no cover
     real Camoufox/Firefox User-Agent is sent exactly as it always has
     been.
 
+    ``block_webrtc`` (docs/PHASE_2_BACKLOG.md item 5): passed straight
+    through to ``Camoufox(...)``'s own ``block_webrtc`` -- a real,
+    existing capability this project's code simply never used before
+    (confirmed by reading ``camoufox.utils.launch_options`` directly:
+    when set, it sets Firefox's own ``media.peerconnection.enabled``
+    pref to ``False``, disabling WebRTC -- and with it, the ICE-
+    candidate-enumeration route a page's own JS could otherwise use to
+    read real local/network IP addresses -- for the whole browser
+    session). ``False`` (the default) is Camoufox's own default too,
+    so this is a genuine no-op for every existing caller: WebRTC stays
+    exactly as it always has (Firefox's own regular default).
+
     Raises:
         AntibotError: if the browser fails to launch, navigate, click, or
             read the page -- wraps Camoufox's own pre-launch exceptions
@@ -490,7 +504,9 @@ def _default_camoufox_solve(  # pragma: no cover
         # this constructor call itself (not objects it returns -- those
         # are genuine Playwright objects, typed as Any below the same
         # way playwright_middleware.py already treats them) as untyped.
-        with Camoufox(headless=True) as browser:  # type: ignore[no-untyped-call]
+        with Camoufox(  # type: ignore[no-untyped-call]
+            headless=True, block_webrtc=block_webrtc
+        ) as browser:
             # docs/REQUIREMENTS.md section 9 entry 17's real-CI-confirmed
             # finding: an occasional genuine Firefox engine segfault
             # (dmesg's own "DOM Worker[...]: segfault ... in libxul.so",
@@ -1643,6 +1659,7 @@ class CamoufoxProvider(AntibotProvider):
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> Solution:
         # docs/REQUIREMENTS.md section 9 entry 17: a real, kernel-log-
         # confirmed Firefox engine crash (BrowserCrashedError's own
@@ -1668,6 +1685,7 @@ class CamoufoxProvider(AntibotProvider):
                     use_accumulated_profile,
                     self._cookie_jar_path,
                     user_agent_override,
+                    block_webrtc,
                 )
             except BrowserCrashedError as exc:
                 if attempt >= self._max_browser_crash_attempts:

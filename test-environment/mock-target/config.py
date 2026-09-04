@@ -190,6 +190,15 @@ class MockTargetConfig:
         self.cross_signal_regularity_cv_threshold: float = _env_float(
             "CROSS_SIGNAL_REGULARITY_CV_THRESHOLD", 0.15
         )
+        # docs/PHASE_2_BACKLOG.md item 5 (WebRTC Leak Prevention): a
+        # deterministic, standalone diagnostic route -- no enable/
+        # disable toggle (same shape /reject-pattern above already
+        # has, not /trust-scored's, since this never enforces
+        # anything, just reports a real, binary fact).
+        self.webrtc_leak_log_path: str = os.environ.get(
+            "WEBRTC_LEAK_LOG_PATH",
+            "test-environment/mock-target/security/webrtc_leak_reports.log",
+        )
 
 
 def get_config() -> MockTargetConfig:

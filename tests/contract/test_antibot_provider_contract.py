@@ -71,6 +71,7 @@ def _camoufox_ok_solve(
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
     user_agent_override: str | None = None,
+    block_webrtc: bool = False,
 ) -> _CamoufoxRawSolve:
     return _CamoufoxRawSolve(
         url="https://example.com/protected",
@@ -92,6 +93,7 @@ def _camoufox_failing_solve(
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
     user_agent_override: str | None = None,
+    block_webrtc: bool = False,
 ) -> _CamoufoxRawSolve:
     raise AntibotError(f"camoufox failed to solve {url}: unsolvable")
 
@@ -116,6 +118,7 @@ def _patchright_ok_solve(
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
     user_agent_override: str | None = None,
+    block_webrtc: bool = False,
 ) -> _PatchrightRawSolve:
     return _PatchrightRawSolve(
         url="https://example.com/protected",
@@ -137,6 +140,7 @@ def _patchright_failing_solve(
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = "unused-in-tests.json",
     user_agent_override: str | None = None,
+    block_webrtc: bool = False,
 ) -> _PatchrightRawSolve:
     raise AntibotError(f"patchright failed to solve {url}: unsolvable")
 

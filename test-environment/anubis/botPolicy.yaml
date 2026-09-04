@@ -68,6 +68,15 @@ bots:
     path_regex: ^/trust-scored$
     action: ALLOW
 
+  # docs/PHASE_2_BACKLOG.md item 5 (WebRTC Leak Prevention): same
+  # reasoning and placement as trust-scored-route above -- this is a
+  # real, deterministic diagnostic probe (does a leaked IP show up in
+  # WebRTC ICE candidates), not an antibot challenge itself, so it's
+  # deliberately never gated behind Anubis's own challenge.
+  - name: webrtc-leak-check-routes
+    path_regex: ^/webrtc-leak-(check|report)$
+    action: ALLOW
+
   # You can import the entire default config with this macro:
   # - import: (data)/meta/default-config.yaml
 

@@ -243,6 +243,18 @@ Camoufox عنده الحل جاهز، بس محتاج سطر واحد (`block_we
 - نفس فلسفة log-only، وده بالذات نوع فحص **حتمي** (مش إحصائي زي
   الماوس/الكتابة) — إما فيه تسريب أو لأ.
 
+### ✅ منفَّذ — `docs/REQUIREMENTS.md` section 9 entry 33، Item 1
+
+التصميم فوق اتنفّذ بالحرف تقريبًا (فرق واحد بس: تصنيف mDNS بالاسم
+مضاف صراحة كفئة "آمن" ثالثة، مش مجرد "مش loopback فمتوقّع" — نفس
+الروح). `block_webrtc` باراميتر حقيقي جديد على
+`AntibotProvider.solve()` (كامل لـCamoufoxProvider، تحذير log-only
+لـPatchright/Byparr). `security/webrtc_leak_detector.py` +
+`/webrtc-leak-check`/`/webrtc-leak-report` كلهم موجودين وشغالين
+(test-environment: 296/296، coverage 99%). التفاصيل الكاملة (الأنبوب،
+البق اللي اتلقط، الاختبارات، دليل الـCI) في `docs/REQUIREMENTS.md`
+entry 33's own section الخاص بالبند ده.
+
 ---
 
 ## 6. HTTP/2 Frame Behavior — غير منطقي لسياقنا، مؤكد بدليل

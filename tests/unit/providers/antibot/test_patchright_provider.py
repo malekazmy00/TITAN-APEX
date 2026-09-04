@@ -33,6 +33,7 @@ def test_solve_returns_a_populated_solution() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         assert url == "https://example.com/"
         assert timeout_ms == 30_000
@@ -72,6 +73,7 @@ def test_post_load_wait_ms_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["post_load_wait_ms"] = post_load_wait_ms
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -114,6 +116,7 @@ def test_solve_function_failure_propagates_as_antibot_error() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         raise AntibotError(f"patchright failed to solve {url}: browser launch failed")
 
@@ -162,6 +165,7 @@ def test_browser_crash_retries_on_a_fresh_call_and_eventually_succeeds() -> None
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         nonlocal calls
         calls += 1
@@ -193,6 +197,7 @@ def test_browser_crash_exhausts_max_attempts_and_raises() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         nonlocal calls
         calls += 1
@@ -223,6 +228,7 @@ def test_non_crash_antibot_error_is_not_retried() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         nonlocal calls
         calls += 1
@@ -260,6 +266,7 @@ def test_click_selector_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["click_selector"] = click_selector
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -286,6 +293,7 @@ def test_zero_post_load_wait_ms_is_allowed() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -314,6 +322,7 @@ def test_extraction_selectors_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["extraction_selectors"] = extraction_selectors
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -341,6 +350,7 @@ def test_extraction_selectors_defaults_to_none_when_not_given() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         assert extraction_selectors is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -368,6 +378,7 @@ def test_solve_fn_items_reach_the_returned_solution() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         return _RawSolve(
             url=url,
@@ -400,6 +411,7 @@ def test_solve_fn_items_default_to_none_when_extraction_not_used() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
@@ -428,6 +440,7 @@ def test_warm_session_urls_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["warm_session_urls"] = warm_session_urls
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -456,6 +469,7 @@ def test_warm_session_urls_defaults_to_none_when_not_given() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         assert warm_session_urls is None
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -481,6 +495,7 @@ def test_use_accumulated_profile_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["use_accumulated_profile"] = use_accumulated_profile
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -508,6 +523,7 @@ def test_use_accumulated_profile_defaults_to_false_when_not_given() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         assert use_accumulated_profile is False
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -535,6 +551,7 @@ def test_cookie_jar_path_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["cookie_jar_path"] = cookie_jar_path
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -563,6 +580,7 @@ def test_user_agent_override_reaches_the_solve_function() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         seen["user_agent_override"] = user_agent_override
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
@@ -589,8 +607,68 @@ def test_user_agent_override_defaults_to_none_when_not_given() -> None:
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         assert user_agent_override is None
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = PatchrightProvider(solve_fn=fake_solve)
+    solution = provider.solve("https://example.com/")
+
+    assert solution.status_code == 200
+
+
+def test_block_webrtc_reaches_the_solve_function() -> None:
+    """docs/PHASE_2_BACKLOG.md item 5: a per-call request reaches the
+    real browser-driving call verbatim -- what that call actually does
+    with it (log a warning, since Chromium has no equivalent here yet)
+    is _default_patchright_solve's own concern, exercised only via
+    tests/integration (same "needs a real live browser" reasoning as
+    every other real behavior in that function)."""
+    seen: dict[str, bool] = {}
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+        user_agent_override: str | None = None,
+        block_webrtc: bool = False,
+    ) -> _RawSolve:
+        seen["block_webrtc"] = block_webrtc
+        return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
+
+    provider = PatchrightProvider(solve_fn=fake_solve)
+    provider.solve("https://example.com/", block_webrtc=True)
+
+    assert seen["block_webrtc"] is True
+
+
+def test_block_webrtc_defaults_to_false_when_not_given() -> None:
+    """Backward compatible: every existing caller keeps WebRTC exactly
+    as it already is, unchanged."""
+
+    def fake_solve(
+        url: str,
+        timeout_ms: int,
+        post_load_wait_ms: int,
+        click_selector: str | None = None,
+        extraction_selectors: LiveDomSelectors | None = None,
+        progressive_extraction: bool = False,
+        login_flow: LoginFlow | None = None,
+        warm_session_urls: list[str] | None = None,
+        use_accumulated_profile: bool = False,
+        cookie_jar_path: str = "unused-in-tests.json",
+        user_agent_override: str | None = None,
+        block_webrtc: bool = False,
+    ) -> _RawSolve:
+        assert block_webrtc is False
         return _RawSolve(url=url, html="<html></html>", status=200, cookies={})
 
     provider = PatchrightProvider(solve_fn=fake_solve)
@@ -623,6 +701,7 @@ def test_exhausted_browser_crash_records_a_network_infra_transient_failure(
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         raise BrowserCrashedError(f"patchright's browser engine crashed mid-solve for {url}")
 
@@ -661,6 +740,7 @@ def test_non_crash_antibot_error_records_an_antibot_fingerprint_rejection(
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         raise AntibotError(f"patchright failed to solve {url}: challenge not solved")
 
@@ -695,6 +775,7 @@ def test_successful_solve_records_nothing(monkeypatch: pytest.MonkeyPatch) -> No
         use_accumulated_profile: bool = False,
         cookie_jar_path: str = "unused-in-tests.json",
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> _RawSolve:
         return _RawSolve(url=url, html="<html>solved</html>", status=200, cookies={})
 

@@ -766,6 +766,30 @@ def test_request_meta_includes_a_configured_user_agent_override(tmp_path: Path) 
     assert requests[0].meta["user_agent_override"] == "Mozilla/5.0 (custom-test-ua)"
 
 
+def test_request_meta_defaults_block_webrtc_to_false(config_path: str) -> None:
+    """docs/PHASE_2_BACKLOG.md item 5: same "harmless no-op" shape as
+    user_agent_override above -- every existing config (none of which
+    sets block_webrtc) must keep getting False."""
+    spider = GenericSpider(config_path=config_path)
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["block_webrtc"] is False
+
+
+def test_request_meta_includes_a_configured_block_webrtc(tmp_path: Path) -> None:
+    """Happy path: a target that sets block_webrtc gets it verbatim in
+    request.meta -- this is what byparr_middleware.py's own
+    process_request actually reads and forwards to the provider."""
+    config_file = tmp_path / "block_webrtc_target.yaml"
+    config_file.write_text(CONFIG_YAML + "\nblock_webrtc: true\n", encoding="utf-8")
+    spider = GenericSpider(config_path=str(config_file))
+
+    requests = _run_async_start(spider)
+
+    assert requests[0].meta["block_webrtc"] is True
+
+
 def test_request_meta_defaults_strategy_backoff_multiplier_to_none(config_path: str) -> None:
     """docs/REQUIREMENTS.md section 9 entry 30: same "harmless no-op"
     shape as user_agent_override above -- every existing config (none of

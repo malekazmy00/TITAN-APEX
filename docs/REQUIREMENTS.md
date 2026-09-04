@@ -7323,6 +7323,117 @@ commits قبل ما يتسجّل رسميًا). بناءً على قاعدة ا�
 غير مرتبط اتلقط وحُلّ + تأكيد CI حقيقي بدليل log مفتوح ومقروء (مش
 علامة خضرا بس).
 
+### 33. تنفيذ فجوات `docs/PHASE_2_BACKLOG.md` المؤكدة — امتداد حي، بالترتيب من الأبسط للأصعب (طلب المستخدم صراحة)
+
+**السياق**: `docs/PHASE_2_BACKLOG.md` (اتبنى بند التحقق من التقرير
+الخارجي، commit `fccd745`) وثّق 4 فجوات حقيقية مؤكدة بالدليل، لسه
+منفَّذاش. المستخدم طلب تنفيذها **بالترتيب**: WebRTC → Keystroke
+Dynamics → Advanced Mouse Movement → Session Behavioral Modeling، كل
+واحدة خلف flag صريح (افتراضي = السلوك الحالي، نفس مبدأ
+`user_agent_override`/`click_selector`)، وكل واحدة توثَّق **كامتداد
+لهذا البند نفسه**، مش بند منفصل جديد بترقيم عام — القسم ده هيتوسّع
+تدريجيًا مع كل بند يتنفَّذ.
+
+#### Item 1: WebRTC Leak Prevention — ✅ منفَّذ، CI-confirmed
+
+**الأسهل** (`docs/PHASE_2_BACKLOG.md` item 5) — Camoufox عنده
+`block_webrtc` جاهز في مكتبته، الكود بتاعنا مكنش بيستخدمه.
+
+##### 1.1) `src/core/interfaces/antibot_provider.py` — نفس نمط `user_agent_override` بالحرف
+
+`block_webrtc: bool = False` باراميتر جديد على `AntibotProvider.solve()`
+بنفس "best-effort contract" الموثّق لكل باراميتر سابق:
+
+| Provider | الدعم | السبب |
+|---|---|---|
+| `CamoufoxProvider` | **كامل** | `Camoufox(block_webrtc=...)` — مكتبة حقيقية موجودة، بتحط `media.peerconnection.enabled=False` (اتأكّد بقراءة `camoufox/utils.py` مباشرة) |
+| `PatchrightProvider` | **مش مدعوم بعد** — تحذير، مش صمت | Chromium مالوش context-creation-time option مكافئ؛ محتاج حل مستقل (launch flag زي `--force-webrtc-ip-handling-policy`)، خارج نطاق البند ده صراحة (نفس تأجيل `docs/PHASE_2_BACKLOG.md` item 5 نفسه) |
+| `ByparrProvider` | **مش مدعوم إطلاقًا** — تحذير | خدمة HTTP خارجية، صفر تحكم في browser launch أصلًا (نفس قيد `user_agent_override`) |
+
+الأنبوب الكامل: `SpiderConfig.block_webrtc: bool = False` →
+`generic_spider.py`'s `request.meta["block_webrtc"]` (شكل "harmless
+no-op" زي كل meta key اختياري تاني) → `byparr_middleware.py` يقرا
+ويمرر → `provider.solve(block_webrtc=...)`.
+
+##### 1.2) mock-target: `security/webrtc_leak_detector.py` (جديد) — فحص حتمي، مش إحصائي
+
+على عكس فحوصات الماوس/الكتابة اللاحقة (أنماط عبر عيّنات كتير)، تسريب
+WebRTC إما حصل أو لأ لصفحة واحدة — دالة نقية `score_webrtc_report`:
+
+- `webrtc_available=False` (الـAPI مش موجود خالص في الصفحة — نتيجة
+  `block_webrtc` المباشرة) = أقوى إشارة "مفيش تسريب" ممكنة، بيرجع
+  `leak_detected=False` دايمًا بغض النظر عن أي حاجة تانية.
+- كل ICE candidate بيتصنّف: `mdns` (اسم مضيف `.local` — الحماية
+  الافتراضية لمتصفحات حديثة، آمن)، `loopback` (`127.0.0.1`/`::1`،
+  آمن)، `leaked` (IP حقيقي قابل للحل — تسريب فعلي).
+- **مفيش STUN/TURN server حقيقي محتاج خالص** — `createDataChannel` +
+  `createOffer` كفاية لتوليد ICE candidates محلية
+  (`host` candidates)، بالظبط الفئة اللي التسريب المحتمل هيظهر فيها،
+  متوافق مع قاعدة عزل الشبكة في `test-environment/README.md`.
+
+`GET /webrtc-leak-check` (صفحة تشخيصية حقيقية، JS خاص بينا مش
+vendored، نفس فلسفة `fpscanner_integration.py`'s الخاص script) +
+`POST /webrtc-leak-report` (log-only، WARNING لو تسريب حقيقي اتكشف —
+نفس تقسيم `botd_integration.py`، مش دايمًا INFO زي `fpscanner` لأن ده
+فحص حتمي مش نظام نقاط لسه من غير عتبة إنفاذ). مسار جديد في
+`botPolicy.yaml` (ALLOW، نفس منطق `/trust-scored`) — الفحص مش عن
+Anubis أصلًا.
+
+##### 1.3) بق حقيقي اتلقط ومتصلح أثناء التوصيل
+
+كل الـfake `solve_fn`/`_FakeProvider` stubs في unit/contract tests
+(24 موقع عبر `test_camoufox_provider.py`/`test_patchright_provider.py`/
+`test_byparr_middleware.py`/`test_antibot_provider_contract.py`) كانت
+بتاخد `user_agent_override` كآخر باراميتر بس — إضافة `block_webrtc`
+كباراميتر تاني للـ`_solve_fn` الحقيقي (استدعاء positional) كسرتهم
+كلهم فورًا (`TypeError: takes N positional arguments but N+1 were
+given`). اتصلح بإضافة نفس الباراميتر لكل الـstubs — **18 فشل حقيقي
+ظهروا وقت التشغيل المحلي، مش نظري**، اتصلحوا كلهم قبل أي push.
+
+##### 1.4) الاختبارات
+
+- `tests/unit/`: 8 اختبار جديد موزّعة (`block_webrtc` reaches solve
+  function لكل provider حقيقي/patchright، warning-logged لـpatchright/
+  byparr، `SpiderConfig`/`generic_spider.py` defaults/YAML-read).
+- `test-environment/tests/test_webrtc_leak_detector.py` (16 اختبار،
+  100% coverage): كل تصنيف (leaked/mdns/loopback/unparseable)،
+  `webrtc_available=False` بيرجّع `leak_detected=False` دايمًا بغض
+  النظر عن المحتوى، WARNING vs INFO logging.
+- `test-environment/tests/test_app.py` (+6 اختبار route-level): الصفحة
+  بترجّع HTML حقيقي فيه `RTCPeerConnection`، تسريب حقيقي بيتكشف
+  ويتسجّل WARNING، mDNS/loopback مش تسريب، `webrtc_available=False`
+  مش تسريب، حالات فشل (body ناقص/candidates مش list) من غير 500.
+- `tests/integration/test_webrtc_leak_prevention_live.py` (اختبارين
+  حيين جداد + `mock_target_webrtc_leak_check.yaml`/
+  `_baseline.yaml`): **الأول** (`block_webrtc: true`) بيتأكد
+  `webrtc_available=False` و`leak_detected=False` من الـlog الحقيقي.
+  **التاني** (baseline، `block_webrtc` مش متظبط — السلوك الحالي لكل
+  target موجود) بيوثّق اللي بيحصل فعليًا بدليل حي، مش افتراض إن فجوة
+  التقرير لسه زي ما هي (mDNS obfuscation الافتراضي في Firefox حديث
+  ممكن يكون بيقنّع الـIP الحقيقي حتى من غير الإصلاح ده — النتيجة
+  الفعلية هتتوثّق هنا بعد تأكيد CI).
+
+##### 1.5) التحقق المحلي الكامل
+
+`ruff check` نظيف على كل الملفات (`src/`، `tests/`،
+`test-environment/`). `mypy --strict` على `src/`: نظيف (49 ملف). `pytest
+tests/unit --cov=src --cov-fail-under=85`: **615 نجح** (كان 606، +9:
+8 جداد + اختبارين byparr إضافيين)، نفس فشلتين `oxymouse` المعروفتين
+والمنفصلتين تمامًا، coverage 96.42%. `pytest tests/contract`: 35/35
+(بعد تصحيح الـ4 fake solve stubs هناك كمان). `tests/integration
+--collect-only`: **60 اختبار** (58 + 2 الجداد) بيتجمّعوا بنجاح.
+test-environment: **296 نجح** (كان 274، +22: 16 وحدة جديدة +6
+route-level)، coverage 99% إجمالي، `webrtc_leak_detector.py` و`app.py`
+نفسهم 100%.
+
+**تأكيد end-to-end حقيقي (Flask dev server محلي مباشر، نفس أسلوب بند
+31/32.1)**: `curl` حقيقي — IP حقيقي (`192.168.1.42`) في candidate
+اتصنّف `leaked` صح، mDNS candidate اتصنّف آمن صح، `webrtc_available:
+false` رجّع `leak_detected: false` صح. الأنبوب الكامل شغّال فعليًا.
+
+**لسه محتاج تأكيد CI حقيقي** (خصوصًا نتيجة الـbaseline الحية) قبل أي
+ادّعاء إغلاق نهائي — هيتضاف بعد الدفع.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs

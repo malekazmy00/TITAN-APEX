@@ -636,6 +636,49 @@ def test_user_agent_override_does_not_require_antibot_needed_or_a_real_browser_p
     assert config.user_agent_override == "Mozilla/5.0 (custom-test-ua)"
 
 
+# --- block_webrtc (docs/PHASE_2_BACKLOG.md item 5) ------------------------
+
+
+def test_block_webrtc_defaults_to_false(tmp_path: Path) -> None:
+    """Every existing config (none of which sets this) must keep
+    getting False -- zero behavior change unless a target opts in."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML, encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.block_webrtc is False
+
+
+def test_block_webrtc_is_read_from_yaml(tmp_path: Path) -> None:
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(
+        VALID_YAML + "\nantibot_needed: true\nantibot_provider: camoufox\n"
+        "block_webrtc: true\n",
+        encoding="utf-8",
+    )
+
+    config = load_spider_config(str(config_file))
+
+    assert config.block_webrtc is True
+
+
+def test_block_webrtc_does_not_require_antibot_needed_or_a_real_browser_provider(
+    tmp_path: Path,
+) -> None:
+    """Same "no cross-field requirement" shape as user_agent_override
+    above -- ByparrProvider/PatchrightProvider are what decide they
+    can't honor it (they log a clear warning instead of crashing), not
+    SpiderConfig."""
+    config_file = tmp_path / "target.yaml"
+    config_file.write_text(VALID_YAML + "block_webrtc: true\n", encoding="utf-8")
+
+    config = load_spider_config(str(config_file))
+
+    assert config.antibot_needed is False
+    assert config.block_webrtc is True
+
+
 # --- strategy_backoff_multiplier (docs/REQUIREMENTS.md section 9 entry
 # 30, "الطبقة 3" -- Strategy Engine) -----------------------------------
 

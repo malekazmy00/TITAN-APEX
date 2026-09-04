@@ -132,8 +132,8 @@ class _RawSolve(NamedTuple):
 
 # (url, timeout_ms, post_load_wait_ms, click_selector, extraction_selectors,
 # progressive_extraction, login_flow, warm_session_urls,
-# use_accumulated_profile, cookie_jar_path, user_agent_override) -> raw
-# browser result
+# use_accumulated_profile, cookie_jar_path, user_agent_override,
+# block_webrtc) -> raw browser result
 PatchrightSolveFn = Callable[
     [
         str,
@@ -147,6 +147,7 @@ PatchrightSolveFn = Callable[
         bool,
         str,
         "str | None",
+        bool,
     ],
     _RawSolve,
 ]
@@ -184,6 +185,7 @@ def _default_patchright_solve(  # pragma: no cover
     use_accumulated_profile: bool = False,
     cookie_jar_path: str = DEFAULT_COOKIE_JAR_PATH,
     user_agent_override: str | None = None,
+    block_webrtc: bool = False,
 ) -> _RawSolve:
     """Drive a real Patchright-stealthed Chromium: navigate, (optionally)
     click, wait past ``load``, read, close.
@@ -250,6 +252,19 @@ def _default_patchright_solve(  # pragma: no cover
     why), so there's no second, unsupported-launch-mode branch to log a
     warning for the way that module's identical parameter needs.
 
+    ``block_webrtc`` (docs/PHASE_2_BACKLOG.md item 5): **not supported
+    yet** -- unlike Camoufox's own library-level ``block_webrtc``
+    capability, Chromium (which this module drives, via plain
+    Patchright/Playwright) has no equivalent context-creation-time
+    option; disabling WebRTC here would need an independent,
+    launch-*flag*-based approach instead (e.g.
+    ``--force-webrtc-ip-handling-policy``), deliberately out of this
+    parameter's own scope for now (docs/PHASE_2_BACKLOG.md item 5's own
+    proposed design explicitly separates "the Camoufox fix" from "if we
+    decide to close the Patchright gap"). When ``True``, logs a clear
+    warning and solves with WebRTC left exactly as it already is --
+    never crashes or silently pretends to have honored it.
+
     Raises:
         AntibotError: if the browser fails to launch, navigate, or read
             the page -- wraps Patchright's own launch/navigation/page
@@ -263,6 +278,19 @@ def _default_patchright_solve(  # pragma: no cover
     from patchright.sync_api import sync_playwright
 
     logger = get_logger(__name__)
+    if block_webrtc:
+        # docs/PHASE_2_BACKLOG.md item 5: real, structural gap -- see
+        # this function's own docstring for the full reasoning (no
+        # Chromium context-creation-time equivalent to Camoufox's
+        # library-level block_webrtc exists).
+        logger.warning(
+            "patchright_provider.block_webrtc_unsupported",
+            extra={
+                "url": url,
+                "reason": "Chromium has no context-creation-time WebRTC-block option; "
+                "would need an independent launch-flag-based solution, not yet built",
+            },
+        )
     # docs/REQUIREMENTS.md section 9 entry 17's monitoring-infrastructure
     # investment: off by default (None), active only when TITAN_TRACE_DIR
     # is set -- see _tracing.py's own module docstring for the full
@@ -841,6 +869,7 @@ class PatchrightProvider(AntibotProvider):
         warm_session_urls: list[str] | None = None,
         use_accumulated_profile: bool = False,
         user_agent_override: str | None = None,
+        block_webrtc: bool = False,
     ) -> Solution:
         # docs/REQUIREMENTS.md section 9 entry 17: same bounded
         # browser-crash retry as CamoufoxProvider.solve()'s identical
@@ -859,6 +888,7 @@ class PatchrightProvider(AntibotProvider):
                     use_accumulated_profile,
                     self._cookie_jar_path,
                     user_agent_override,
+                    block_webrtc,
                 )
             except BrowserCrashedError as exc:
                 if attempt >= self._max_browser_crash_attempts:

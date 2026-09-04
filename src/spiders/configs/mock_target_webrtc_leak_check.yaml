@@ -1,0 +1,34 @@
+# docs/PHASE_2_BACKLOG.md item 5 (WebRTC Leak Prevention): the real
+# live target for CamoufoxProvider's new block_webrtc parameter
+# (src/core/interfaces/antibot_provider.py) -- confirms the real local/
+# network IP a page's own WebRTC ICE candidates could otherwise expose
+# never leaks, even with the feature enabled.
+#
+# antibot_needed + antibot_provider: camoufox (not render_js) is what's
+# actually needed here, not Anubis-solving -- test-environment/anubis/
+# botPolicy.yaml already has an explicit ALLOW rule for this path (same
+# reasoning as mock_target_spa_catalog.yaml's own docstring), but only
+# CamoufoxProvider actually drives a real Camoufox browser and threads
+# block_webrtc through to it (PlaywrightMiddleware's own render_js path
+# is a completely separate, antibot-unrelated headless-Chromium render
+# with no such parameter at all).
+#
+# No real extractable content exists on /webrtc-leak-check (it is a
+# diagnostic probe, not a target page) -- selectors below intentionally
+# match nothing; the real evidence this config's own live test reads is
+# test-environment/logs/webrtc_leak_reports.log, written server-side by
+# the page's own client-side JS reporting back what it actually saw.
+name: mock_target_webrtc_leak_check
+start_urls:
+  - "http://localhost:8080/webrtc-leak-check"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+block_webrtc: true
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"

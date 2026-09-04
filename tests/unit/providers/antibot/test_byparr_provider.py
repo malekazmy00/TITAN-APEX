@@ -341,6 +341,62 @@ def test_user_agent_override_logs_a_warning_and_still_solves() -> None:
     assert extra["url"] == "https://example.com/"
 
 
+def test_block_webrtc_logs_a_warning_and_still_solves() -> None:
+    """docs/PHASE_2_BACKLOG.md item 5: same "must not crash or silently
+    drop it" contract as user_agent_override above -- Byparr's /v1
+    protocol has no browser-launch control at all."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    solution = provider.solve("https://example.com/", block_webrtc=True)
+
+    assert solution.status_code == 200  # still solves despite the unsupported request
+    message, extra = logged[0]
+    assert message == "byparr_provider.block_webrtc_unsupported"
+    assert extra["url"] == "https://example.com/"
+
+
+def test_block_webrtc_false_logs_nothing() -> None:
+    """Backward compatible: every existing caller (False, the default)
+    must not trigger the new warning at all."""
+    logged: list[tuple[str, dict[str, object]]] = []
+
+    class _FakeLogger:
+        def warning(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            logged.append((msg, extra or {}))
+
+        def error(self, msg: str, extra: dict[str, object] | None = None) -> None:
+            pass
+
+    def fake_http_post(url: str, payload: dict[str, Any], timeout_ms: int) -> str:
+        return VALID_RESPONSE
+
+    provider = ByparrProvider(
+        base_url="http://localhost:8191",
+        http_post=fake_http_post,
+        logger=_FakeLogger(),  # type: ignore[arg-type]
+    )
+
+    provider.solve("https://example.com/")
+
+    assert logged == []
+
+
 def test_user_agent_override_none_logs_nothing() -> None:
     """Backward compatible: every existing caller (None, the default)
     must not trigger the new warning at all."""

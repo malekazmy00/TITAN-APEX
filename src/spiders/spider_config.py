@@ -196,6 +196,15 @@ class SpiderConfig(BaseModel):
     # protocol has no such field at all, confirmed by reading its own
     # source -- a real, documented, best-effort-only gap, not a bug).
     user_agent_override: str | None = None
+    # docs/PHASE_2_BACKLOG.md item 5 (WebRTC Leak Prevention, a real
+    # confirmed gap): opt-in, per-target -- see
+    # AntibotProvider.solve()'s own docstring for the full best-effort
+    # contract per provider (CamoufoxProvider: real, existing library
+    # capability; PatchrightProvider/ByparrProvider: logged and
+    # skipped, not silently dropped). False (every existing target's
+    # unchanged default) keeps WebRTC exactly as it already is for
+    # every provider.
+    block_webrtc: bool = False
     # docs/REQUIREMENTS.md section 9 entry 30 ("الطبقة 3" -- Strategy
     # Engine): per-target opt-in for StrategyCapability.ADJUST_BACKOFF
     # (src/strategy/strategy_capability.py) -- None (every existing

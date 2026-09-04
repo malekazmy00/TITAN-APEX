@@ -1,0 +1,21 @@
+# docs/PHASE_2_BACKLOG.md item 5's own comparative baseline: identical
+# to mock_target_webrtc_leak_check.yaml in every way except
+# block_webrtc, which is deliberately left at its default (false) --
+# this is what every existing target's real, current behavior already
+# is, before this entry's own fix. The live test built against this
+# config exists to honestly confirm (or refute) the backlog's own
+# claim of a real leak with real, live evidence, not to assume the
+# claim still holds unchanged.
+name: mock_target_webrtc_leak_check_baseline
+start_urls:
+  - "http://localhost:8080/webrtc-leak-check"
+allowed_domains:
+  - "localhost"
+rate_limit: 1.0
+antibot_needed: true
+antibot_provider: camoufox
+max_concurrency: 1
+selectors:
+  item: '[data-role="post"]'
+  fields:
+    post_id: "::attr(data-post-id)"
