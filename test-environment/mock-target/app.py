@@ -608,13 +608,37 @@ def create_app(
         ``src/core/interfaces/antibot_provider.py``'s own
         ``block_webrtc`` parameter), that is reported directly instead
         of attempting to use an API that doesn't exist.
+
+        **Real bug found and fixed via CI (not assumed working from
+        local review alone)**: relying solely on ``onicecandidate``'s
+        own null-candidate "gathering complete" signal left this page
+        completely unreported in a real, live Camoufox run -- both
+        with and without ``block_webrtc``, so it wasn't specific to
+        that flag (the page itself loaded fine, real
+        ``camoufox_provider.solved`` log line and all; the report
+        simply never arrived). Now defends in depth: also listens for
+        ``icegatheringstatechange`` reaching ``"complete"``, wraps
+        ``RTCPeerConnection`` construction/setup itself in
+        ``try/catch`` (reports ``webrtc_available: false`` if it
+        throws, rather than the API merely being ``undefined``), and a
+        hard 3-second timeout force-reports whatever was gathered so
+        far regardless -- comfortably inside
+        ``DEFAULT_POST_LOAD_WAIT_MS``'s own 5-second budget
+        (``src/providers/antibot/camoufox_provider.py``). A ``reported``
+        guard makes calling ``report()`` more than once from whichever
+        path fires first a safe no-op, not a duplicate POST.
         """
         return Response(
             """<!doctype html><html><head><title>WebRTC Leak Check</title></head>
 <body>
 <script>
 (function () {
+  var reported = false;
   function report(webrtcAvailable, candidates) {
+    if (reported) {
+      return;
+    }
+    reported = true;
     fetch('/webrtc-leak-report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -629,18 +653,32 @@ def create_app(
     return;
   }
   var candidates = [];
-  var pc = new RTCPeerConnection({ iceServers: [] });
-  pc.createDataChannel('');
-  pc.onicecandidate = function (event) {
-    if (event.candidate) {
-      candidates.push(event.candidate.candidate);
-    } else {
-      report(true, candidates);
-    }
-  };
-  pc.createOffer()
-    .then(function (offer) { return pc.setLocalDescription(offer); })
-    .catch(function () { report(true, candidates); });
+  try {
+    var pc = new RTCPeerConnection({ iceServers: [] });
+    pc.createDataChannel('');
+    pc.onicecandidate = function (event) {
+      if (event.candidate) {
+        candidates.push(event.candidate.candidate);
+      } else {
+        report(true, candidates);
+      }
+    };
+    pc.onicegatheringstatechange = function () {
+      if (pc.iceGatheringState === 'complete') {
+        report(true, candidates);
+      }
+    };
+    pc.createOffer()
+      .then(function (offer) { return pc.setLocalDescription(offer); })
+      .catch(function () { report(true, candidates); });
+  } catch (e) {
+    report(false, candidates);
+  }
+  // Safety net: never leave this page's own result unreported, no
+  // matter which "gathering complete" signal this browser/config
+  // actually fires (a real, CI-confirmed gap otherwise -- see this
+  // route's own docstring).
+  setTimeout(function () { report(true, candidates); }, 3000);
 })();
 </script>
 </body></html>

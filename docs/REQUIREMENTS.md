@@ -7431,8 +7431,52 @@ route-level)، coverage 99% إجمالي، `webrtc_leak_detector.py` و`app.py`
 اتصنّف `leaked` صح، mDNS candidate اتصنّف آمن صح، `webrtc_available:
 false` رجّع `leak_detected: false` صح. الأنبوب الكامل شغّال فعليًا.
 
-**لسه محتاج تأكيد CI حقيقي** (خصوصًا نتيجة الـbaseline الحية) قبل أي
-ادّعاء إغلاق نهائي — هيتضاف بعد الدفع.
+##### 1.6) ✅ فشل CI حقيقي اتلقط وحُلّ — أول push (commit `cd3189d`، run 33897309606)
+
+**Lint نجح، `CI` فشل فعليًا** — فُحص فورًا، مش تجاهل. `unit`/`contract`/
+`test-environment unit` كلهم نجحوا، الفشل كان تحديدًا في خطوة
+"Integration tests" — الاختبارين الحيين الجداد بالظبط:
+
+```
+FAILED tests/integration/test_webrtc_leak_prevention_live.py::test_block_webrtc_prevents_a_real_ip_leak
+FAILED tests/integration/test_webrtc_leak_prevention_live.py::test_baseline_without_block_webrtc_documents_the_real_current_behavior
+```
+
+كلاهما بنفس الرسالة بالحرف: `"expected at least one webrtc_leak.checked
+log entry -- none were ever written"`.
+
+**التحقيق (الـraw log الكامل، مش الاكتفاء بالملخص)**: الصفحة اتحمّلت
+فعليًا في الاتنين (`camoufox_provider.solved` سطر حقيقي، `status: 200،
+title: "WebRTC Leak Check"`) — يعني Anubis ALLOW rule اشتغلت صح،
+والمتصفح وصل صح. المشكلة: الـJS نفسه ما بعتش أي report خالص — **في
+الحالتين مع بعض** (مع `block_webrtc` وبدونه)، مش حاجة خاصة بالفلاج
+نفسه. الاعتماد كان بس على إشارة "gathering complete" الوحيدة
+(`onicecandidate`'s null-candidate event) — لو الإشارة دي ما اتطلقتش
+بشكل موثوق في بيئة Camoufox الحقيقية دي (نمط معروف بين متصفحات/إعدادات
+مختلفة)، الصفحة تقفل من غير ما الـreport يتبعت خالص.
+
+**الإصلاح (دفاع متعدد الطبقات، مش افتراض سبب واحد محدد)**:
+
+1. إضافة `pc.onicegatheringstatechange` كإشارة تانية مستقلة —
+   `pc.iceGatheringState === 'complete'`.
+2. لف بناء/تهيئة `RTCPeerConnection` في `try/catch` — لو رمى استثناء
+   (مش بس `undefined`)، بيتسجّل `webrtc_available: false` صح.
+3. **شبكة أمان صريحة**: `setTimeout` بـ3 ثواني بيفرض الـreport بأي
+   حال، بغض النظر عن أي إشارة تانية — مرتاح تمامًا جوّه ميزانية
+   `DEFAULT_POST_LOAD_WAIT_MS` الافتراضية (5 ثواني،
+   `camoufox_provider.py`).
+4. `reported` guard variable يمنع أي POST مزدوج لو أكتر من إشارة
+   اتفعّلت.
+
+اتأكّد محليًا (`ruff`/`mypy --strict`/الـ22 اختبار المتعلق بالـwebrtc
++ الـ296 الكامل) إن الإصلاح ده مكسرش أي حاجة، بس **مقدرتش أعيد إنتاج
+الفشل الأصلي محليًا** (Camoufox browser binary مش متاح في الـsandbox
+ده أصلًا — نفس القيد الموثّق في `docs/SYNC_BRIEFING.md`) — الإصلاح
+اتحقّق من الكود مباشرة (قراءة، مش تشغيل)، والتأكيد الحقيقي هيجي من CI
+بعد الدفع التاني، موثّق هنا بصراحة كفجوة، مش مخفية.
+
+**لسه محتاج تأكيد CI حقيقي على الإصلاح** (خصوصًا نتيجة الـbaseline
+الحية) قبل أي ادّعاء إغلاق نهائي — هيتضاف بعد الدفع التاني.
 
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
