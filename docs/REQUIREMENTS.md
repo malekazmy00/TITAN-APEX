@@ -7269,6 +7269,60 @@ contract، 58 integration تتجمّع بنجاح — صفر رجعة.
 محتاج تأكيد CI حقيقي** قبل أي ادّعاء إغلاق نهائي — هيتضاف بعد الدفع،
 نفس انضباط كل بند سابق.
 
+#### 7) ✅ تأكيد CI حقيقي (commit `4353409`، run 33873737246) — فشل حقيقي غير مرتبط اتلقط وحُلّ بـrerun واحد
+
+**المحاولة الأولى (attempt 1) فشلت** — فُحص فورًا، مش تجاهل. خطوة
+"Integration tests" رجعت `failure`. فتح الـraw log الكامل (مش
+الاكتفاء بعلامة ❌) أظهر: **كل اختبار حي بيعتمد على Camoufox فشل**
+(`test_mock_target_camoufox_live.py`، `test_mock_target_feed_live.py`،
+الاختبار الجديد `test_ja4_fingerprint_matches_real_firefox_live.py`،
+وغيرهم — 12+ اختبار) بنفس الرسالة بالحرف: `"camoufox browser binary
+not installed for ... (run: python -m camoufox fetch)"`.
+
+**التحقيق (نفس منهجية بند 30.2/30.1 بالضبط)**: خطوة "Fetch Camoufox
+browser binary" نفسها كانت معلّمة `success` (بس استغرقت ثانية واحدة
+بس — غير طبيعي، عادة 10-13 ثانية) — علامة واضحة على فشل صامت. نزّلت
+الـlog الخام الكامل للخطوة دي تحديدًا (مش بس آخر 2000 سطر من الجوب
+كله، اللي مقصوصة قبل الخطوة دي) عبر `get_workflow_run_logs_url` +
+تحميل مباشر. النص الحرفي:
+
+```
+Syncing repositories...
+  Official... Error: 403 Client Error: rate limit exceeded for url:
+https://api.github.com/repos/camoufox/camoufox/releases
+  ...
+Synced 0 versions from 0 repos.
+Version 'official' not found in cache. Run 'camoufox sync'.
+```
+
+**فحص استقلالية الـdiff (نفس معيار المشروع الثابت)**: commit `4353409`
+لمس بس `security/cross_signal_consistency.py` (جديد)، `app.py`،
+`config.py`، `templates/index.html`، واختبارات — **صفر تقاطع** مع أي
+كود يخص Camoufox binary fetching، docker-compose، أو CI workflow نفسه.
+هذا بالظبط تعريف المشروع لـ"خطأ بيخص service الـdiff ما لمسهوش" —
+GitHub API rate limit حقيقي على `api.github.com` (خدمة خارجية بالكامل)،
+مش انحدار كود. اتعمل `rerun_failed_jobs` واحدة (مش push جديد) للتأكيد.
+
+**attempt 2 نجح بالكامل** — `Fetch Camoufox browser binary` استغرق 11
+ثانية طبيعية هالمرة، والـlog الخام المفتوح مباشرة أكّد:
+**`274 passed in 26.03s`** (test-environment unit، بما فيهم كل الـ24
+اختبار الجديد لـ`cross_signal_consistency.py` بالاسم)، و**`58 passed,
+2 warnings in 692.43s`** (كل اختبارات `tests/integration/`، بما فيهم
+الاختبار الحي الجديد لـCross-Signal Consistency والاختبار الحي لـJA4
+بند 32 مع بعض) — **صفر `FAILED` في الـlog كله**.
+
+**تصنيف**: أول مرة يظهر فيها الفشل ده تحديدًا (`camoufox fetch` rate
+limit) في تاريخ المشروع — مرة واحدة بس لحد دلوقتي، مش نمط متكرر (على
+عكس entry 30.2's الخاص `external-site-flake` اللي اتكرر 4 مرات عبر 2
+commits قبل ما يتسجّل رسميًا). بناءً على قاعدة المشروع (نمط حقيقي
+= 3 تكرارات فأكتر بغض النظر عن الكود المتغيّر)، **ده لسه معدّية
+واحدة مش نمط** — موثّق هنا كدليل تاريخي، مش مسجّل في
+`failure_taxonomy` كفئة رسمية جديدة إلا لو اتكرر.
+
+**Phase 3 Item 2 مقفول رسميًا**: تنفيذ + توثيق + تحقق محلي + فشل حقيقي
+غير مرتبط اتلقط وحُلّ + تأكيد CI حقيقي بدليل log مفتوح ومقروء (مش
+علامة خضرا بس).
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
