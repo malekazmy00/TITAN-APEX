@@ -106,6 +106,27 @@ services:
       JA4_LOG_PATH: /logs/ja4_fingerprints.log
       FINGERPRINT_LOG_PATH: /logs/fingerprint_reports.log
       REFERER_SESSION_LOG_PATH: /logs/referer_session_reports.log
+      # docs/REQUIREMENTS.md section 9 entry 32.1: a real, latent gap
+      # found while root-causing entry 33's own webrtc_leak_reports.log
+      # failure below -- this one was never actually caught by a live
+      # test (Phase 3 item 2 has no live integration test reading this
+      # file), but the identical mapping was missing here too, for the
+      # identical reason: without it, the container writes to
+      # config.py's own default (relative to its own cwd, never
+      # mounted to the host) instead of the host-visible /logs volume.
+      CROSS_SIGNAL_LOG_PATH: /logs/cross_signal_reports.log
+      # docs/REQUIREMENTS.md section 9 entry 33, section 1.6/1.7: the
+      # real root cause of two real CI failures in a row -- this
+      # mapping was simply never added when the route/log path were
+      # introduced. Without it, mock-target wrote to config.py's own
+      # default path (relative to the container's own cwd -- never
+      # mounted anywhere), so tests/integration/test_webrtc_leak_prevention_live.py
+      # reading test-environment/logs/webrtc_leak_reports.log (the
+      # *host* path this volume mount below exposes) could never see
+      # it, no matter how reliably the page's own JS actually reported
+      # -- the first "fix" (JS robustness) was real, sound, and stays,
+      # but it was solving a symptom, not this cause.
+      WEBRTC_LEAK_LOG_PATH: /logs/webrtc_leak_reports.log
     volumes:
       - ./logs:/logs
     networks:

@@ -7478,6 +7478,37 @@ title: "WebRTC Leak Check"`) — يعني Anubis ALLOW rule اشتغلت صح،
 **لسه محتاج تأكيد CI حقيقي على الإصلاح** (خصوصًا نتيجة الـbaseline
 الحية) قبل أي ادّعاء إغلاق نهائي — هيتضاف بعد الدفع التاني.
 
+##### 1.7) ✅ نفس الفشل بالحرف تاني بعد الإصلاح الأول — السبب الحقيقي مختلف تمامًا، مش JS timing
+
+**الدفع التاني (commit `71ae2dd`، run 33900473482) فشل بنفس الرسالة
+بالظبط**: `"expected at least one webrtc_leak.checked log entry --
+none were ever written"` — رغم إصلاح الـJS بالكامل (شبكة أمان 3 ثواني
+كان المفروض تضمن الـreport في كل الأحوال). ده دليل مباشر إن فرضية
+"الـJS مش بيبعت" **كانت غلط من الأساس** — مش مجرد ناقصة.
+
+**التحقيق التاني (مقارنة مباشرة مع الأنماط المشابهة الناجحة)**: قارنت
+`docker-compose.test.yml`'s الخاص environment section لكل الـlog paths
+الموجودة (`HONEYPOT_LOG_PATH`، `BOTD_LOG_PATH`، `JA4_LOG_PATH`،
+`FINGERPRINT_LOG_PATH`، `REFERER_SESSION_LOG_PATH` — كلهم موجودين
+كـ`/logs/*.log` عشان الـvolume mount `./logs:/logs`) — و**لقيت
+`WEBRTC_LEAK_LOG_PATH` (وكمان `CROSS_SIGNAL_LOG_PATH` من بند 32.1)
+مش موجودين خالص**. من غير الـmapping ده، الـcontainer بيكتب على
+المسار الافتراضي في `config.py` (نسبي لـcwd الـcontainer نفسه —
+مسار مش متربط بأي volume أصلًا)، مش على `/logs/webrtc_leak_reports.log`
+اللي الـvolume بيعرضه على الـhost. الاختبار على الـhost بيدوّر على
+`test-environment/logs/webrtc_leak_reports.log` — ومش هيلاقي حاجة
+أبدًا، **بغض النظر تمامًا عن مدى موثوقية الـJS نفسه**.
+
+**تصحيح صريح**: الإصلاح الأول (دفاع الـJS متعدد الطبقات) **حقيقي
+ومفيد ومتسيّب زي ما هو** — مش سبب الفشل ده، لكن مش سبب زايد عليه.
+السبب الحقيقي الوحيد: `docker-compose.test.yml` env mapping ناقص،
+اتصلح بإضافة السطرين الناقصين (`WEBRTC_LEAK_LOG_PATH` +
+`CROSS_SIGNAL_LOG_PATH` — التاني اتصلح احتياطيًا رغم إنه مفيش اختبار
+حي بيكشفه لسه، نفس السبب بالظبط لو حد ضاف واحد بعدين).
+
+**لسه محتاج تأكيد CI حقيقي على الإصلاح الحقيقي ده** قبل أي ادّعاء
+إغلاق نهائي — هيتضاف بعد الدفع التالت.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
