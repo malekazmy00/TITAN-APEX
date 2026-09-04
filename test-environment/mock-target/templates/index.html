@@ -82,30 +82,17 @@
   <script>{{ shadow_attach_script | safe }}</script>
   {% endif %}
 
-  {% if botd_enabled %}
-  <script type="module">
-    import Botd from "/static/{{ botd_script_path }}";
-    Botd.load().then((botd) => botd.detect()).then((result) => {
-      fetch("/botd-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(result),
-      });
-    }).catch(() => {
-      // BotD itself failing to run is not this app's concern; never let
-      // a detection error break the page.
-    });
-  </script>
-  {% endif %}
-
   {% if fingerprint_scoring_enabled %}
   <script>
     // docs/REQUIREMENTS.md section 9 entry 19: two independently-
     // evidenced signals, not vendored from anywhere -- see
     // security/fpscanner_integration.py's own module docstring for the
     // full reasoning on why these two, specifically, and why BotD's own
-    // detectWebGL()/detectWindowSize() checks (loaded just above) don't
-    // already cover them.
+    // detectWebGL()/detectWindowSize() checks (loaded just below) don't
+    // already cover them. Computed synchronously and stashed on
+    // `window` (not just posted) so the cross-signal script below --
+    // which needs both this *and* BotD's own, async result -- can read
+    // it back without a second, duplicate computation.
     (function () {
       let webglAvailable = false;
       try {
@@ -116,15 +103,54 @@
       }
       const viewportConsistent =
         window.innerWidth <= window.screen.width && window.innerHeight <= window.screen.height;
+      window.__mocktargetFingerprintReport = {
+        webglAvailable: webglAvailable,
+        viewportConsistent: viewportConsistent,
+      };
       fetch("/fingerprint-report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ webglAvailable: webglAvailable, viewportConsistent: viewportConsistent }),
+        body: JSON.stringify(window.__mocktargetFingerprintReport),
       }).catch(() => {
-        // Same "never let a detection error break the page" rule as
-        // BotD's own script above.
+        // Never let a detection error break the page.
       });
     })();
+  </script>
+  {% endif %}
+
+  {% if botd_enabled %}
+  <script type="module">
+    import Botd from "/static/{{ botd_script_path }}";
+    Botd.load().then((botd) => botd.detect()).then((result) => {
+      fetch("/botd-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(result),
+      });
+      {% if cross_signal_consistency_enabled %}
+      // docs/REQUIREMENTS.md section 9 entry 32 (Phase 3 item 2,
+      // redefined): combines this BotD result with the fpscanner
+      // report the script above already computed (JA4 was ruled out
+      // as a signal for Camoufox with conclusive evidence, entries
+      // 19/32 -- this uses signals that already exist instead). Fired
+      // only once both underlying signals are actually enabled --
+      // see app.py's own index() route for that gate.
+      fetch("/cross-signal-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          botd_result: result,
+          fingerprint_report: window.__mocktargetFingerprintReport || {},
+        }),
+      }).catch(() => {
+        // Same "never let a detection error break the page" rule as
+        // every other report call here.
+      });
+      {% endif %}
+    }).catch(() => {
+      // BotD itself failing to run is not this app's concern; never let
+      // a detection error break the page.
+    });
   </script>
   {% endif %}
 </body>

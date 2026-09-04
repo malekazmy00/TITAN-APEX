@@ -168,6 +168,28 @@ class MockTargetConfig:
         self.trust_score_timing_points: int = _env_int("TRUST_SCORE_TIMING_POINTS", 15)
         self.trust_score_referer_points: int = _env_int("TRUST_SCORE_REFERER_POINTS", 10)
         self.trust_score_fingerprint_points: int = _env_int("TRUST_SCORE_FINGERPRINT_POINTS", 20)
+        # docs/REQUIREMENTS.md section 9 entry 32 (Phase 3 item 2, the
+        # redefined Cross-Signal Consistency -- JA4 ruled out with
+        # conclusive evidence, entry 19/32): combines BotD + fpscanner +
+        # request-timing regularity into one inconsistency_score --
+        # see security/cross_signal_consistency.py's own module
+        # docstring. Log-only, same as fpscanner/BotD themselves.
+        self.enable_cross_signal_consistency: bool = _env_bool(
+            "ENABLE_CROSS_SIGNAL_CONSISTENCY", True
+        )
+        self.cross_signal_log_path: str = os.environ.get(
+            "CROSS_SIGNAL_LOG_PATH",
+            "test-environment/mock-target/security/cross_signal_reports.log",
+        )
+        self.cross_signal_window_seconds: float = _env_float(
+            "CROSS_SIGNAL_WINDOW_SECONDS", 60.0
+        )
+        self.cross_signal_min_interval_samples: int = _env_int(
+            "CROSS_SIGNAL_MIN_INTERVAL_SAMPLES", 3
+        )
+        self.cross_signal_regularity_cv_threshold: float = _env_float(
+            "CROSS_SIGNAL_REGULARITY_CV_THRESHOLD", 0.15
+        )
 
 
 def get_config() -> MockTargetConfig:

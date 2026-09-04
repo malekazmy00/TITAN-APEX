@@ -22,6 +22,7 @@ from security.auth import (
     check_credentials,
 )
 from security.botd_integration import VENDORED_SCRIPT_PATH, log_botd_report
+from security.cross_signal_consistency import SessionTimingTracker, log_cross_signal_check
 from security.file_logger import get_file_logger
 from security.fpscanner_integration import log_fingerprint_report
 from security.honeypot_logger import log_honeypot_trigger
@@ -112,6 +113,11 @@ def create_app(
         referer_points=cfg.trust_score_referer_points,
         fingerprint_points=cfg.trust_score_fingerprint_points,
     )
+    app.config["CROSS_SIGNAL_TIMING_TRACKER"] = SessionTimingTracker(
+        window_seconds=cfg.cross_signal_window_seconds,
+        min_interval_samples=cfg.cross_signal_min_interval_samples,
+        regularity_cv_threshold=cfg.cross_signal_regularity_cv_threshold,
+    )
     honeypot_logger = get_file_logger("mock_target.honeypot", cfg.honeypot_log_path)
     botd_logger = get_file_logger("mock_target.botd", cfg.botd_log_path)
     ja4_logger = get_file_logger("mock_target.ja4", cfg.ja4_log_path)
@@ -119,6 +125,7 @@ def create_app(
     referer_session_logger = get_file_logger(
         "mock_target.referer_session", cfg.referer_session_log_path
     )
+    cross_signal_logger = get_file_logger("mock_target.cross_signal", cfg.cross_signal_log_path)
     app.config["CSRF_TOKEN_STORE"] = CsrfTokenStore()
     app.config["AUTH_SESSION_STORE"] = SessionStore(ttl_seconds=cfg.session_ttl_seconds)
 
@@ -189,6 +196,15 @@ def create_app(
                 ),
                 shadow_dom_enabled=cfg.enable_shadow_dom,
                 shadow_attach_script=(SHADOW_ATTACH_SCRIPT if cfg.enable_shadow_dom else None),
+                # entry 32: needs both underlying signals actually
+                # enabled to have anything to combine -- disabled
+                # otherwise, same "one layer at a time" principle every
+                # other toggle here already follows.
+                cross_signal_consistency_enabled=(
+                    cfg.enable_cross_signal_consistency
+                    and cfg.enable_botd
+                    and cfg.enable_fingerprint_scoring
+                ),
             )
         )
         response.set_cookie(SESSION_COOKIE_NAME, seed)
@@ -532,6 +548,44 @@ def create_app(
         payload: dict[str, Any] = request.get_json(silent=True) or {}
         log_fingerprint_report(fingerprint_logger, payload)
         return jsonify({"status": "logged"})
+
+    @app.post("/cross-signal-check")
+    def cross_signal_check() -> Response:
+        """docs/REQUIREMENTS.md section 9 entry 32 (Phase 3 item 2,
+        redefined -- JA4 ruled out with conclusive evidence, entry
+        19/32). Combines the same BotD/fpscanner reports
+        ``/botd-report``/``/fingerprint-report`` above already collect
+        (submitted here in one payload alongside those, not instead of
+        them) with this session's own current request-timing
+        regularity, and logs whether the three signals agree with each
+        other -- see security/cross_signal_consistency.py's own module
+        docstring for the full design. Log-only, same "never enforce"
+        shape as every other detection layer here.
+        """
+        payload: dict[str, Any] = request.get_json(silent=True) or {}
+        botd_result: dict[str, Any] = payload.get("botd_result") or {}
+        fingerprint_report_payload: dict[str, Any] = payload.get("fingerprint_report") or {}
+
+        # Same cookie /'s own index() route already issues -- read it
+        # here rather than minting yet another, separate session
+        # identity, but this route (unlike index()) IS the first hit
+        # in some real callers' own flow (e.g. a live test calling it
+        # directly), so it must issue the cookie itself too when
+        # missing -- otherwise every call here would mint a fresh,
+        # never-persisted key and the timing signal could never
+        # accumulate more than one sample per call.
+        existing_cookie = request.cookies.get(SESSION_COOKIE_NAME)
+        session_key = existing_cookie or _session_seed()
+        timing_tracker: SessionTimingTracker = app.config["CROSS_SIGNAL_TIMING_TRACKER"]
+        timing_is_regular = timing_tracker.record_and_check(session_key)
+
+        score = log_cross_signal_check(
+            cross_signal_logger, botd_result, fingerprint_report_payload, timing_is_regular
+        )
+        response = jsonify({"status": "logged", "inconsistency_score": score})
+        if not existing_cookie:
+            response.set_cookie(SESSION_COOKIE_NAME, session_key)
+        return response
 
     @app.get("/honeypot-trap/<token>")
     def honeypot_trap(token: str) -> Response:

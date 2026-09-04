@@ -27,6 +27,7 @@ def config(tmp_path: Path) -> MockTargetConfig:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.feed_rate_limit_threshold = 3
     cfg.feed_rate_limit_window_seconds = 60
     cfg.feed_page_size = 4
@@ -154,6 +155,88 @@ def test_fingerprint_report_handles_a_missing_body(client: FlaskClient) -> None:
     response = client.post("/fingerprint-report")
 
     assert response.status_code == 200
+
+
+# --- Cross-Signal Consistency (docs/REQUIREMENTS.md section 9 entry
+# 32, Phase 3 item 2, redefined) --------------------------------------
+
+
+def test_cross_signal_check_all_signals_agree_scores_zero(
+    client: FlaskClient, config: MockTargetConfig
+) -> None:
+    response = client.post(
+        "/cross-signal-check",
+        json={
+            "botd_result": {"bot": False},
+            "fingerprint_report": {"webglAvailable": True, "viewportConsistent": True},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "logged", "inconsistency_score": 0}
+    log_content = Path(config.cross_signal_log_path).read_text(encoding="utf-8")
+    payload = json.loads(log_content.strip().splitlines()[-1])
+    assert payload["inconsistency_score"] == 0
+
+
+def test_cross_signal_check_detects_a_disagreement_between_botd_and_fpscanner(
+    client: FlaskClient,
+) -> None:
+    """botd says clean, fpscanner flags one of its two signals --
+    a real, logged disagreement."""
+    response = client.post(
+        "/cross-signal-check",
+        json={
+            "botd_result": {"bot": False},
+            "fingerprint_report": {"webglAvailable": False, "viewportConsistent": True},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["inconsistency_score"] == 1
+
+
+def test_cross_signal_check_folds_in_timing_regularity_after_enough_requests(
+    tmp_path: Path,
+) -> None:
+    """Both botd and fpscanner say clean on every call -- but a
+    mechanically fixed cadence across repeated calls must eventually
+    push the score up once the timing tracker has enough samples to
+    judge -- the user's own example scenario. A fake, injected clock
+    (swapped into the already-built app, same "one deterministic
+    tracker per test" shape test_trust_score.py's own _FakeClock uses)
+    makes the cadence genuinely fixed, not just "fast enough to look
+    regular" -- real wall-clock timing across a tight test loop is not
+    something to depend on for a regularity assertion."""
+    from security.cross_signal_consistency import SessionTimingTracker
+
+    client = _trust_score_client(tmp_path)  # reuses its own tmp-path log wiring
+    fake_now = [0.0]
+    client.application.config["CROSS_SIGNAL_TIMING_TRACKER"] = SessionTimingTracker(
+        min_interval_samples=3, regularity_cv_threshold=0.15, clock=lambda: fake_now[0]
+    )
+    payload = {
+        "botd_result": {"bot": False},
+        "fingerprint_report": {"webglAvailable": True, "viewportConsistent": True},
+    }
+
+    scores = []
+    for _ in range(6):
+        fake_now[0] += 1.0
+        response = client.post("/cross-signal-check", json=payload)
+        scores.append(response.get_json()["inconsistency_score"])
+
+    assert scores[0] == 0  # not enough timing samples yet
+    assert scores[-1] == 2  # both other signals agree "clean"; timing disagrees
+
+
+def test_cross_signal_check_handles_a_missing_body(client: FlaskClient) -> None:
+    """Failure-adjacent case: a POST with no/invalid JSON body must not
+    500 -- treated as empty reports on both sides."""
+    response = client.post("/cross-signal-check")
+
+    assert response.status_code == 200
+    assert response.get_json()["inconsistency_score"] == 0
 
 
 def test_warmup_home_sets_a_session_cookie(client: FlaskClient) -> None:
@@ -339,6 +422,7 @@ def test_feed_page_disables_virtualization_when_configured_off(tmp_path: Path) -
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_dom_virtualization = False
     app = create_app(cfg)
@@ -358,6 +442,7 @@ def test_feed_page_window_size_is_configurable(tmp_path: Path) -> None:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.dom_virtualization_window_size = 3
     app = create_app(cfg)
@@ -377,6 +462,7 @@ def test_markup_randomizer_disabled_yields_empty_classes(tmp_path: Path) -> None
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_markup_randomizer = False
     cfg.enable_cookie_wall = False  # exercising index.html's rendering, not the wall
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
@@ -398,6 +484,7 @@ def test_layers_can_be_individually_disabled(tmp_path: Path) -> None:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_honeypots = False
     cfg.enable_decoy_data = False
     cfg.enable_botd = False
@@ -420,6 +507,7 @@ def _ab_variant_client(tmp_path: Path, rand_fn: object) -> FlaskClient:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False  # isolate the A/B-variant layer alone
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False  # so the container's class="" is predictable
@@ -463,6 +551,7 @@ def test_ab_variant_disabled_always_renders_article(tmp_path: Path) -> None:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_markup_randomizer = False
@@ -488,6 +577,7 @@ def test_placeholder_content_shows_loading_text_with_the_real_text_hidden(
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     app = create_app(cfg)
@@ -510,6 +600,7 @@ def test_placeholder_content_disabled_renders_real_text_directly(tmp_path: Path)
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.enable_placeholder_content = False
@@ -531,6 +622,7 @@ def test_placeholder_delay_is_configurable(tmp_path: Path) -> None:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False  # isolate: existing tests predate this layer
     cfg.placeholder_delay_ms = 2000
@@ -549,6 +641,7 @@ def _cookie_wall_client(tmp_path: Path) -> FlaskClient:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = True
     cfg.enable_shadow_dom = False  # isolate the cookie-wall layer alone
     app = create_app(cfg)
@@ -606,6 +699,7 @@ def _shadow_dom_client(tmp_path: Path) -> FlaskClient:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False  # isolate the shadow-DOM layer alone
     cfg.enable_shadow_dom = True
     app = create_app(cfg)
@@ -652,6 +746,7 @@ def test_shadow_dom_disabled_renders_every_post_in_light_dom(tmp_path: Path) -> 
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     app = create_app(cfg)
@@ -678,6 +773,7 @@ def _auth_client(
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False  # isolate the login/session layer alone
     cfg.enable_shadow_dom = False
     cfg.protected_feed_total_pages = protected_feed_total_pages
@@ -928,6 +1024,7 @@ def _interstitial_client(
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False  # isolate the interstitial layer alone
     cfg.enable_shadow_dom = False
     cfg.interstitial_trigger = trigger
@@ -1104,6 +1201,7 @@ def test_spa_catalog_product_count_is_configurable(tmp_path: Path) -> None:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.spa_catalog_product_count = 3
     app = create_app(cfg)
@@ -1125,6 +1223,7 @@ def _trust_score_client(tmp_path: Path, **overrides: object) -> FlaskClient:
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     for name, value in overrides.items():
@@ -1262,6 +1361,7 @@ def test_trust_scored_different_sessions_are_tracked_independently(tmp_path: Pat
     cfg.ja4_log_path = str(tmp_path / "ja4.log")
     cfg.fingerprint_log_path = str(tmp_path / "fingerprint.log")
     cfg.referer_session_log_path = str(tmp_path / "referer_session.log")
+    cfg.cross_signal_log_path = str(tmp_path / "cross_signal.log")
     cfg.enable_cookie_wall = False
     cfg.enable_shadow_dom = False
     cfg.trust_score_referer_points = 50

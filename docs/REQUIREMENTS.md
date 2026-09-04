@@ -7178,6 +7178,97 @@ score عالي + BotD `bot: false` (تناقض محتمل: فحص محدد بي�
 تتقيّم لوحدها. هيتوثّق بالتفصيل كامتداد لبند 19/22/31 لما التنفيذ
 الفعلي يبدأ.
 
+### 32.1 تنفيذ Phase 3 Item 2 (Cross-Signal Consistency) — البديل بعد رفض JA4، امتداد مباشر لبند 32/19/22/31
+
+**التنفيذ الفعلي** (طلب المستخدم صراحة بعد تأكيد CI على entry 32):
+`security/cross_signal_consistency.py` (جديد) — يجمع BotD + fpscanner
++ إشارة انتظام توقيت جديدة (نفس منطق `is_pattern_too_regular` بند 22/31،
+اتكررت هنا للمرة التالتة عمدًا، مش import — نفس مبدأ "تكرار صغير
+ومركّز أحسن من ربط cross-module" اللي `trust_score.py` وثّقه) في **دالة
+نقية واحدة** `compute_inconsistency_score`.
+
+#### 1) `SessionTimingTracker` — منفصل عمدًا عن `TrustScoreTracker`
+
+مش إعادة استخدام `structural/trust_score.py`'s الخاص tracker — ده بيجمع
+تسجيل + إنفاذ لـ3 إشارات مختلفة (بند 31)، والمطلوب هنا إشارة توقيت
+واحدة بس، للاستخدام في مكان مختلف تمامًا (log-only، لا escalation). كلاس
+جديد خفيف، `record_and_check(session_key) -> bool | None` — نفس تمييز
+`TrustScoreTracker`'s الخاص "None يعني مفيش عينات كفاية، مش False".
+
+#### 2) `compute_inconsistency_score` — عدّ الأزواج المتعارضة، مش حكم واحد
+
+كل إشارة بتتحول لـ`bool` ("بيوحي بأتمتة" ولا لأ): BotD's `bot`،
+fpscanner's `score >= 1`، والتوقيت المنتظم. الدرجة = عدد الأزواج
+(من أصل 3 ممكنة) اللي بتختلف مع بعض — لو التوقيت لسه `None` (مفيش
+عينات كفاية)، الزوجين اللي بيشملوه بيتجاهلوا تمامًا (مش عدم اتفاق،
+مفيش بيانات كفاية للحكم). **مثال المستخدم بالحرف اتحول لاختبار
+مباشر** (`test_one_signal_disagrees_scores_two`): BotD وfpscanner
+الاتنين بيقولوا "نضيف" لكن التوقيت منتظم ميكانيكيًا → score=2.
+
+#### 3) التوصيل (`app.py`/`config.py`/`templates/index.html`)
+
+- `POST /cross-signal-check` — endpoint واحد بالظبط زي ما طُلب، بياخد
+  `{botd_result, fingerprint_report}` في نفس الطلب (مش يحاول يربط
+  تقارير قديمة منفصلة من `/botd-report`/`/fingerprint-report` بأثر
+  رجعي — أبسط وأوثق). بيقرا/يكتب نفس كوكي الجلسة `mocktarget_session`
+  اللي باقي الـapp مستخدمه (**بق حقيقي اتلقط ومتصلح أثناء كتابة
+  الاختبارات**: التصميم الأول كان بيقرا الكوكي بس من غير ما يكتبه لو
+  مش موجود — يعني كل نداء كان هيولّد جلسة عشوائية جديدة، فإشارة
+  التوقيت مستحيل تتراكم أبدًا؛ اتصلح بإصدار الكوكي زي `/trust-scored`
+  بالظبط لو مش موجود).
+- 4 config vars جديدة (`ENABLE_CROSS_SIGNAL_CONSISTENCY` افتراضي true
+  + log path + window/min-samples/threshold للتوقيت).
+- `templates/index.html`: الـscript بتاع fpscanner اتحرّك قبل BotD's
+  (كان بعده) وبقى بيحفظ نتيجته على `window.__mocktargetFingerprintReport`
+  — عشان الـscript بتاع BotD (async، بيتحل بعده) يقدر يبعت الاتنين مع
+  بعض لـ`/cross-signal-check` بمجرد ما نتيجة BotD توصل. بيتفعّل بس لو
+  الطبقتين الأصليتين شغالين مع بعض (`cross_signal_consistency_enabled`
+  في `index()`، نفس مبدأ "طبقة واحدة في كل مرة" في باقي الملف).
+
+#### 4) الاختبارات
+
+- `test-environment/tests/test_cross_signal_consistency.py` (24 اختبار،
+  100% coverage): pure functions (نفس اختبارات `rate_limiter.py`/
+  `trust_score.py` المطابقة، بما فيها حالة mean غير موجبة و eviction
+  خارج الـwindow)، `SessionTimingTracker`'s الحالات، و
+  `compute_inconsistency_score`'s كل تركيبات الاتفاق/الاختلاف
+  (بما فيها مثال المستخدم بالحرف).
+- `test-environment/tests/test_app.py` (+4 اختبار route-level): الحالة
+  النضيفة (score=0)، اختلاف BotD/fpscanner، وأهم واحد —
+  **اختبار حقن fake clock حقيقي** (`SessionTimingTracker` بديل
+  بـ`clock` مُتحكَّم فيه، بعد بناء الـapp) بيثبت إن التوقيت المنتظم
+  فعليًا بيرفع الـscore بعد عدد كافي من النداءات، مش وصف نظري.
+
+#### 5) تأكيد end-to-end حقيقي (Flask dev server محلي مباشر، مش docker — نفس أسلوب بند 31)
+
+`curl` حقيقي، جلسة واحدة (cookie jar)، 6 نداءات متتالية بنفس البيانات
+النضيفة (`bot: false`, `webglAvailable: true`, `viewportConsistent: true`):
+النداءين الأولين score=0 (مفيش عينات توقيت كفاية)، من النداء التالت
+score=2 ثابت — الـlog الحقيقي أكّد `"timing_is_regular": true،
+"inconsistency_score": 2` بالحرف. الأنبوب الكامل شغّال فعليًا.
+
+#### 6) التحقق المحلي الكامل
+
+`ruff check` نظيف على كل شيء. `mypy --strict`: نفس 3 أخطاء
+pre-existing بالظبط (اتأكّدوا موجودين قبل هذا الشغل بـ`git stash`،
+صفر خطأ جديد من الـroute الجديد). test-environment: **274 نجح** (كان
+246، +24 وحدة +4 route-level)، coverage 99% إجمالي،
+`cross_signal_consistency.py` نفسه 100%. `src/`: صفر تعديل، `604
+passed` (نفس فشلتين `oxymouse` المعروفتين)، 96.41% coverage، 35/35
+contract، 58 integration تتجمّع بنجاح — صفر رجعة.
+
+**بق تشغيلي إضافي اتلقط ومتصلح مرتين في الجولة دي (نفس فئة بق بند 31
+بالحرف)**: تشغيل `app.py` مباشرة (Flask dev server، مش pytest) من جوّه
+`mock-target/` بيخلي المسارات النسبية الافتراضية لملفات الـlog
+(`test-environment/mock-target/security/...`) تتحل غلط نسبةً للـcwd
+الحالي، وتعمل مجلد متداخل زايد (`mock-target/test-environment/...`).
+اتصلح بمسحه بعد كل تحقق يدوي — مفيش تأثير على أي كود أو اختبار حقيقي،
+بس موثّق هنا صراحة (نفس مبدأ "وثّق حتى الأخطاء" المتّبع طول المشروع).
+
+**النتيجة**: Phase 3 Item 2 منفَّذ ومتحقَّق محليًا بالكامل. **لسه
+محتاج تأكيد CI حقيقي** قبل أي ادّعاء إغلاق نهائي — هيتضاف بعد الدفع،
+نفس انضباط كل بند سابق.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
