@@ -7085,6 +7085,99 @@ job 100816314461). فُتح الـraw log الكامل فعليًا (مش الا
 رسميًا: تنفيذ + توثيق + تحقق محلي + تأكيد CI حقيقي بدليل log مفتوح
 ومقروء، مش علامة خضرا بس.**
 
+### 32. تصحيح على مهمة مطلوبة: "تنفيذ JA4 TLS Fingerprinting بالكامل" كانت مبنية على افتراض غلط — Step D اتنفّذ ورُفض بدليل قاطع من قبل، مش قيد بيئة مؤجّل
+
+**السياق:** المستخدم طلب صراحة مهمة كاملة — فرع جديد منفصل، تنفيذ JA4
+TLS Fingerprinting من الصفر (Steps A-D)، بحجة إن الموضوع كان "مؤجل
+بسبب قيد بيئة (Camoufox crashes مرتبطة بـAppArmor، race condition في
+DOM Virtualization غير مرتبط)". **قبل أي سطر كود**، مراجعة
+`docs/REQUIREMENTS.md` (entries 17-19) كشفت تناقض حقيقي مع الوصف ده:
+
+1. **Steps A/B/C متنفذة ومدموجة بالفعل** على الفرع الرئيسي (entry 18،
+   `git cherry-pick` موثَّق من `claude/ja4-experiment`، CI-confirmed
+   [run 33312633349](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33312633349)،
+   37/37) — `ignore_https_errors`، HAProxy+JA4 Lua proxy،
+   mock-target log-only كلهم موجودين وشغالين. مفيش حاجة ناقصة.
+2. **Step D اتنفّذ فعلاً** (entry 19)، **ونتيجته مش "قيد بيئة" —
+   دي نتيجة قاطعة بدليل مصدر أساسي مباشر**: Camoufox's TLS/JA4
+   fingerprint متطابق 100% بالحرف مع Firefox حقيقي
+   ([daijro/camoufox issue #555](https://github.com/daijro/camoufox/issues/555) —
+   Camoufox بيصلّح البصمة على مستوى محرك C++/Rust جوّه Firefox نفسه،
+   مش بيقلّدها بـJS). يعني **مفيش "JA4 مزيّف" نكتشفه لأن مفيش فرق
+   أصلاً**. Patchright كمان بيترفض من Anubis قبل ما يوصل لطبقة الـJA4
+   observation خالص. المشروع حوّل التركيز فعليًا لـfpscanner
+   (viewport/WebGL signals) بدل كده — ده اللي نجح، اتأكّد بـCI
+   ([run 33316135693](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33316135693))،
+   ومقفول رسميًا.
+
+**"قيد بيئة" و"Camoufox crashes مرتبطة بـAppArmor" مذكورين فعلاً في
+تاريخ المشروع** — لكن دول بند 17 (سباق DOM-Virtualization) بالظبط،
+حاجة **منفصلة تمامًا** عن نتيجة Step D الحقيقية، ومقفولة هي نفسها من
+زمان (entry 17's الجزء الأخير، 15 تشغيلة CI إحصائية). خلط الاتنين مع
+بعض هو التناقض اللي اتكشف.
+
+#### إعادة الفحص المباشر (طلب المستخدم، مش اكتفاء بالتوثيق القديم)
+
+المستخدم وافق على وقف Step D، **لكن طلب فحص حي سريع أول** (مش إعادة
+بناء كامل) — يتأكد إن entry 19 مش قديم/تغيّر مع تحديثات Camoufox،
+قبل ما نعتبره مقفول نهائيًا. اتنفّذ فعليًا (commit `73aebbf`، CI run
+[33869062672](https://github.com/malekazmy00/TITAN-APEX/actions/runs/33869062672)،
+37/37 job كامل، `success`):
+
+- `pip show camoufox` أكّد **نفس النسخة بالحرف** (0.5.5) المستخدمة
+  وقت كتابة entry 19 — صفر مخاطرة انحراف نسخة.
+- مفيش Firefox عادي (غير Camoufox) متاح لا في الـsandbox ولا في CI
+  (`ci.yml`'s الخاص `playwright install` بيجيب Chromium بس؛
+  `sync_playwright().firefox.launch()` فشل هنا بـ"Executable doesn't
+  exist") — مقارنة A/B حية مع Firefox حقيقي **مش متاحة تقنيًا** في
+  toolchain المشروع دلوقتي، موثّق بصراحة مش مخفي.
+- البديل المتاح والمنفَّذ: اختبار حي جديد
+  (`tests/integration/test_ja4_fingerprint_matches_real_firefox_live.py`
+  + `mock_target_ja4_check.yaml`، أول spider config يوجّه عبر الـJA4
+  proxy خالص) بيعيد تشغيل Camoufox عبر نفس الأنبوب الموجود فعليًا
+  (ja4-proxy → Anubis → mock-target) ويقارن القيمة المُلتقَطة بقيمة
+  entry 19 التاريخية من نفس الأنبوب بالظبط.
+- **النتيجة الفعلية من الـCI log المفتوح مباشرة**: القيمة المُلتقَطة
+  اليوم **مطابقة بالحرف 100%** لقيمة entry 19 التاريخية — مش بس الـprefix
+  (اللي كان الحد الأدنى المطلوب للتأكيد)، القيمة الكاملة بكل الأجزاء:
+
+  ```
+  today:   t13d1617h2_86a278354501_3cbfd9057e0d
+  history: t13d1617h2_86a278354501_3cbfd9057e0d
+  ```
+
+  اتكررت 7 مرات متتاليتين (7 طلبات حقيقية عبر الـproxy في نفس الجلسة)،
+  نفس القيمة بالظبط في كل مرة — صفر انحراف، صفر عشوائية GREASE ظاهرة
+  في الإعداد ده. `58 passed, 2 warnings in 685.80s` — صفر رجعة على أي
+  اختبار حي قديم تاني.
+
+**القرار النهائي**: entry 19 **مؤكَّد تاني بدليل حي 2026، مش مجرد
+اقتباس قديم**. مسار تصنيف JA4 **متوقَّف نهائيًا** — بناء "Cross-Signal
+Consistency" (Phase 3 Item 2) عليه مستحيل بنيويًا لـCamoufox (مفيش
+إشارة أصلًا) ومستحيل عمليًا لـPatchright (Anubis بيرفضه قبل الطبقة
+دي). البنية التحتية (ja4-proxy، mock-target logging) **تفضل موجودة
+وشغالة log-only** — مالهاش ضرر، وممكن تفيد كإشارة تكميلية مستقبلية لو
+ظهر provider تاني، لكن مش أساس لأي تصنيف.
+
+#### البديل المتفق عليه لـPhase 3 Item 2 (تصميم فقط هنا، لسه مش منفَّذ)
+
+بدل JA4، Phase 3 Item 2 (Cross-Signal Consistency) هيتبني على إشارات
+حقيقية موجودة فعلاً وشغالة لكل الـproviders:
+
+- **`fpscanner_integration.py`'s score** (entry 19 نفسها، viewport/WebGL
+  consistency) — موجود، log-only، 100% coverage.
+- **BotD's `bot: false/true` verdict** (`security/botd_integration.py`) —
+  موجود، log-only.
+- **`rate_limiter.py`'s jitter/pattern detection** (entry 22) — موجود،
+  فعليًا بيفرض (enforcement)، مش log-only بس.
+
+التصميم المقترح (لسه هيتناقش/يتفصّل قبل أي تنفيذ، مش قرار نهائي):
+مقارنة الاتساق بين الإشارات الثلاث عبر نفس الجلسة — مثلاً fpscanner
+score عالي + BotD `bot: false` (تناقض محتمل: فحص محدد بيقول أتمتة،
+فحص عام بيقول لأ) + توقيت طلبات منتظم من نفس الجلسة، بدل ما كل إشارة
+تتقيّم لوحدها. هيتوثّق بالتفصيل كامتداد لبند 19/22/31 لما التنفيذ
+الفعلي يبدأ.
+
 ## Antibot Provider Comparison (نتايج حقيقية، مش افتراض)
 
 مقارنة مبنية بالكامل على نتايج CI حقيقية من الجولات 1-4 (runs
